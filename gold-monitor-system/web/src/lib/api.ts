@@ -300,7 +300,7 @@ export async function getAdminSettings(
     for (const item of raw) {
       const k = item.key as keyof AdminSettings;
       if (k in defaults) {
-        (defaults as Record<string, unknown>)[k] = item.value;
+        (defaults as unknown as Record<string, unknown>)[k] = item.value;
       }
     }
   } else if (typeof raw === "object" && raw !== null) {
