@@ -97,6 +97,22 @@ export interface AlertsResponse {
   total: number;
 }
 
+/* ---------- Prices types ---------- */
+
+export interface PriceItem {
+  value: number;
+  formatted: string;
+  label: string;
+  unit: string;
+  icon: string;
+}
+
+export interface PricesResponse {
+  prices: { [key: string]: PriceItem };
+  updated_at: number;
+  source: string;
+}
+
 /* ---------- Rules types ---------- */
 
 export interface Rule {
@@ -188,6 +204,10 @@ export function getAlertById(id: string): Promise<Alert> {
 
 export function getAlertStats(): Promise<AlertStats> {
   return request<AlertStats>("/api/alerts/stats/today");
+}
+
+export function getPrices(): Promise<PricesResponse> {
+  return request<PricesResponse>("/api/prices");
 }
 
 export function getRulesLibrary(): Promise<RulesLibrary> {

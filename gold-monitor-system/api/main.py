@@ -416,6 +416,7 @@ def create_app() -> FastAPI:
     from api.routers.admin import router as admin_router
     from api.routers.alerts import router as alerts_router
     from api.routers.health import router as health_router
+    from api.routers.prices import router as prices_router
     from api.routers.rules import router as rules_router
     from api.routers.sources import router as sources_router
 
@@ -423,6 +424,7 @@ def create_app() -> FastAPI:
     app.include_router(sources_router, prefix="/api/sources")
     app.include_router(admin_router, prefix="/api/admin")
     app.include_router(rules_router, prefix="/api/rules")
+    app.include_router(prices_router, prefix="/api/prices")
     app.include_router(health_router, prefix="/api/health")
 
     return app

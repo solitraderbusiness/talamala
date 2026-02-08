@@ -49,9 +49,12 @@ from api.worker.fetchers.base import RawItem
 # ---------------------------------------------------------------------------
 _rule_engine_available = False
 try:
+    from api.rule_engine.load_rules import (
+        load_rules as _re_load_yaml,
+        get_rules as _re_get_rules,
+    )
     from api.rule_engine.alert_builder import build_alert as _re_build_alert
     from api.rule_engine.matcher import match_rules as _re_match_rules
-    from api.rule_engine.severity import determine_severity as _re_determine_severity
 
     _rule_engine_available = True
 except ImportError:
@@ -93,7 +96,19 @@ class Worker:
         self._redis = aioredis.from_url(
             settings.REDIS_URL, decode_responses=True
         )
-        self._rules = _load_rules(settings.YAML_PATH)
+        # Load rules as typed Rule objects when rule engine is available
+        if _rule_engine_available:
+            try:
+                yaml_data = _re_load_yaml(settings.YAML_PATH)
+                self._rules = _re_get_rules(yaml_data)
+            except Exception:
+                logger.warning(
+                    "Rule engine load failed — using fallback dict loader",
+                    exc_info=True,
+                )
+                self._rules = _load_rules(settings.YAML_PATH)
+        else:
+            self._rules = _load_rules(settings.YAML_PATH)
         self._http_session = aiohttp.ClientSession(
             timeout=aiohttp.ClientTimeout(total=FETCH_TIMEOUT),
             headers={"User-Agent": "GoldMonitorWorker/1.0"},
@@ -381,41 +396,118 @@ class Worker:
         if not self._rules:
             return 0
 
-        matched_rules = _match_rules_dispatch(item, self._rules)
+        if _rule_engine_available:
+            return await self._match_and_alert_engine(
+                item, raw_item_id, content_hash, source, db, dedup,
+            )
+        return await self._match_and_alert_fallback(
+            item, raw_item_id, content_hash, source, db, dedup,
+        )
+
+    async def _match_and_alert_engine(
+        self,
+        item: RawItem,
+        raw_item_id: str,
+        content_hash: str,
+        source: dict[str, Any],
+        db,
+        dedup: DedupChecker,
+    ) -> int:
+        """Rule-engine path: use typed Rule objects and proper matcher API."""
+        match_results = _re_match_rules(
+            item.title or "",
+            item.content_text or "",
+            self._rules,
+        )
+        if not match_results:
+            return 0
+
+        logger.debug(
+            "Item %s matched %d rule(s)", item.url, len(match_results),
+        )
+
+        # Build a single combined alert from all matched rules
+        raw_item_dict = {
+            "title": item.title or "",
+            "content": item.content_text or "",
+            "source_name": source.get("name", ""),
+            "source_url": item.url or "",
+            "url": item.url or "",
+        }
+
+        alert = _re_build_alert(raw_item_dict, match_results)
+        alert["raw_item_id"] = raw_item_id
+
+        dedupe_key = alert["dedupe_key"]
+
+        if await dedup.is_alert_duplicate(dedupe_key):
+            logger.debug("Skipping duplicate alert: %s", dedupe_key)
+            return 0
+
+        # Optional LLM enrichment
+        llm_enabled = await self._check_llm_enabled(db)
+        if llm_enabled and settings.OPENROUTER_API_KEY:
+            try:
+                llm_result = await self._call_llm(
+                    item.title, item.content_text,
+                )
+                if llm_result.get("summary_fa"):
+                    alert["summary_fa"] = llm_result["summary_fa"]
+                if llm_result.get("why_important_fa"):
+                    alert["why_important_fa"] = llm_result["why_important_fa"]
+            except Exception:
+                logger.warning(
+                    "LLM enrichment failed for item %s",
+                    item.url,
+                    exc_info=True,
+                )
+
+        await self._store_alert(db, alert)
+        await dedup.mark_alert(dedupe_key)
+        return 1
+
+    async def _match_and_alert_fallback(
+        self,
+        item: RawItem,
+        raw_item_id: str,
+        content_hash: str,
+        source: dict[str, Any],
+        db,
+        dedup: DedupChecker,
+    ) -> int:
+        """Fallback path: dict-based rules with simple keyword matching."""
+        matched_rules = _fallback_match_rules(item, self._rules)
         if not matched_rules:
             return 0
 
         logger.debug(
-            "Item %s matched %d rule(s)", item.url, len(matched_rules)
+            "Item %s matched %d rule(s) (fallback)", item.url, len(matched_rules),
         )
 
-        # Check once whether LLM enrichment is enabled
         llm_enabled = await self._check_llm_enabled(db)
-
         alerts_created = 0
+
         for rule in matched_rules:
-            severity = _determine_severity_dispatch(rule, item)
-            alert = _build_alert_dispatch(rule, item, severity, raw_item_id)
+            severity = _fallback_determine_severity(rule)
+            alert = _fallback_build_alert(rule, item, severity, raw_item_id)
             dedupe_key = alert.get(
                 "dedupe_key",
                 f"{rule.get('id', 'unknown')}:{content_hash}",
             )
             alert["dedupe_key"] = dedupe_key
 
-            # Dedup check
             if await dedup.is_alert_duplicate(dedupe_key):
                 logger.debug("Skipping duplicate alert: %s", dedupe_key)
                 continue
 
-            # Optional LLM enrichment
             if llm_enabled and settings.OPENROUTER_API_KEY:
                 try:
                     llm_result = await self._call_llm(
-                        item.title, item.content_text
+                        item.title, item.content_text,
                     )
                     alert["summary_fa"] = llm_result.get("summary_fa")
                     alert["why_important_fa"] = llm_result.get(
-                        "why_important_fa"
+                        "why_important_fa",
                     )
                 except Exception:
                     logger.warning(
@@ -424,7 +516,6 @@ class Worker:
                         exc_info=True,
                     )
 
-            # Persist
             await self._store_alert(db, alert)
             await dedup.mark_alert(dedupe_key)
             alerts_created += 1
@@ -645,39 +736,6 @@ class Worker:
 
 
 # ===================================================================
-# Rule-engine dispatch (with built-in fallback)
-# ===================================================================
-
-def _match_rules_dispatch(
-    item: RawItem, rules: list[dict[str, Any]]
-) -> list[dict[str, Any]]:
-    """Use the real rule_engine if available, otherwise fall back to
-    simple keyword matching."""
-    if _rule_engine_available:
-        return _re_match_rules(item, rules)  # type: ignore[arg-type]
-    return _fallback_match_rules(item, rules)
-
-
-def _determine_severity_dispatch(
-    rule: dict[str, Any], item: RawItem
-) -> str:
-    if _rule_engine_available:
-        return _re_determine_severity(rule, item)  # type: ignore[arg-type]
-    return _fallback_determine_severity(rule)
-
-
-def _build_alert_dispatch(
-    rule: dict[str, Any],
-    item: RawItem,
-    severity: str,
-    raw_item_id: str,
-) -> dict[str, Any]:
-    if _rule_engine_available:
-        return _re_build_alert(rule, item, severity, raw_item_id)  # type: ignore[arg-type]
-    return _fallback_build_alert(rule, item, severity, raw_item_id)
-
-
-# ===================================================================
 # Built-in fallback rule matching (used when rule_engine is absent)
 # ===================================================================
 
@@ -710,15 +768,19 @@ def _fallback_build_alert(
     return {
         "id": str(uuid.uuid4()),
         "raw_item_id": raw_item_id,
-        "rule_id": rule_id,
-        "rule_name": rule.get("name", "Unknown Rule"),
+        "matched_rule_ids": [rule_id],
         "severity": severity,
+        "time_horizon": rule.get("horizon", "short"),
+        "confidence": 0.5,
         "dedupe_key": f"{rule_id}:{item.url}",
-        "title": item.title,
-        "source_url": item.url,
-        "summary_fa": None,
-        "why_important_fa": None,
-        "metadata": {},
+        "title": item.title or "",
+        "source_name": "",
+        "source_url": item.url or "",
+        "summary_fa": (item.content_text or "")[:200],
+        "why_important_fa": rule.get("why_important", ""),
+        "expected_impact": [],
+        "follow_up_questions": [],
+        "match_evidence": {},
     }
 
 

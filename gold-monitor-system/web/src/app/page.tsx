@@ -4,22 +4,28 @@ import { useState, useEffect, useCallback } from "react";
 import {
   getAlerts,
   getAlertStats,
+  getPrices,
   type Alert,
   type AlertStats,
+  type PricesResponse,
+  type PriceItem,
 } from "@/lib/api";
 import AlertCard from "@/components/AlertCard";
 import RiskGauge from "@/components/RiskGauge";
 import SeverityBadge from "@/components/SeverityBadge";
 
-const marketCards = [
-  { label: "طلای جهانی", unit: "USD/oz", icon: "🌍" },
-  { label: "طلای ۱۸ عیار", unit: "تومان/گرم", icon: "💛" },
-  { label: "دلار", unit: "تومان", icon: "💵" },
-  { label: "سکه امامی", unit: "تومان", icon: "🪙" },
-];
+const PRICE_KEYS = ["gold_global", "gold_18k", "usd", "emami_coin"] as const;
+
+const PRICE_FALLBACK: Record<string, { label: string; unit: string; icon: string }> = {
+  gold_global: { label: "طلای جهانی", unit: "USD/oz", icon: "🌍" },
+  gold_18k: { label: "طلای ۱۸ عیار", unit: "تومان/گرم", icon: "💛" },
+  usd: { label: "دلار", unit: "تومان", icon: "💵" },
+  emami_coin: { label: "سکه امامی", unit: "تومان", icon: "🪙" },
+};
 
 export default function DashboardPage() {
   const [stats, setStats] = useState<AlertStats | null>(null);
+  const [prices, setPrices] = useState<PricesResponse | null>(null);
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [totalAlerts, setTotalAlerts] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -53,12 +59,16 @@ export default function DashboardPage() {
       setLoading(true);
       setError(null);
       try {
-        const [statsData] = await Promise.allSettled([
+        const [statsData, , pricesData] = await Promise.allSettled([
           getAlertStats(),
           fetchAlerts(),
+          getPrices(),
         ]);
         if (statsData.status === "fulfilled") {
           setStats(statsData.value);
+        }
+        if (pricesData.status === "fulfilled") {
+          setPrices(pricesData.value);
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : "خطا در بارگذاری");
@@ -104,18 +114,22 @@ export default function DashboardPage() {
 
       {/* Market price cards */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        {marketCards.map((card) => (
-          <div key={card.label} className="card text-center">
-            <span className="text-2xl">{card.icon}</span>
-            <h3 className="mt-2 text-sm font-medium text-gray-600 dark:text-gray-400">
-              {card.label}
-            </h3>
-            <p className="mt-1 text-lg font-bold text-gray-900 dark:text-gray-100">
-              ---
-            </p>
-            <p className="text-xs text-gray-400">{card.unit}</p>
-          </div>
-        ))}
+        {PRICE_KEYS.map((key) => {
+          const priceItem: PriceItem | undefined = prices?.prices?.[key];
+          const fallback = PRICE_FALLBACK[key];
+          return (
+            <div key={key} className="card text-center">
+              <span className="text-2xl">{priceItem?.icon || fallback.icon}</span>
+              <h3 className="mt-2 text-sm font-medium text-gray-600 dark:text-gray-400">
+                {priceItem?.label || fallback.label}
+              </h3>
+              <p className="mt-1 text-lg font-bold text-gray-900 dark:text-gray-100" dir="ltr">
+                {priceItem?.formatted || "---"}
+              </p>
+              <p className="text-xs text-gray-400">{priceItem?.unit || fallback.unit}</p>
+            </div>
+          );
+        })}
       </div>
 
       {/* Stats + Risk Gauge row */}
