@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import type { Alert } from "@/lib/api";
-import { timeAgo, timeHorizonLabel } from "@/lib/utils";
+import { timeAgo, timeHorizonLabel, sectionLabel } from "@/lib/utils";
 import SeverityBadge from "./SeverityBadge";
 
 interface AlertCardProps {
@@ -37,6 +37,14 @@ export default function AlertCard({ alert, compact = false }: AlertCardProps) {
           </div>
         </div>
         <div className="mt-2 flex items-center gap-3 text-xs text-gray-500 dark:text-gray-500">
+          {alert.section && !compact && (
+            <>
+              <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium dark:bg-gray-800">
+                {sectionLabel(alert.section)}
+              </span>
+              <span className="text-gray-300 dark:text-gray-700">|</span>
+            </>
+          )}
           <span>{alert.source_name}</span>
           <span className="text-gray-300 dark:text-gray-700">|</span>
           <span>{timeAgo(alert.timestamp_utc)}</span>

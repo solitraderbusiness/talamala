@@ -80,6 +80,17 @@ export interface Alert {
   dedupe_key: string;
   match_evidence: Record<string, unknown>;
   created_at: string;
+  section?: string;
+}
+
+export interface SectionSummary {
+  id: string;
+  label: string;
+  icon: string;
+  total: number;
+  high: number;
+  medium: number;
+  alerts: Alert[];
 }
 
 export interface AlertStats {
@@ -90,11 +101,40 @@ export interface AlertStats {
     medium: number;
     low: number;
   };
+  sections?: SectionSummary[];
 }
 
 export interface AlertsResponse {
   items: Alert[];
   total: number;
+}
+
+/* ---------- Sentiment types ---------- */
+
+export interface SentimentDriver {
+  title: string;
+  impact: "bullish" | "bearish" | "neutral";
+  weight: "high" | "medium" | "low";
+}
+
+export interface TimeframeSentiment {
+  sentiment: string;
+  sentiment_label: string;
+  summary: string;
+  key_drivers: SentimentDriver[];
+  outlook: string;
+  alert_count: number;
+  label: string;
+}
+
+export interface SentimentResponse {
+  timeframes: {
+    "1h"?: TimeframeSentiment;
+    "4h"?: TimeframeSentiment;
+    "24h"?: TimeframeSentiment;
+  };
+  updated_at: string;
+  alert_count_24h: number;
 }
 
 /* ---------- Prices types ---------- */
@@ -216,6 +256,10 @@ export function getRulesLibrary(): Promise<RulesLibrary> {
 
 export function getRuleById(ruleId: string): Promise<Rule> {
   return request<Rule>(`/api/rules/${ruleId}`);
+}
+
+export function getSentiment(): Promise<SentimentResponse> {
+  return request<SentimentResponse>("/api/sentiment");
 }
 
 export function getHealth(): Promise<{ status: string }> {

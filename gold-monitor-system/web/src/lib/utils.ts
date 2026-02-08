@@ -81,9 +81,10 @@ export function directionLabel(direction: string): string {
 export function sectionLabel(section: string): string {
   const map: Record<string, string> = {
     global_gold: "طلای جهانی",
-    iran_gold: "طلای ایران",
+    iran_gold: "طلا و ارز ایران",
     coin: "سکه",
     gold_funds: "صندوق‌های طلا",
+    geopolitics: "ژئوپلیتیک",
   };
   return map[section] || section;
 }

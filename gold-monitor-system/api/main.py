@@ -786,6 +786,7 @@ def create_app() -> FastAPI:
     from api.routers.health import router as health_router
     from api.routers.prices import router as prices_router
     from api.routers.rules import router as rules_router
+    from api.routers.sentiment import router as sentiment_router
     from api.routers.sources import router as sources_router
 
     app.include_router(alerts_router, prefix="/api/alerts")
@@ -793,6 +794,7 @@ def create_app() -> FastAPI:
     app.include_router(admin_router, prefix="/api/admin")
     app.include_router(rules_router, prefix="/api/rules")
     app.include_router(prices_router, prefix="/api/prices")
+    app.include_router(sentiment_router, prefix="/api/sentiment")
     app.include_router(health_router, prefix="/api/health")
 
     return app

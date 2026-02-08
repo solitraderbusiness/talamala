@@ -5,6 +5,7 @@ Alerts router -- list, detail, and today's stats for gold-monitor alerts.
 from __future__ import annotations
 
 import datetime
+import math
 import uuid
 from typing import Any
 
@@ -18,16 +19,49 @@ from api.models import Alert
 
 router = APIRouter(tags=["alerts"])
 
-# -- Severity weight mapping for risk-score calculation --------------------
-_SEVERITY_WEIGHT: dict[str, int] = {
-    "high": 15,
-    "medium": 7,
-    "low": 2,
+# -- Rule-section mapping (derived from rule ID prefix) ----------------------
+_RULE_SECTION_MAP: dict[str, str] = {
+    "GLOB": "global_gold",
+    "IR": "iran_gold",
+    "COIN": "coin",
+    "FUNDS": "gold_funds",
 }
+
+_SECTION_META: dict[str, dict[str, str]] = {
+    "global_gold": {"label": "طلای جهانی", "icon": "🌍"},
+    "iran_gold": {"label": "طلا و ارز ایران", "icon": "🇮🇷"},
+    "coin": {"label": "سکه", "icon": "🪙"},
+    "gold_funds": {"label": "صندوق‌های طلا", "icon": "📈"},
+    "geopolitics": {"label": "ژئوپلیتیک", "icon": "⚡"},
+}
+
+# Geopolitics rule IDs
+_GEOPOLITICS_RULES = {
+    "GLOB_GEOPOL_RISK", "GLOB_EQUITY_RISK_OFF", "IR_RESERVES_SANCTIONS",
+    "IR_FOREIGN_POLICY", "IR_INTERNAL_POL_SOCIAL",
+}
+
+
+def _alert_section(alert: Alert) -> str:
+    """Determine the display section for an alert based on its matched rules."""
+    rule_ids = alert.matched_rule_ids or []
+    if not rule_ids:
+        return "global_gold"
+
+    # Check geopolitics first (takes priority)
+    for rid in rule_ids:
+        if rid in _GEOPOLITICS_RULES:
+            return "geopolitics"
+
+    # Derive from first rule ID prefix
+    first_rule = rule_ids[0] if rule_ids else ""
+    prefix = first_rule.split("_")[0] if "_" in first_rule else ""
+    return _RULE_SECTION_MAP.get(prefix, "global_gold")
 
 
 def _alert_to_dict(alert: Alert) -> dict[str, Any]:
     """Convert a SQLAlchemy Alert object to a plain dict."""
+    section = _alert_section(alert)
     return {
         "id": str(alert.id),
         "title": alert.title,
@@ -46,6 +80,7 @@ def _alert_to_dict(alert: Alert) -> dict[str, Any]:
         "raw_item_id": str(alert.raw_item_id) if alert.raw_item_id else None,
         "match_evidence": alert.match_evidence or {},
         "created_at": alert.created_at.isoformat() if alert.created_at else None,
+        "section": section,
     }
 
 
@@ -136,41 +171,126 @@ async def list_alerts(
 # -- GET /alerts/stats/today  (registered BEFORE the {alert_id} catch-all) -
 
 
+def _compute_risk_score(alerts: list[Alert]) -> int:
+    """Compute a decay-weighted risk score (0-100).
+
+    Each alert contributes based on:
+    - severity weight: high=10, medium=4, low=1
+    - recency decay: exponential decay with 6h half-life
+    - confidence: the match confidence (0-1)
+
+    The raw sum is mapped to 0-100 via a logarithmic scale so that:
+    - 1 high alert in last hour  ≈ 25
+    - 3 high alerts in last 2h   ≈ 55
+    - 5+ high alerts in last 4h  ≈ 75-90
+    - Only extreme volume maxes out at 100
+    """
+    if not alerts:
+        return 0
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    severity_w = {"high": 10.0, "medium": 4.0, "low": 1.0}
+    half_life_hours = 6.0
+    decay_constant = math.log(2) / half_life_hours
+
+    raw = 0.0
+    for a in alerts:
+        ts = a.timestamp_utc or a.created_at or now
+        hours_ago = max((now - ts).total_seconds() / 3600.0, 0.0)
+        recency = math.exp(-decay_constant * hours_ago)
+        sw = severity_w.get(a.severity, 2.0)
+        conf = max(a.confidence or 0.3, 0.3)
+        raw += sw * recency * conf
+
+    # Logarithmic scaling: score = 25 * ln(1 + raw)
+    score = 25.0 * math.log(1.0 + raw)
+    return min(100, max(0, round(score)))
+
+
 @router.get("/stats/today", response_model=None)
 async def alerts_stats_today(
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
     cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=24)
 
-    count_stmt = (
-        select(Alert.severity, func.count().label("cnt"))
-        .where(Alert.created_at >= cutoff)
-        .group_by(Alert.severity)
-    )
-    rows = (await db.execute(count_stmt)).all()
-
-    counts: dict[str, int] = {"high": 0, "medium": 0, "low": 0}
-    for sev, cnt in rows:
-        counts[str(sev)] = cnt
-
-    risk_score = sum(
-        counts.get(sev, 0) * weight for sev, weight in _SEVERITY_WEIGHT.items()
-    )
-    risk_score = min(risk_score, 100)
-
-    top_stmt = (
+    # Fetch all alerts from last 24h for risk scoring and categorization
+    all_stmt = (
         select(Alert)
         .where(Alert.created_at >= cutoff)
         .order_by(desc(Alert.created_at))
-        .limit(3)
     )
-    top_alerts = (await db.execute(top_stmt)).scalars().all()
+    all_alerts = list((await db.execute(all_stmt)).scalars().all())
+
+    # Severity counts
+    counts: dict[str, int] = {"high": 0, "medium": 0, "low": 0}
+    for a in all_alerts:
+        counts[a.severity] = counts.get(a.severity, 0) + 1
+
+    # Risk score (decay-weighted)
+    risk_score = _compute_risk_score(all_alerts)
+
+    # Top alerts: prioritize by severity then recency
+    severity_order = {"high": 0, "medium": 1, "low": 2}
+    sorted_by_importance = sorted(
+        all_alerts,
+        key=lambda a: (severity_order.get(a.severity, 9), -(a.confidence or 0)),
+    )
+    top_alerts = sorted_by_importance[:3]
+
+    # Categorized sections
+    sections: dict[str, list[dict]] = {}
+    for a in all_alerts:
+        sec = _alert_section(a)
+        if sec not in sections:
+            sections[sec] = []
+        if len(sections[sec]) < 5:  # max 5 per section
+            sections[sec].append(_alert_to_dict(a))
+
+    # Section summaries (ordered by high-severity count, then total)
+    section_summaries = []
+    for sec_id in sorted(
+        sections.keys(),
+        key=lambda s: (
+            -sum(1 for a in sections[s] if a.get("severity") == "high"),
+            -len(sections[s]),
+        ),
+    ):
+        meta = _SECTION_META.get(sec_id, {"label": sec_id, "icon": "📰"})
+        sec_alerts = sections[sec_id]
+        high_count = sum(1 for a in sec_alerts if a["severity"] == "high")
+        med_count = sum(1 for a in sec_alerts if a["severity"] == "medium")
+        section_summaries.append({
+            "id": sec_id,
+            "label": meta["label"],
+            "icon": meta["icon"],
+            "total": len([a for a in all_alerts if _alert_section(a) == sec_id]),
+            "high": high_count,
+            "medium": med_count,
+            "alerts": sec_alerts,
+        })
 
     return {
         "top_alerts": [_alert_to_dict(a) for a in top_alerts],
         "risk_score": risk_score,
         "counts": counts,
+        "sections": section_summaries,
     }
+
+
+def _alert_section_from_dict(alert) -> str:
+    """Get section from an Alert ORM object (used internally)."""
+    if isinstance(alert, dict):
+        rule_ids = alert.get("matched_rule_ids", [])
+    else:
+        rule_ids = alert.matched_rule_ids or []
+    if not rule_ids:
+        return "global_gold"
+    for rid in rule_ids:
+        if rid in _GEOPOLITICS_RULES:
+            return "geopolitics"
+    first_rule = rule_ids[0] if rule_ids else ""
+    prefix = first_rule.split("_")[0] if "_" in first_rule else ""
+    return _RULE_SECTION_MAP.get(prefix, "global_gold")
 
 
 # -- GET /alerts/{alert_id} -----------------------------------------------
