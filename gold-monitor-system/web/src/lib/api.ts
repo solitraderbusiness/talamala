@@ -121,16 +121,16 @@ export interface Source {
   name: string;
   type: string;
   base_url: string;
-  endpoints: string[];
+  endpoints?: string[];
   enabled: boolean;
   poll_interval_seconds: number;
-  categories: string[];
-  rule_bindings: string[];
-  reliability_score: number | null;
-  notes: string | null;
-  last_fetched_at: string | null;
-  last_success_at: string | null;
-  last_error: string | null;
+  categories?: string[];
+  rule_bindings?: string[];
+  reliability_score?: number | null;
+  notes?: string | null;
+  last_fetched_at?: string | null;
+  last_success_at?: string | null;
+  last_error?: string | null;
   created_at?: string;
   updated_at?: string;
 }
@@ -220,7 +220,7 @@ export function getSources(token: string): Promise<Source[]> {
 
 export function createSource(
   token: string,
-  data: Omit<Source, "id" | "created_at">
+  data: Partial<Source>
 ): Promise<Source> {
   return authRequest<Source>("/api/sources", token, {
     method: "POST",
