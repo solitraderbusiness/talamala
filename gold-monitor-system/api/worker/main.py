@@ -217,11 +217,19 @@ class Worker:
                         source.get("name"),
                         source.get("id"),
                     )
-                    await self._record_source_error(
-                        db,
-                        source,
-                        error_msg=_format_exc(),
-                    )
+                    # Rollback the failed transaction before recording error
+                    try:
+                        await db.rollback()
+                    except Exception:
+                        pass
+                    try:
+                        await self._record_source_error(
+                            db,
+                            source,
+                            error_msg=_format_exc(),
+                        )
+                    except Exception:
+                        logger.warning("Could not record source error", exc_info=True)
 
         logger.info("=== Cycle end ===")
 
@@ -367,7 +375,7 @@ class Worker:
                 "   content_text, published_at, metadata_, created_at) "
                 "VALUES "
                 "  (:id, :source_id, :hash, :title, :url, "
-                "   :content, :pub, :meta::jsonb, :now)"
+                "   :content, :pub, CAST(:meta AS jsonb), :now)"
             ),
             {
                 "id": item_id,
@@ -538,10 +546,10 @@ class Worker:
                 "   match_evidence, created_at) "
                 "VALUES "
                 "  (:id, :title, :ts, :source_name, :source_url, "
-                "   :rule_ids::jsonb, :summary_fa, :why_important_fa, "
-                "   :impact::jsonb, :severity, :time_horizon, :confidence, "
-                "   :questions::jsonb, :dedupe_key, :raw_item_id, "
-                "   :evidence::jsonb, :now)"
+                "   CAST(:rule_ids AS jsonb), :summary_fa, :why_important_fa, "
+                "   CAST(:impact AS jsonb), :severity, :time_horizon, :confidence, "
+                "   CAST(:questions AS jsonb), :dedupe_key, :raw_item_id, "
+                "   CAST(:evidence AS jsonb), :now)"
             ),
             {
                 "id": alert_id,
