@@ -72,9 +72,8 @@ class Source(Base):
         UUID(as_uuid=True), primary_key=True, default=_new_uuid,
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    type: Mapped[SourceType] = mapped_column(
-        Enum(SourceType, name="source_type_enum", create_constraint=True),
-        nullable=False,
+    type: Mapped[str] = mapped_column(
+        String(20), nullable=False,
     )
     base_url: Mapped[str] = mapped_column(String(2048), nullable=False)
     endpoints: Mapped[Any] = mapped_column(JSONB, default=list, server_default="[]")
@@ -193,15 +192,11 @@ class Alert(Base):
     expected_impact: Mapped[Any] = mapped_column(
         JSONB, default=dict, server_default="{}",
     )
-    severity: Mapped[Severity] = mapped_column(
-        Enum(Severity, name="severity_enum", create_constraint=True),
-        nullable=False,
-        default=Severity.medium,
+    severity: Mapped[str] = mapped_column(
+        String(10), nullable=False, default="medium",
     )
-    time_horizon: Mapped[TimeHorizon] = mapped_column(
-        Enum(TimeHorizon, name="time_horizon_enum", create_constraint=True),
-        nullable=False,
-        default=TimeHorizon.short,
+    time_horizon: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="short",
     )
     confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.5)
     follow_up_questions: Mapped[Any] = mapped_column(

@@ -9,11 +9,12 @@ import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy import Select, cast, desc, func, or_, select, String
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.database import get_db
-from api.models import Alert, Severity
+from api.models import Alert
 
 router = APIRouter(tags=["alerts"])
 
@@ -23,6 +24,29 @@ _SEVERITY_WEIGHT: dict[str, int] = {
     "medium": 7,
     "low": 2,
 }
+
+
+def _alert_to_dict(alert: Alert) -> dict[str, Any]:
+    """Convert a SQLAlchemy Alert object to a plain dict."""
+    return {
+        "id": str(alert.id),
+        "title": alert.title,
+        "timestamp_utc": alert.timestamp_utc.isoformat() if alert.timestamp_utc else None,
+        "source_name": alert.source_name,
+        "source_url": alert.source_url,
+        "matched_rule_ids": alert.matched_rule_ids or [],
+        "summary_fa": alert.summary_fa or "",
+        "why_important_fa": alert.why_important_fa or "",
+        "expected_impact": alert.expected_impact or {},
+        "severity": alert.severity,
+        "time_horizon": alert.time_horizon,
+        "confidence": alert.confidence,
+        "follow_up_questions": alert.follow_up_questions or [],
+        "dedupe_key": alert.dedupe_key,
+        "raw_item_id": str(alert.raw_item_id) if alert.raw_item_id else None,
+        "match_evidence": alert.match_evidence or {},
+        "created_at": alert.created_at.isoformat() if alert.created_at else None,
+    }
 
 
 # -- Helpers ---------------------------------------------------------------
@@ -47,9 +71,6 @@ def _apply_alert_filters(
         stmt = stmt.where(Alert.time_horizon == time_horizon)
 
     if asset is not None:
-        # Asset may appear inside the JSONB matched_rule_ids array or the
-        # expected_impact JSONB object.  Cast to text and use ILIKE for a
-        # pragmatic, case-insensitive search.
         asset_pattern = f"%{asset.lower()}%"
         stmt = stmt.where(
             or_(
@@ -79,60 +100,33 @@ def _apply_alert_filters(
 # -- GET /alerts -----------------------------------------------------------
 
 
-@router.get("")
+@router.get("", response_model=None)
 async def list_alerts(
     db: AsyncSession = Depends(get_db),
-    asset: str | None = Query(
-        None,
-        description="Filter by asset keyword in matched_rule_ids / expected_impact",
-    ),
-    severity: str | None = Query(
-        None,
-        description="Exact severity filter: low, medium, high",
-    ),
-    time_horizon: str | None = Query(
-        None,
-        description="Exact time-horizon filter: immediate, short, medium, long",
-    ),
-    q: str | None = Query(
-        None,
-        description="Free-text search in title and summary_fa",
-    ),
-    from_date: datetime.datetime | None = Query(
-        None,
-        description="Start of date range (created_at >=)",
-    ),
-    to_date: datetime.datetime | None = Query(
-        None,
-        description="End of date range (created_at <=)",
-    ),
-    limit: int = Query(20, ge=1, le=100, description="Page size"),
-    offset: int = Query(0, ge=0, description="Pagination offset"),
+    asset: str | None = Query(None),
+    severity: str | None = Query(None),
+    time_horizon: str | None = Query(None),
+    q: str | None = Query(None),
+    from_date: datetime.datetime | None = Query(None),
+    to_date: datetime.datetime | None = Query(None),
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
 ) -> dict[str, Any]:
-    """Return a paginated, filterable list of alerts ordered by created_at desc."""
-
     base = select(Alert)
     base = _apply_alert_filters(
-        base,
-        asset=asset,
-        severity=severity,
-        time_horizon=time_horizon,
-        q=q,
-        from_date=from_date,
-        to_date=to_date,
+        base, asset=asset, severity=severity, time_horizon=time_horizon,
+        q=q, from_date=from_date, to_date=to_date,
     )
 
-    # Total count (without limit / offset)
     count_stmt = select(func.count()).select_from(base.subquery())
     total: int = (await db.execute(count_stmt)).scalar_one()
 
-    # Fetch the requested page
     items_stmt = base.order_by(desc(Alert.created_at)).limit(limit).offset(offset)
     result = await db.execute(items_stmt)
     alerts = result.scalars().all()
 
     return {
-        "items": alerts,
+        "items": [_alert_to_dict(a) for a in alerts],
         "total": total,
         "limit": limit,
         "offset": offset,
@@ -142,15 +136,12 @@ async def list_alerts(
 # -- GET /alerts/stats/today  (registered BEFORE the {alert_id} catch-all) -
 
 
-@router.get("/stats/today")
+@router.get("/stats/today", response_model=None)
 async def alerts_stats_today(
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
-    """Risk score, severity counts, and top alerts from the last 24 hours."""
-
     cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=24)
 
-    # -- severity counts ---------------------------------------------------
     count_stmt = (
         select(Alert.severity, func.count().label("cnt"))
         .where(Alert.created_at >= cutoff)
@@ -160,30 +151,23 @@ async def alerts_stats_today(
 
     counts: dict[str, int] = {"high": 0, "medium": 0, "low": 0}
     for sev, cnt in rows:
-        key = sev.value if isinstance(sev, Severity) else str(sev)
-        counts[key] = cnt
+        counts[str(sev)] = cnt
 
-    # -- risk score --------------------------------------------------------
     risk_score = sum(
         counts.get(sev, 0) * weight for sev, weight in _SEVERITY_WEIGHT.items()
     )
     risk_score = min(risk_score, 100)
 
-    # -- top 3 alerts (highest severity first, then most recent) -----------
-    severity_order = func.array_position(
-        func.cast("{high,medium,low}", String),
-        cast(Alert.severity, String),
-    )
     top_stmt = (
         select(Alert)
         .where(Alert.created_at >= cutoff)
-        .order_by(severity_order, desc(Alert.created_at))
+        .order_by(desc(Alert.created_at))
         .limit(3)
     )
     top_alerts = (await db.execute(top_stmt)).scalars().all()
 
     return {
-        "top_alerts": top_alerts,
+        "top_alerts": [_alert_to_dict(a) for a in top_alerts],
         "risk_score": risk_score,
         "counts": counts,
     }
@@ -197,8 +181,6 @@ async def get_alert(
     alert_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
 ) -> Any:
-    """Return a single alert by its UUID, or 404."""
-
     result = await db.execute(select(Alert).where(Alert.id == alert_id))
     alert = result.scalar_one_or_none()
     if alert is None:
@@ -206,4 +188,4 @@ async def get_alert(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Alert {alert_id} not found",
         )
-    return alert
+    return _alert_to_dict(alert)
