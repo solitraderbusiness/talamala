@@ -183,7 +183,7 @@ async def _seed_sources() -> None:
                 type="rss",
                 base_url="https://news.google.com",
                 endpoints=[
-                    "https://news.google.com/rss/search?q=%D8%B7%D9%84%D8%A7+%D8%A7%D9%88%D9%86%D8%B3+%D9%82%DB%8C%D9%85%D8%AA+%D8%AC%D9%87%D8%A7%D9%86%DB%8C&hl=fa&gl=IR&ceid=IR:fa",
+                    "https://news.google.com/rss/search?q=%D8%B7%D9%84%D8%A7+%D8%A7%D9%88%D9%86%D8%B3+%D9%82%DB%8C%D9%85%D8%AA+%D8%AC%D9%87%D8%A7%D9%86%DB%8C+when%3A7d&hl=fa&gl=IR&ceid=IR:fa",
                 ],
                 enabled=True,
                 poll_interval_seconds=180,
@@ -201,7 +201,7 @@ async def _seed_sources() -> None:
                 type="rss",
                 base_url="https://news.google.com",
                 endpoints=[
-                    "https://news.google.com/rss/search?q=%D8%AA%D8%AD%D8%B1%DB%8C%D9%85+%D8%A7%DB%8C%D8%B1%D8%A7%D9%86+%D9%85%D8%B0%D8%A7%DA%A9%D8%B1%D8%A7%D8%AA+%D8%A7%D8%B1%D8%B2&hl=fa&gl=IR&ceid=IR:fa",
+                    "https://news.google.com/rss/search?q=%D8%AA%D8%AD%D8%B1%DB%8C%D9%85+%D8%A7%DB%8C%D8%B1%D8%A7%D9%86+%D9%85%D8%B0%D8%A7%DA%A9%D8%B1%D8%A7%D8%AA+%D8%A7%D8%B1%D8%B2+when%3A7d&hl=fa&gl=IR&ceid=IR:fa",
                 ],
                 enabled=True,
                 poll_interval_seconds=300,
@@ -218,7 +218,7 @@ async def _seed_sources() -> None:
                 type="rss",
                 base_url="https://news.google.com",
                 endpoints=[
-                    "https://news.google.com/rss/search?q=%D8%AA%D9%88%D8%B1%D9%85+%D9%86%D9%82%D8%AF%DB%8C%D9%86%DA%AF%DB%8C+%D8%A8%D8%A7%D9%86%DA%A9+%D9%85%D8%B1%DA%A9%D8%B2%DB%8C+%D9%86%D8%B1%D8%AE+%D8%A8%D9%87%D8%B1%D9%87&hl=fa&gl=IR&ceid=IR:fa",
+                    "https://news.google.com/rss/search?q=%D8%AA%D9%88%D8%B1%D9%85+%D9%86%D9%82%D8%AF%DB%8C%D9%86%DA%AF%DB%8C+%D8%A8%D8%A7%D9%86%DA%A9+%D9%85%D8%B1%DA%A9%D8%B2%DB%8C+%D9%86%D8%B1%D8%AE+%D8%A8%D9%87%D8%B1%D9%87+when%3A7d&hl=fa&gl=IR&ceid=IR:fa",
                 ],
                 enabled=True,
                 poll_interval_seconds=300,
@@ -235,7 +235,7 @@ async def _seed_sources() -> None:
                 type="rss",
                 base_url="https://news.google.com",
                 endpoints=[
-                    "https://news.google.com/rss/search?q=%D8%B5%D9%86%D8%AF%D9%88%D9%82+%D8%B7%D9%84%D8%A7+%D8%A8%D9%88%D8%B1%D8%B3+%D8%B3%D8%B1%D9%85%D8%A7%DB%8C%D9%87+%DA%AF%D8%B0%D8%A7%D8%B1%DB%8C&hl=fa&gl=IR&ceid=IR:fa",
+                    "https://news.google.com/rss/search?q=%D8%B5%D9%86%D8%AF%D9%88%D9%82+%D8%B7%D9%84%D8%A7+%D8%A8%D9%88%D8%B1%D8%B3+%D8%B3%D8%B1%D9%85%D8%A7%DB%8C%D9%87+%DA%AF%D8%B0%D8%A7%D8%B1%DB%8C+when%3A7d&hl=fa&gl=IR&ceid=IR:fa",
                 ],
                 enabled=True,
                 poll_interval_seconds=300,
@@ -269,7 +269,7 @@ async def _seed_sources() -> None:
                 type="rss",
                 base_url="https://www.tasnimnews.com",
                 endpoints=["/fa/rss"],
-                enabled=True,
+                enabled=False,  # DNS failure from Docker
                 poll_interval_seconds=180,
                 categories=["iran_gold", "coin"],
                 rule_bindings=[
@@ -277,14 +277,14 @@ async def _seed_sources() -> None:
                     "IR_FOREIGN_POLICY", "IR_INTERNAL_POL_SOCIAL",
                 ],
                 reliability_score=0.85,
-                notes="تسنیم — سیاسی/اقتصادی، تحریم‌ها و مذاکرات",
+                notes="تسنیم — غیرفعال (DNS failure)",
             ),
             Source(
                 name="خبرگزاری فارس - اقتصادی",
                 type="rss",
                 base_url="https://www.farsnews.ir",
                 endpoints=["/rss"],
-                enabled=True,
+                enabled=False,  # Malformed RSS XML
                 poll_interval_seconds=180,
                 categories=["iran_gold", "coin"],
                 rule_bindings=[
@@ -292,7 +292,7 @@ async def _seed_sources() -> None:
                     "IR_BUDGET_FISCAL", "IR_FOREIGN_POLICY",
                 ],
                 reliability_score=0.8,
-                notes="فارس — اخبار اقتصادی، بودجه، تورم",
+                notes="فارس — غیرفعال (RSS malformed)",
             ),
             Source(
                 name="خبرگزاری مهر - اقتصادی",
@@ -315,7 +315,7 @@ async def _seed_sources() -> None:
                 type="rss",
                 base_url="https://www.isna.ir",
                 endpoints=["/rss"],
-                enabled=True,
+                enabled=False,  # Malformed RSS XML
                 poll_interval_seconds=180,
                 categories=["iran_gold", "coin", "gold_funds"],
                 rule_bindings=[
@@ -380,7 +380,7 @@ async def _seed_sources() -> None:
                 type="rss",
                 base_url="https://news.google.com",
                 endpoints=[
-                    "https://news.google.com/rss/search?q=%D8%B7%D9%84%D8%A7+%D8%B3%DA%A9%D9%87+%D8%AF%D9%84%D8%A7%D8%B1&hl=fa&gl=IR&ceid=IR:fa",
+                    "https://news.google.com/rss/search?q=%D8%B7%D9%84%D8%A7+%D8%B3%DA%A9%D9%87+%D8%AF%D9%84%D8%A7%D8%B1+%D8%A7%D8%B1%D8%B2+%D8%A8%D8%A7%D8%B2%D8%A7%D8%B1+when%3A7d&hl=fa&gl=IR&ceid=IR:fa",
                 ],
                 enabled=True,
                 poll_interval_seconds=180,
@@ -425,7 +425,7 @@ async def _migrate_sources_to_persian() -> None:
             "Google News — Gold Market": {
                 "name": "Google News — طلا و قیمت جهانی",
                 "endpoints": [
-                    "https://news.google.com/rss/search?q=%D8%B7%D9%84%D8%A7+%D8%A7%D9%88%D9%86%D8%B3+%D9%82%DB%8C%D9%85%D8%AA+%D8%AC%D9%87%D8%A7%D9%86%DB%8C&hl=fa&gl=IR&ceid=IR:fa",
+                    "https://news.google.com/rss/search?q=%D8%B7%D9%84%D8%A7+%D8%A7%D9%88%D9%86%D8%B3+%D9%82%DB%8C%D9%85%D8%AA+%D8%AC%D9%87%D8%A7%D9%86%DB%8C+when%3A7d&hl=fa&gl=IR&ceid=IR:fa",
                 ],
                 "categories": ["global_gold", "iran_gold"],
                 "rule_bindings": [
@@ -437,7 +437,7 @@ async def _migrate_sources_to_persian() -> None:
             "Google News — Commodities": {
                 "name": "Google News — تحریم و مذاکرات",
                 "endpoints": [
-                    "https://news.google.com/rss/search?q=%D8%AA%D8%AD%D8%B1%DB%8C%D9%85+%D8%A7%DB%8C%D8%B1%D8%A7%D9%86+%D9%85%D8%B0%D8%A7%DA%A9%D8%B1%D8%A7%D8%AA+%D8%A7%D8%B1%D8%B2&hl=fa&gl=IR&ceid=IR:fa",
+                    "https://news.google.com/rss/search?q=%D8%AA%D8%AD%D8%B1%DB%8C%D9%85+%D8%A7%DB%8C%D8%B1%D8%A7%D9%86+%D9%85%D8%B0%D8%A7%DA%A9%D8%B1%D8%A7%D8%AA+%D8%A7%D8%B1%D8%B2+when%3A7d&hl=fa&gl=IR&ceid=IR:fa",
                 ],
                 "categories": ["iran_gold"],
                 "rule_bindings": [
@@ -448,7 +448,7 @@ async def _migrate_sources_to_persian() -> None:
             "Google News — Crypto & Gold": {
                 "name": "Google News — تورم و بانک مرکزی",
                 "endpoints": [
-                    "https://news.google.com/rss/search?q=%D8%AA%D9%88%D8%B1%D9%85+%D9%86%D9%82%D8%AF%DB%8C%D9%86%DA%AF%DB%8C+%D8%A8%D8%A7%D9%86%DA%A9+%D9%85%D8%B1%DA%A9%D8%B2%DB%8C+%D9%86%D8%B1%D8%AE+%D8%A8%D9%87%D8%B1%D9%87&hl=fa&gl=IR&ceid=IR:fa",
+                    "https://news.google.com/rss/search?q=%D8%AA%D9%88%D8%B1%D9%85+%D9%86%D9%82%D8%AF%DB%8C%D9%86%DA%AF%DB%8C+%D8%A8%D8%A7%D9%86%DA%A9+%D9%85%D8%B1%DA%A9%D8%B2%DB%8C+%D9%86%D8%B1%D8%AE+%D8%A8%D9%87%D8%B1%D9%87+when%3A7d&hl=fa&gl=IR&ceid=IR:fa",
                 ],
                 "categories": ["iran_gold", "coin"],
                 "rule_bindings": [
@@ -459,7 +459,7 @@ async def _migrate_sources_to_persian() -> None:
             "Google News — Gold Mining": {
                 "name": "Google News — بورس و صندوق طلا",
                 "endpoints": [
-                    "https://news.google.com/rss/search?q=%D8%B5%D9%86%D8%AF%D9%88%D9%82+%D8%B7%D9%84%D8%A7+%D8%A8%D9%88%D8%B1%D8%B3+%D8%B3%D8%B1%D9%85%D8%A7%DB%8C%D9%87+%DA%AF%D8%B0%D8%A7%D8%B1%DB%8C&hl=fa&gl=IR&ceid=IR:fa",
+                    "https://news.google.com/rss/search?q=%D8%B5%D9%86%D8%AF%D9%88%D9%82+%D8%B7%D9%84%D8%A7+%D8%A8%D9%88%D8%B1%D8%B3+%D8%B3%D8%B1%D9%85%D8%A7%DB%8C%D9%87+%DA%AF%D8%B0%D8%A7%D8%B1%DB%8C+when%3A7d&hl=fa&gl=IR&ceid=IR:fa",
                 ],
                 "categories": ["gold_funds"],
                 "rule_bindings": [
@@ -517,6 +517,71 @@ async def _migrate_sources_to_persian() -> None:
         logger.info("Migrated %d source(s) to Persian feeds.", fixed)
 
 
+async def _migrate_sources_v2() -> None:
+    """Add when:7d filter to Google News, disable failing Iranian sources.
+
+    Runs once (tracked via settings marker).
+    """
+    marker_key = "migration:sources_v2"
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            text("SELECT key FROM settings WHERE key = :k"),
+            {"k": marker_key},
+        )
+        if result.scalar_one_or_none() is not None:
+            return
+
+        # --- Add when:7d to ALL Google News feeds ---
+        GOOGLE_NEWS_UPDATES: dict[str, str] = {
+            "Google News — طلا و قیمت جهانی":
+                "https://news.google.com/rss/search?q=%D8%B7%D9%84%D8%A7+%D8%A7%D9%88%D9%86%D8%B3+%D9%82%DB%8C%D9%85%D8%AA+%D8%AC%D9%87%D8%A7%D9%86%DB%8C+when%3A7d&hl=fa&gl=IR&ceid=IR:fa",
+            "Google News — تحریم و مذاکرات":
+                "https://news.google.com/rss/search?q=%D8%AA%D8%AD%D8%B1%DB%8C%D9%85+%D8%A7%DB%8C%D8%B1%D8%A7%D9%86+%D9%85%D8%B0%D8%A7%DA%A9%D8%B1%D8%A7%D8%AA+%D8%A7%D8%B1%D8%B2+when%3A7d&hl=fa&gl=IR&ceid=IR:fa",
+            "Google News — تورم و بانک مرکزی":
+                "https://news.google.com/rss/search?q=%D8%AA%D9%88%D8%B1%D9%85+%D9%86%D9%82%D8%AF%DB%8C%D9%86%DA%AF%DB%8C+%D8%A8%D8%A7%D9%86%DA%A9+%D9%85%D8%B1%DA%A9%D8%B2%DB%8C+%D9%86%D8%B1%D8%AE+%D8%A8%D9%87%D8%B1%D9%87+when%3A7d&hl=fa&gl=IR&ceid=IR:fa",
+            "Google News — بورس و صندوق طلا":
+                "https://news.google.com/rss/search?q=%D8%B5%D9%86%D8%AF%D9%88%D9%82+%D8%B7%D9%84%D8%A7+%D8%A8%D9%88%D8%B1%D8%B3+%D8%B3%D8%B1%D9%85%D8%A7%DB%8C%D9%87+%DA%AF%D8%B0%D8%A7%D8%B1%DB%8C+when%3A7d&hl=fa&gl=IR&ceid=IR:fa",
+            "Google News — طلا و ارز":
+                "https://news.google.com/rss/search?q=%D8%B7%D9%84%D8%A7+%D8%B3%DA%A9%D9%87+%D8%AF%D9%84%D8%A7%D8%B1+%D8%A7%D8%B1%D8%B2+%D8%A8%D8%A7%D8%B2%D8%A7%D8%B1+when%3A7d&hl=fa&gl=IR&ceid=IR:fa",
+        }
+
+        fixed = 0
+        for name, new_url in GOOGLE_NEWS_UPDATES.items():
+            result = await session.execute(
+                select(Source).where(Source.name == name)
+            )
+            source = result.scalar_one_or_none()
+            if source is not None:
+                source.endpoints = [new_url]
+                fixed += 1
+
+        # --- Disable consistently failing Iranian sources ---
+        for name in (
+            "خبرگزاری تسنیم - اقتصادی",   # DNS failure from Docker
+            "خبرگزاری فارس - اقتصادی",     # Malformed RSS XML
+            "خبرگزاری ایسنا - اقتصادی",    # Malformed RSS XML
+        ):
+            result = await session.execute(
+                select(Source).where(Source.name == name)
+            )
+            source = result.scalar_one_or_none()
+            if source is not None:
+                source.enabled = False
+                fixed += 1
+
+        # --- Clear old alerts for fresh start ---
+        await session.execute(text("DELETE FROM alerts"))
+
+        # --- Mark as done ---
+        await session.execute(
+            text("INSERT INTO settings (key, value, updated_at) "
+                 "VALUES (:k, '\"done\"', NOW())"),
+            {"k": marker_key},
+        )
+        await session.commit()
+        logger.info("Migration v2: updated %d source(s), cleared alerts.", fixed)
+
+
 async def _flush_dedup_keys() -> None:
     """One-time flush of Redis dedup keys so previously-failed items
     get re-processed with the now-working rule engine.
@@ -524,7 +589,7 @@ async def _flush_dedup_keys() -> None:
     Uses a marker key ``dedup:flushed:v2`` to avoid re-flushing on
     subsequent restarts.
     """
-    marker = "dedup:flushed:v3"
+    marker = "dedup:flushed:v4"
     try:
         r = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
         if await r.exists(marker):
@@ -561,6 +626,7 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     await _seed_admin()
     await _seed_sources()
     await _migrate_sources_to_persian()
+    await _migrate_sources_v2()
     await _flush_dedup_keys()
     await _snapshot_rules()
     logger.info("Startup complete.")

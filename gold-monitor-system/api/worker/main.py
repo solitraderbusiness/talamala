@@ -28,7 +28,7 @@ import signal
 import sys
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -69,6 +69,7 @@ LOCK_TTL = 55  # seconds — slightly less than CYCLE_INTERVAL
 FETCH_TIMEOUT = 30  # per-request HTTP timeout (seconds)
 MAX_ALERTS_PER_SOURCE = 10  # prevent any single source from flooding
 MIN_MATCH_SCORE = 0.12  # require at least ~2 keyword matches
+MAX_ARTICLE_AGE_HOURS = 48  # skip RSS items older than this
 
 logger = logging.getLogger("worker")
 
@@ -310,7 +311,12 @@ class Worker:
         # 2-6. Process each item
         new_count = 0
         matched_count = 0
+        age_cutoff = datetime.now(timezone.utc) - timedelta(hours=MAX_ARTICLE_AGE_HOURS)
         for item in raw_items:
+            # Skip old articles (e.g. Google News returning months-old results)
+            if item.published_at and item.published_at < age_cutoff:
+                continue
+
             content_hash = _compute_content_hash(item)
 
             # 3. Dedup raw item
