@@ -66,7 +66,7 @@ except ImportError:
 CYCLE_INTERVAL = 60  # seconds between cycles
 LOCK_KEY = "worker:lock"
 LOCK_TTL = 55  # seconds — slightly less than CYCLE_INTERVAL
-FETCH_TIMEOUT = 10  # per-request HTTP timeout (seconds)
+FETCH_TIMEOUT = 30  # per-request HTTP timeout (seconds)
 
 logger = logging.getLogger("worker")
 
@@ -80,7 +80,8 @@ class Worker:
 
     def __init__(self) -> None:
         self._redis: aioredis.Redis | None = None
-        self._rules: list[dict[str, Any]] = []
+        self._rules: list = []
+        self._use_rule_engine: bool = False
         self._shutdown = asyncio.Event()
         self._http_session: aiohttp.ClientSession | None = None
 
@@ -101,17 +102,20 @@ class Worker:
             try:
                 yaml_data = _re_load_yaml(settings.YAML_PATH)
                 self._rules = _re_get_rules(yaml_data)
+                self._use_rule_engine = True
             except Exception:
                 logger.warning(
                     "Rule engine load failed — using fallback dict loader",
                     exc_info=True,
                 )
                 self._rules = _load_rules(settings.YAML_PATH)
+                self._use_rule_engine = False
         else:
             self._rules = _load_rules(settings.YAML_PATH)
+            self._use_rule_engine = False
         self._http_session = aiohttp.ClientSession(
             timeout=aiohttp.ClientTimeout(total=FETCH_TIMEOUT),
-            headers={"User-Agent": "GoldMonitorWorker/1.0"},
+            headers={"User-Agent": "Mozilla/5.0 (compatible; GoldMonitor/1.0)"},
         )
 
         # Graceful shutdown on SIGTERM / SIGINT
@@ -396,7 +400,7 @@ class Worker:
         if not self._rules:
             return 0
 
-        if _rule_engine_available:
+        if self._use_rule_engine:
             return await self._match_and_alert_engine(
                 item, raw_item_id, content_hash, source, db, dedup,
             )

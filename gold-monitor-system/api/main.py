@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import AsyncGenerator
 
+import redis.asyncio as aioredis
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select, text
@@ -133,7 +134,7 @@ async def _seed_sources() -> None:
                 name="Kitco Gold News",
                 type="rss",
                 base_url="https://www.kitco.com",
-                endpoints=["/feed/rss/news/gold"],
+                endpoints=["https://www.kitco.com/news/rss"],
                 enabled=True,
                 poll_interval_seconds=180,
                 categories=["global_gold"],
@@ -177,11 +178,11 @@ async def _seed_sources() -> None:
                 notes="CNBC finance news — macro data, Fed, geopolitics",
             ),
             Source(
-                name="MarketWatch Top Stories",
+                name="Google News — Gold Market",
                 type="rss",
-                base_url="https://www.marketwatch.com",
+                base_url="https://news.google.com",
                 endpoints=[
-                    "https://feeds.marketwatch.com/marketwatch/topstories/",
+                    "https://news.google.com/rss/search?q=gold+price+market&hl=en-US&gl=US&ceid=US:en",
                 ],
                 enabled=True,
                 poll_interval_seconds=180,
@@ -191,39 +192,43 @@ async def _seed_sources() -> None:
                     "GLOB_US_YIELDS", "GLOB_DOLLAR_DXY",
                 ],
                 reliability_score=0.8,
-                notes="MarketWatch — US markets, yields, dollar, macro data",
+                notes="Google News — aggregated gold market news",
             ),
             Source(
-                name="CoinDesk",
+                name="Google News — Crypto & Gold",
                 type="rss",
-                base_url="https://www.coindesk.com",
+                base_url="https://news.google.com",
                 endpoints=[
-                    "https://www.coindesk.com/arc/outboundfeeds/rss/",
+                    "https://news.google.com/rss/search?q=bitcoin+gold+safe+haven&hl=en-US&gl=US&ceid=US:en",
                 ],
                 enabled=True,
                 poll_interval_seconds=300,
                 categories=["global_gold"],
                 rule_bindings=["GLOB_CRYPTO_SHOCKS"],
                 reliability_score=0.75,
-                notes="CoinDesk — crypto market news for safe-haven flow analysis",
+                notes="Google News — crypto and gold safe-haven flow analysis",
             ),
             Source(
-                name="Mining.com Gold",
+                name="Google News — Gold Mining",
                 type="rss",
-                base_url="https://www.mining.com",
-                endpoints=["/tag/gold/feed/"],
+                base_url="https://news.google.com",
+                endpoints=[
+                    "https://news.google.com/rss/search?q=gold+mining+supply&hl=en-US&gl=US&ceid=US:en",
+                ],
                 enabled=True,
                 poll_interval_seconds=600,
                 categories=["global_gold"],
                 rule_bindings=["GLOB_MINING_SUPPLY"],
                 reliability_score=0.8,
-                notes="Mining.com — gold mining production, supply, costs",
+                notes="Google News — gold mining production, supply, costs",
             ),
             Source(
-                name="Investing.com Commodities",
+                name="Google News — Commodities",
                 type="rss",
-                base_url="https://www.investing.com",
-                endpoints=["/rss/news_25.rss"],
+                base_url="https://news.google.com",
+                endpoints=[
+                    "https://news.google.com/rss/search?q=gold+commodities+dollar&hl=en-US&gl=US&ceid=US:en",
+                ],
                 enabled=True,
                 poll_interval_seconds=180,
                 categories=["global_gold"],
@@ -233,7 +238,7 @@ async def _seed_sources() -> None:
                     "GLOB_CB_GOLD_RESERVES",
                 ],
                 reliability_score=0.75,
-                notes="Investing.com — commodities and global markets RSS",
+                notes="Google News — commodities, gold, and dollar news",
             ),
             # ── Iran Gold & Coin (Persian RSS) ─────────────────────
             Source(
@@ -362,6 +367,25 @@ async def _seed_sources() -> None:
                 reliability_score=0.75,
                 notes="بورس‌نیوز — صندوق‌های طلا، NAV، کدال، بازار سرمایه",
             ),
+            # ── Google News Persian (guaranteed accessible) ──────────
+            Source(
+                name="Google News — طلا و ارز",
+                type="rss",
+                base_url="https://news.google.com",
+                endpoints=[
+                    "https://news.google.com/rss/search?q=%D8%B7%D9%84%D8%A7+%D8%B3%DA%A9%D9%87+%D8%AF%D9%84%D8%A7%D8%B1&hl=fa&gl=IR&ceid=IR:fa",
+                ],
+                enabled=True,
+                poll_interval_seconds=180,
+                categories=["iran_gold", "coin", "gold_funds"],
+                rule_bindings=[
+                    "IR_FX_USD", "IR_GOV_FX_POLICY",
+                    "IR_MACRO_INFLATION_LIQ", "COIN_PREMIUM_BUBBLE",
+                    "COIN_SENTIMENT_SOCIAL", "COIN_SEASONAL_DEMAND",
+                ],
+                reliability_score=0.7,
+                notes="Google News — اخبار فارسی طلا، سکه، دلار",
+            ),
         ]
 
         for source in default_sources:
@@ -373,6 +397,96 @@ async def _seed_sources() -> None:
 
 # ── Lifespan ────────────────────────────────────────────────────────────
 
+
+async def _fix_source_urls() -> None:
+    """Fix known-broken source URLs for existing deployments."""
+    URL_FIXES: dict[str, dict] = {
+        "Kitco Gold News": {
+            "endpoints": ["https://www.kitco.com/news/rss"],
+        },
+        "MarketWatch Top Stories": {
+            "name": "Google News — Gold Market",
+            "base_url": "https://news.google.com",
+            "endpoints": [
+                "https://news.google.com/rss/search?q=gold+price+market&hl=en-US&gl=US&ceid=US:en",
+            ],
+        },
+        "CoinDesk": {
+            "name": "Google News — Crypto & Gold",
+            "base_url": "https://news.google.com",
+            "endpoints": [
+                "https://news.google.com/rss/search?q=bitcoin+gold+safe+haven&hl=en-US&gl=US&ceid=US:en",
+            ],
+        },
+        "Mining.com Gold": {
+            "name": "Google News — Gold Mining",
+            "base_url": "https://news.google.com",
+            "endpoints": [
+                "https://news.google.com/rss/search?q=gold+mining+supply&hl=en-US&gl=US&ceid=US:en",
+            ],
+        },
+        "Investing.com Commodities": {
+            "name": "Google News — Commodities",
+            "base_url": "https://news.google.com",
+            "endpoints": [
+                "https://news.google.com/rss/search?q=gold+commodities+dollar&hl=en-US&gl=US&ceid=US:en",
+            ],
+        },
+    }
+    async with AsyncSessionLocal() as session:
+        fixed = 0
+        for old_name, fix in URL_FIXES.items():
+            result = await session.execute(
+                select(Source).where(Source.name == old_name)
+            )
+            source = result.scalar_one_or_none()
+            if source is None:
+                continue
+            if "name" in fix:
+                source.name = fix["name"]
+            if "base_url" in fix:
+                source.base_url = fix["base_url"]
+            if "endpoints" in fix:
+                source.endpoints = fix["endpoints"]
+            fixed += 1
+        if fixed:
+            await session.commit()
+            logger.info("Fixed URLs for %d source(s).", fixed)
+
+
+async def _flush_dedup_keys() -> None:
+    """One-time flush of Redis dedup keys so previously-failed items
+    get re-processed with the now-working rule engine.
+
+    Uses a marker key ``dedup:flushed:v2`` to avoid re-flushing on
+    subsequent restarts.
+    """
+    marker = "dedup:flushed:v2"
+    try:
+        r = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+        if await r.exists(marker):
+            await r.aclose()
+            return
+
+        # Flush raw_items:hash:* and alert:dedup:* keys
+        count = 0
+        async for key in r.scan_iter("raw_items:hash:*", count=500):
+            await r.delete(key)
+            count += 1
+        async for key in r.scan_iter("alert:dedup:*", count=500):
+            await r.delete(key)
+            count += 1
+
+        # Set marker to never flush again (30 days TTL)
+        await r.setex(marker, 86400 * 30, "1")
+        await r.aclose()
+
+        if count:
+            logger.info("Flushed %d Redis dedup keys (one-time reset).", count)
+    except Exception:
+        logger.warning("Redis dedup flush failed", exc_info=True)
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     """Application startup / shutdown lifecycle."""
@@ -383,6 +497,8 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     _run_migrations()
     await _seed_admin()
     await _seed_sources()
+    await _fix_source_urls()
+    await _flush_dedup_keys()
     await _snapshot_rules()
     logger.info("Startup complete.")
 
