@@ -4,6 +4,16 @@ Prices router -- real-time gold, currency, and coin market prices.
 Fetches live prices from TGJU (tgju.org), the most popular
 Iranian gold/currency data provider.  Results are cached in Redis
 for 2 minutes to avoid excessive API calls.
+
+TGJU API returns DataTables JSON::
+
+    {
+        "data": [["open", "low", "high", "close", "change_html",
+                  "change_pct_html", "gregorian_date", "jalali_date"], ...]
+    }
+
+Close price is ``data[0][3]`` — a comma-formatted string.
+Iranian prices are in **Rial** (divide by 10 for Toman).
 """
 
 from __future__ import annotations
@@ -15,7 +25,7 @@ from typing import Any
 
 import httpx
 import redis.asyncio as aioredis
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter
 
 from api.config import settings as app_settings
 
@@ -28,18 +38,17 @@ router = APIRouter(tags=["prices"])
 CACHE_KEY = "prices:latest"
 CACHE_TTL_SECONDS = 120  # 2 minutes
 
-# TGJU main page data endpoint — returns all market indicators
-TGJU_URL = "https://api.tgju.org/v1/data/sana/json"
-
-# Fallback: individual indicator endpoints
-TGJU_INDICATOR_BASE = "https://api.tgju.org/v1/market/indicator/summary-table-data"
+# TGJU individual indicator endpoint (DataTables format)
+TGJU_API_BASE = "https://api.tgju.org/v1/market/indicator/summary-table-data"
+# Fallback mirror
+ACCESSBAN_API_BASE = "https://api.accessban.com/v1/market/indicator/summary-table-data"
 
 # Map our price keys to TGJU indicator slugs
 INDICATORS = {
     "gold_global": "ons",             # اونس جهانی طلا — USD/oz
-    "gold_18k": "geram18",            # طلای ۱۸ عیار — تومان/گرم
-    "usd": "price_dollar_rl",         # دلار آمریکا — تومان
-    "emami_coin": "sekee",            # سکه امامی — تومان
+    "gold_18k": "geram18",            # طلای ۱۸ عیار — ریال/گرم
+    "usd": "price_dollar_rl",         # دلار آمریکا — ریال
+    "emami_coin": "sekee",            # سکه امامی — ریال
 }
 
 # Display metadata for the frontend
@@ -71,88 +80,21 @@ def _parse_number(raw: Any) -> float | None:
     return None
 
 
-def _extract_price_from_indicator(data: Any) -> float | None:
-    """Extract price from a TGJU indicator API response.
+def _extract_close_price(data: dict[str, Any]) -> float | None:
+    """Extract close price from TGJU DataTables response.
 
-    TGJU responses vary; we try several known structures.
+    Response format: ``{"data": [["open", "low", "high", "close", ...], ...]}``
+    Close price is at index 3 of the first row.
     """
-    if not isinstance(data, dict):
+    rows = data.get("data")
+    if not isinstance(rows, list) or not rows:
         return None
 
-    # Structure 1: {"current": {"p": "2345.6"}}
-    current = data.get("current")
-    if isinstance(current, dict):
-        p = _parse_number(current.get("p"))
-        if p is not None:
-            return p
+    first_row = rows[0]
+    if not isinstance(first_row, list) or len(first_row) < 4:
+        return None
 
-    # Structure 2: {"data": {"p": "2345.6"}}
-    d = data.get("data")
-    if isinstance(d, dict):
-        p = _parse_number(d.get("p"))
-        if p is not None:
-            return p
-
-    # Structure 3: nested in response
-    resp = data.get("response")
-    if isinstance(resp, dict):
-        for v in resp.values():
-            if isinstance(v, dict):
-                p = _parse_number(v.get("p"))
-                if p is not None:
-                    return p
-
-    # Structure 4: top-level "p"
-    p = _parse_number(data.get("p"))
-    if p is not None:
-        return p
-
-    return None
-
-
-async def _fetch_prices_from_tgju() -> dict[str, Any]:
-    """Fetch current prices from TGJU individual indicator endpoints."""
-    prices: dict[str, Any] = {}
-
-    async with httpx.AsyncClient(
-        timeout=10.0,
-        headers={
-            "User-Agent": "Mozilla/5.0 (compatible; GoldMonitor/1.0)",
-            "Accept": "application/json",
-        },
-        follow_redirects=True,
-    ) as client:
-        for key, indicator in INDICATORS.items():
-            url = f"{TGJU_INDICATOR_BASE}/{indicator}"
-            try:
-                resp = await client.get(url)
-                resp.raise_for_status()
-                data = resp.json()
-                price = _extract_price_from_indicator(data)
-                if price is not None:
-                    meta = PRICE_META[key]
-                    prices[key] = {
-                        "value": price,
-                        "formatted": _format_price(price, key),
-                        "label": meta["label"],
-                        "unit": meta["unit"],
-                        "icon": meta["icon"],
-                    }
-                else:
-                    logger.warning(
-                        "Could not parse price for %s from TGJU response: %s",
-                        key,
-                        str(data)[:200],
-                    )
-            except httpx.HTTPStatusError as e:
-                logger.warning(
-                    "TGJU HTTP error for %s: %s %s",
-                    key, e.response.status_code, url,
-                )
-            except Exception:
-                logger.warning("Failed to fetch %s price from TGJU", key, exc_info=True)
-
-    return prices
+    return _parse_number(first_row[3])
 
 
 def _format_price(value: float, key: str) -> str:
@@ -160,11 +102,65 @@ def _format_price(value: float, key: str) -> str:
     if key == "gold_global":
         # USD price — show with 2 decimals
         return f"{value:,.2f}"
-    else:
-        # Toman — show whole numbers with thousand separators
-        # TGJU returns values in Rial; convert to Toman (÷10)
-        toman = value / 10 if value > 100_000 else value
-        return f"{toman:,.0f}"
+    # Iranian prices are in Rial — convert to Toman (÷10)
+    toman = value / 10
+    return f"{toman:,.0f}"
+
+
+async def _fetch_single_price(
+    client: httpx.AsyncClient,
+    key: str,
+    indicator: str,
+) -> dict[str, Any] | None:
+    """Fetch a single indicator price, trying primary then fallback API."""
+    for base_url in (TGJU_API_BASE, ACCESSBAN_API_BASE):
+        url = f"{base_url}/{indicator}"
+        try:
+            resp = await client.get(url, params={"start": "0", "length": "1"})
+            resp.raise_for_status()
+            data = resp.json()
+            price = _extract_close_price(data)
+            if price is not None:
+                meta = PRICE_META[key]
+                return {
+                    "value": price,
+                    "formatted": _format_price(price, key),
+                    "label": meta["label"],
+                    "unit": meta["unit"],
+                    "icon": meta["icon"],
+                }
+            logger.warning(
+                "Could not parse close price for %s from %s: %s",
+                key, base_url, str(data)[:300],
+            )
+        except httpx.HTTPStatusError as e:
+            logger.warning(
+                "HTTP %s for %s from %s", e.response.status_code, key, base_url,
+            )
+        except Exception:
+            logger.warning("Failed to fetch %s from %s", key, base_url, exc_info=True)
+
+    return None
+
+
+async def _fetch_prices_from_tgju() -> dict[str, Any]:
+    """Fetch current prices from TGJU indicator endpoints."""
+    prices: dict[str, Any] = {}
+
+    async with httpx.AsyncClient(
+        timeout=15.0,
+        headers={
+            "User-Agent": "Mozilla/5.0 (compatible; GoldMonitor/1.0)",
+            "Accept": "application/json",
+        },
+        follow_redirects=True,
+    ) as client:
+        for key, indicator in INDICATORS.items():
+            result = await _fetch_single_price(client, key, indicator)
+            if result is not None:
+                prices[key] = result
+
+    return prices
 
 
 # ── Redis cache helpers ───────────────────────────────────────────────

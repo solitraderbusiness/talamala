@@ -281,16 +281,63 @@ export function getSourceLogs(
   return authRequest<FetchLog[]>(`/api/sources/${sourceId}/logs`, token);
 }
 
-export function getAdminSettings(token: string): Promise<AdminSettings> {
-  return authRequest<AdminSettings>("/api/admin/settings", token);
+export async function getAdminSettings(
+  token: string
+): Promise<AdminSettings> {
+  // Backend returns [{key, value}, ...] — transform to flat object
+  const raw = await authRequest<
+    Array<{ key: string; value: unknown }> | Record<string, unknown>
+  >("/api/admin/settings", token);
+
+  const defaults: AdminSettings = {
+    openrouter_model: "anthropic/claude-sonnet-4",
+    temperature: 0.3,
+    max_tokens: 4096,
+    enable_llm: false,
+  };
+
+  if (Array.isArray(raw)) {
+    for (const item of raw) {
+      const k = item.key as keyof AdminSettings;
+      if (k in defaults) {
+        (defaults as Record<string, unknown>)[k] = item.value;
+      }
+    }
+  } else if (typeof raw === "object" && raw !== null) {
+    Object.assign(defaults, raw);
+  }
+
+  // Coerce types
+  defaults.temperature = Number(defaults.temperature) || 0.3;
+  defaults.max_tokens = Number(defaults.max_tokens) || 4096;
+  defaults.enable_llm =
+    defaults.enable_llm === true ||
+    String(defaults.enable_llm).toLowerCase() === "true";
+
+  return defaults;
 }
 
 export function updateAdminSettings(
   token: string,
   data: AdminSettings
 ): Promise<AdminSettings> {
-  return authRequest<AdminSettings>("/api/admin/settings", token, {
-    method: "PUT",
-    body: JSON.stringify(data),
+  return authRequest<Record<string, unknown>>(
+    "/api/admin/settings",
+    token,
+    {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }
+  ).then((raw) => {
+    // Transform bulk response {key: value, ...} back to AdminSettings
+    return {
+      openrouter_model:
+        String(raw.openrouter_model ?? data.openrouter_model),
+      temperature: Number(raw.temperature ?? data.temperature),
+      max_tokens: Number(raw.max_tokens ?? data.max_tokens),
+      enable_llm:
+        raw.enable_llm === true ||
+        String(raw.enable_llm ?? data.enable_llm).toLowerCase() === "true",
+    };
   });
 }

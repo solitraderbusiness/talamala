@@ -65,6 +65,33 @@ async def list_settings(
     return [{"key": s.key, "value": s.value} for s in settings]
 
 
+# -- PUT /admin/settings (bulk) --------------------------------------------
+
+
+@router.put("/settings", dependencies=[Depends(get_current_admin)])
+async def update_settings_bulk(
+    body: dict[str, Any],
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """Bulk create/update settings.  Accepts ``{key: value, ...}``."""
+
+    for key, value in body.items():
+        result = await db.execute(select(Setting).where(Setting.key == key))
+        setting = result.scalar_one_or_none()
+        if setting is None:
+            setting = Setting(key=key, value=value)
+            db.add(setting)
+        else:
+            setting.value = value
+
+    await db.commit()
+
+    # Return the full updated settings as a flat dict
+    result = await db.execute(select(Setting).order_by(Setting.key))
+    settings = result.scalars().all()
+    return {s.key: s.value for s in settings}
+
+
 # -- PUT /admin/settings/{key} ---------------------------------------------
 
 
