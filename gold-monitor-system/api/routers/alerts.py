@@ -192,11 +192,11 @@ async def alerts_stats_today(
 # -- GET /alerts/{alert_id} -----------------------------------------------
 
 
-@router.get("/{alert_id}")
+@router.get("/{alert_id}", response_model=None)
 async def get_alert(
     alert_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-) -> Alert:
+) -> Any:
     """Return a single alert by its UUID, or 404."""
 
     result = await db.execute(select(Alert).where(Alert.id == alert_id))

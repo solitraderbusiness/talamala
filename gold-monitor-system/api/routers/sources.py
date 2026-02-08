@@ -31,10 +31,10 @@ router = APIRouter(
 # -- GET /sources ----------------------------------------------------------
 
 
-@router.get("")
+@router.get("", response_model=None)
 async def list_sources(
     db: AsyncSession = Depends(get_db),
-) -> list[Source]:
+) -> Any:
     """Return all sources ordered alphabetically by name."""
 
     result = await db.execute(select(Source).order_by(Source.name))
@@ -44,11 +44,11 @@ async def list_sources(
 # -- GET /sources/{source_id} ---------------------------------------------
 
 
-@router.get("/{source_id}")
+@router.get("/{source_id}", response_model=None)
 async def get_source(
     source_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-) -> Source:
+) -> Any:
     """Return a single source by UUID, or 404."""
 
     source = await db.get(Source, source_id)
@@ -63,11 +63,11 @@ async def get_source(
 # -- POST /sources ---------------------------------------------------------
 
 
-@router.post("", status_code=status.HTTP_201_CREATED)
+@router.post("", status_code=status.HTTP_201_CREATED, response_model=None)
 async def create_source(
     body: SourceCreate,
     db: AsyncSession = Depends(get_db),
-) -> Source:
+) -> Any:
     """Create a new source."""
 
     source = Source(**body.model_dump())
@@ -80,12 +80,12 @@ async def create_source(
 # -- PUT /sources/{source_id} ----------------------------------------------
 
 
-@router.put("/{source_id}")
+@router.put("/{source_id}", response_model=None)
 async def update_source(
     source_id: uuid.UUID,
     body: SourceUpdate,
     db: AsyncSession = Depends(get_db),
-) -> Source:
+) -> Any:
     """Partially update an existing source (only supplied fields are changed)."""
 
     source = await db.get(Source, source_id)
@@ -218,11 +218,11 @@ async def fetch_now(
 # -- GET /sources/{source_id}/logs -----------------------------------------
 
 
-@router.get("/{source_id}/logs")
+@router.get("/{source_id}/logs", response_model=None)
 async def get_source_logs(
     source_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-) -> list[FetchLog]:
+) -> Any:
     """Return fetch logs for a source, newest first, limited to 50."""
 
     # Verify source exists
@@ -246,12 +246,12 @@ async def get_source_logs(
 # -- GET /sources/{source_id}/raw-items ------------------------------------
 
 
-@router.get("/{source_id}/raw-items")
+@router.get("/{source_id}/raw-items", response_model=None)
 async def get_source_raw_items(
     source_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     search: str | None = Query(None, description="Search in title or content_text"),
-) -> list[RawItem]:
+) -> Any:
     """Return raw items from a source, newest first, limited to 50."""
 
     # Verify source exists
