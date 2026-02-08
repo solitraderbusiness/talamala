@@ -25,14 +25,19 @@ from api.models import AdminUser
 _pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
+def _truncate_for_bcrypt(password: str) -> str:
+    """Truncate password to 72 bytes (bcrypt limit)."""
+    return password.encode("utf-8")[:72].decode("utf-8", errors="ignore")
+
+
 def get_password_hash(password: str) -> str:
     """Return a bcrypt hash for *password*."""
-    return _pwd_ctx.hash(password)
+    return _pwd_ctx.hash(_truncate_for_bcrypt(password))
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Return ``True`` when *plain_password* matches *hashed_password*."""
-    return _pwd_ctx.verify(plain_password, hashed_password)
+    return _pwd_ctx.verify(_truncate_for_bcrypt(plain_password), hashed_password)
 
 
 # ── JWT tokens ──────────────────────────────────────────────────────────
