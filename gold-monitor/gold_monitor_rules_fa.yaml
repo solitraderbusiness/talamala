@@ -1,0 +1,30 @@
+version: "1.0"
+language: "fa"
+purpose: "Market monitoring rules for Gold (global + Iran), Coin, and Gold Funds"
+severity_levels:
+  low:
+    description: "خبر/داده با اثر احتمالی کم یا کوتاه‌مدت محدود"
+  medium:
+    description: "خبر/داده با اثر محتمل و قابل توجه، نیازمند توجه"
+  high:
+    description: "شوک یا تصمیم رسمی/غافلگیرکننده با احتمال اثر قیمتی بالا"
+time_horizons:
+  immediate: "دقایق تا چند ساعت"
+  short: "چند روز تا چند هفته"
+  medium: "چند هفته تا چند ماه"
+  long: "چند ماه تا چند سال"
+assets:
+  global_gold:
+    id: "XAUUSD"
+    name: "طلای جهانی (اونس / XAUUSD)"
+  iran_gold:
+    id: "IR_GOLD"
+    name: "طلای ایران (۱۸ عیار/مثقال/آبشده)"
+  coin:
+    id: "IR_COIN"
+    name: "سکه (تمام/نیم/ربع/گرمی)"
+  gold_funds:
+    id: "IR_GOLDFUNDS"
+    name: "صندوق‌های سرمایه‌گذاری طلا در بورس ایران (ETF طلا)"
+# Full rules defined in src/data/rules.ts
+# Full alert template defined in src/types/index.ts
