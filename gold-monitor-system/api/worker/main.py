@@ -68,7 +68,7 @@ LOCK_KEY = "worker:lock"
 LOCK_TTL = 55  # seconds — slightly less than CYCLE_INTERVAL
 FETCH_TIMEOUT = 30  # per-request HTTP timeout (seconds)
 MAX_ALERTS_PER_SOURCE = 10  # prevent any single source from flooding
-MIN_MATCH_SCORE = 0.12  # require at least ~2 keyword matches
+MIN_MATCH_SCORE = 0.08  # require at least ~1 keyword match
 MAX_ARTICLE_AGE_HOURS = 48  # skip RSS items older than this
 
 logger = logging.getLogger("worker")
@@ -442,18 +442,32 @@ class Worker:
             self._rules,
         )
         if not match_results:
+            logger.info(
+                "  No rule matches for: %s",
+                (item.title or "")[:80],
+            )
             return 0
 
         # Filter out low-quality matches (require minimum score)
+        top = match_results[0]
         match_results = [
             mr for mr in match_results if mr.match_score >= MIN_MATCH_SCORE
         ]
         if not match_results:
+            logger.info(
+                "  Best score %.3f < %.2f for: %s (rule=%s, kw=%s)",
+                top.match_score, MIN_MATCH_SCORE,
+                (item.title or "")[:60],
+                top.rule.id,
+                top.matched_keywords[:3],
+            )
             return 0
 
-        logger.debug(
-            "Item %s matched %d rule(s) (score>=%.2f)",
-            item.url, len(match_results), MIN_MATCH_SCORE,
+        logger.info(
+            "  MATCH score=%.3f rules=%d for: %s",
+            match_results[0].match_score,
+            len(match_results),
+            (item.title or "")[:80],
         )
 
         # Build a single combined alert from all matched rules
