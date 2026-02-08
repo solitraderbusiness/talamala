@@ -384,7 +384,7 @@ class Worker:
                 "title": item.title[:2000] if item.title else "",
                 "url": item.url[:2000] if item.url else "",
                 "content": item.content_text,
-                "pub": item.published_at,
+                "pub": _ensure_datetime(item.published_at) if item.published_at else None,
                 "meta": json.dumps(item.metadata or {}, default=str),
                 "now": datetime.now(timezone.utc),
             },
@@ -554,7 +554,7 @@ class Worker:
             {
                 "id": alert_id,
                 "title": alert.get("title", ""),
-                "ts": alert.get("timestamp_utc", datetime.now(timezone.utc).isoformat()),
+                "ts": _ensure_datetime(alert.get("timestamp_utc")),
                 "source_name": alert.get("source_name", ""),
                 "source_url": alert.get("source_url", ""),
                 "rule_ids": json.dumps(alert.get("matched_rule_ids", []), default=str),
@@ -815,6 +815,22 @@ def _load_rules(yaml_path: str) -> list[dict[str, Any]]:
     except Exception:
         logger.exception("Failed to load rules from %s", path)
         return []
+
+
+def _ensure_datetime(value: Any) -> datetime:
+    """Convert *value* to a ``datetime`` object.
+
+    asyncpg requires native datetime objects for ``timestamptz`` columns — it
+    does not accept ISO-format strings.
+    """
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value)
+        except (ValueError, TypeError):
+            pass
+    return datetime.now(timezone.utc)
 
 
 def _compute_content_hash(item: RawItem) -> str:
