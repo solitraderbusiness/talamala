@@ -107,16 +107,16 @@ class Source(Base):
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, server_default="now()",
     )
 
-    # Relationships
+    # Relationships (lazy="noload" — load explicitly when needed)
     raw_items: Mapped[list[RawItem]] = relationship(
-        "RawItem", back_populates="source", lazy="selectin",
+        "RawItem", back_populates="source", lazy="noload",
     )
     fetch_logs: Mapped[list[FetchLog]] = relationship(
-        "FetchLog", back_populates="source", lazy="selectin",
+        "FetchLog", back_populates="source", lazy="noload",
     )
 
     def __repr__(self) -> str:
-        return f"<Source {self.name!r} ({self.type.value})>"
+        return f"<Source {self.name!r} ({self.type})>"
 
 
 # ── Raw Items ───────────────────────────────────────────────────────────
@@ -148,7 +148,7 @@ class RawItem(Base):
     content_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     metadata_: Mapped[Any] = mapped_column(
-        "metadata", JSONB, default=dict, server_default="{}",
+        "metadata_", JSONB, default=dict, server_default="{}",
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, server_default="now()",
@@ -221,7 +221,7 @@ class Alert(Base):
     )
 
     def __repr__(self) -> str:
-        return f"<Alert {self.severity.value} {self.title[:40]!r}>"
+        return f"<Alert {self.severity} {self.title[:40]!r}>"
 
 
 # ── Fetch Logs ──────────────────────────────────────────────────────────
