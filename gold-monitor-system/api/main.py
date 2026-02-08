@@ -129,14 +129,14 @@ async def _seed_sources() -> None:
             return
 
         default_sources = [
-            # ── Global Gold (English RSS) ──────────────────────────
+            # ── Global Gold (English RSS — lower frequency) ───────
             Source(
                 name="Kitco Gold News",
                 type="rss",
                 base_url="https://www.kitco.com",
                 endpoints=["https://www.kitco.com/news/rss"],
                 enabled=True,
-                poll_interval_seconds=180,
+                poll_interval_seconds=600,
                 categories=["global_gold"],
                 rule_bindings=[
                     "GLOB_RATE_DECISION", "GLOB_CB_GOLD_RESERVES",
@@ -152,7 +152,7 @@ async def _seed_sources() -> None:
                 base_url="https://www.federalreserve.gov",
                 endpoints=["/feeds/press_all.xml"],
                 enabled=True,
-                poll_interval_seconds=300,
+                poll_interval_seconds=600,
                 categories=["global_gold"],
                 rule_bindings=[
                     "GLOB_RATE_DECISION", "GLOB_QE_QT", "GLOB_FED_COMM",
@@ -168,7 +168,7 @@ async def _seed_sources() -> None:
                     "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=10000664",
                 ],
                 enabled=True,
-                poll_interval_seconds=180,
+                poll_interval_seconds=600,
                 categories=["global_gold"],
                 rule_bindings=[
                     "GLOB_US_MACRO_DATA", "GLOB_EQUITY_RISK_OFF",
@@ -177,68 +177,75 @@ async def _seed_sources() -> None:
                 reliability_score=0.8,
                 notes="CNBC finance news — macro data, Fed, geopolitics",
             ),
+            # ── Persian Google News (primary feeds) ───────────────
             Source(
-                name="Google News — Gold Market",
+                name="Google News — طلا و قیمت جهانی",
                 type="rss",
                 base_url="https://news.google.com",
                 endpoints=[
-                    "https://news.google.com/rss/search?q=gold+price+market&hl=en-US&gl=US&ceid=US:en",
+                    "https://news.google.com/rss/search?q=%D8%B7%D9%84%D8%A7+%D8%A7%D9%88%D9%86%D8%B3+%D9%82%DB%8C%D9%85%D8%AA+%D8%AC%D9%87%D8%A7%D9%86%DB%8C&hl=fa&gl=IR&ceid=IR:fa",
                 ],
                 enabled=True,
                 poll_interval_seconds=180,
-                categories=["global_gold"],
+                categories=["global_gold", "iran_gold"],
                 rule_bindings=[
-                    "GLOB_US_MACRO_DATA", "GLOB_EQUITY_RISK_OFF",
-                    "GLOB_US_YIELDS", "GLOB_DOLLAR_DXY",
+                    "GLOB_RATE_DECISION", "GLOB_DOLLAR_DXY",
+                    "GLOB_US_MACRO_DATA", "GLOB_CB_GOLD_RESERVES",
+                    "IR_FX_USD",
                 ],
                 reliability_score=0.8,
-                notes="Google News — aggregated gold market news",
+                notes="Google News فارسی — اخبار قیمت طلای جهانی",
             ),
             Source(
-                name="Google News — Crypto & Gold",
+                name="Google News — تحریم و مذاکرات",
                 type="rss",
                 base_url="https://news.google.com",
                 endpoints=[
-                    "https://news.google.com/rss/search?q=bitcoin+gold+safe+haven&hl=en-US&gl=US&ceid=US:en",
+                    "https://news.google.com/rss/search?q=%D8%AA%D8%AD%D8%B1%DB%8C%D9%85+%D8%A7%DB%8C%D8%B1%D8%A7%D9%86+%D9%85%D8%B0%D8%A7%DA%A9%D8%B1%D8%A7%D8%AA+%D8%A7%D8%B1%D8%B2&hl=fa&gl=IR&ceid=IR:fa",
                 ],
                 enabled=True,
                 poll_interval_seconds=300,
-                categories=["global_gold"],
-                rule_bindings=["GLOB_CRYPTO_SHOCKS"],
-                reliability_score=0.75,
-                notes="Google News — crypto and gold safe-haven flow analysis",
-            ),
-            Source(
-                name="Google News — Gold Mining",
-                type="rss",
-                base_url="https://news.google.com",
-                endpoints=[
-                    "https://news.google.com/rss/search?q=gold+mining+supply&hl=en-US&gl=US&ceid=US:en",
-                ],
-                enabled=True,
-                poll_interval_seconds=600,
-                categories=["global_gold"],
-                rule_bindings=["GLOB_MINING_SUPPLY"],
-                reliability_score=0.8,
-                notes="Google News — gold mining production, supply, costs",
-            ),
-            Source(
-                name="Google News — Commodities",
-                type="rss",
-                base_url="https://news.google.com",
-                endpoints=[
-                    "https://news.google.com/rss/search?q=gold+commodities+dollar&hl=en-US&gl=US&ceid=US:en",
-                ],
-                enabled=True,
-                poll_interval_seconds=180,
-                categories=["global_gold"],
+                categories=["iran_gold"],
                 rule_bindings=[
-                    "GLOB_RATE_DECISION", "GLOB_DOLLAR_DXY",
-                    "GLOB_US_MACRO_DATA", "GLOB_GEOPOL_RISK",
-                    "GLOB_CB_GOLD_RESERVES",
+                    "IR_RESERVES_SANCTIONS", "IR_FOREIGN_POLICY",
+                    "IR_GOV_FX_POLICY", "IR_FX_USD",
                 ],
                 reliability_score=0.75,
-                notes="Google News — commodities, gold, and dollar news",
+                notes="Google News فارسی — تحریم، مذاکرات، ارز",
+            ),
+            Source(
+                name="Google News — تورم و بانک مرکزی",
+                type="rss",
+                base_url="https://news.google.com",
+                endpoints=[
+                    "https://news.google.com/rss/search?q=%D8%AA%D9%88%D8%B1%D9%85+%D9%86%D9%82%D8%AF%DB%8C%D9%86%DA%AF%DB%8C+%D8%A8%D8%A7%D9%86%DA%A9+%D9%85%D8%B1%DA%A9%D8%B2%DB%8C+%D9%86%D8%B1%D8%AE+%D8%A8%D9%87%D8%B1%D9%87&hl=fa&gl=IR&ceid=IR:fa",
+                ],
+                enabled=True,
+                poll_interval_seconds=300,
+                categories=["iran_gold", "coin"],
+                rule_bindings=[
+                    "IR_MACRO_INFLATION_LIQ", "IR_RATES_CREDIT",
+                    "IR_BUDGET_FISCAL", "IR_ECON_MANAGEMENT_CHANGES",
+                ],
+                reliability_score=0.75,
+                notes="Google News فارسی — تورم، نقدینگی، بانک مرکزی",
+            ),
+            Source(
+                name="Google News — بورس و صندوق طلا",
+                type="rss",
+                base_url="https://news.google.com",
+                endpoints=[
+                    "https://news.google.com/rss/search?q=%D8%B5%D9%86%D8%AF%D9%88%D9%82+%D8%B7%D9%84%D8%A7+%D8%A8%D9%88%D8%B1%D8%B3+%D8%B3%D8%B1%D9%85%D8%A7%DB%8C%D9%87+%DA%AF%D8%B0%D8%A7%D8%B1%DB%8C&hl=fa&gl=IR&ceid=IR:fa",
+                ],
+                enabled=True,
+                poll_interval_seconds=300,
+                categories=["gold_funds"],
+                rule_bindings=[
+                    "FUNDS_NAV_PREMIUM", "FUNDS_FLOW_VOLUME",
+                    "FUNDS_CAPITAL_MARKET_NEWS", "FUNDS_CODAL_NOTICES",
+                ],
+                reliability_score=0.75,
+                notes="Google News فارسی — بورس، صندوق طلا، سرمایه‌گذاری",
             ),
             # ── Iran Gold & Coin (Persian RSS) ─────────────────────
             Source(
@@ -323,7 +330,7 @@ async def _seed_sources() -> None:
                 type="html",
                 base_url="https://tejaratnews.com",
                 endpoints=["/gold-price"],
-                enabled=True,
+                enabled=False,  # Disabled — URL returns 404
                 poll_interval_seconds=300,
                 categories=["iran_gold", "coin"],
                 rule_bindings=[
@@ -332,7 +339,7 @@ async def _seed_sources() -> None:
                     "COIN_MINT_SUPPLY",
                 ],
                 reliability_score=0.7,
-                notes="تجارت‌نیوز — قیمت طلا و سکه، حباب، حراج",
+                notes="تجارت‌نیوز — غیرفعال (404)",
             ),
             Source(
                 name="اقتصاد آنلاین",
@@ -357,7 +364,7 @@ async def _seed_sources() -> None:
                 type="rss",
                 base_url="https://www.boursenews.ir",
                 endpoints=["/rss"],
-                enabled=True,
+                enabled=False,  # Disabled — URL returns 404
                 poll_interval_seconds=300,
                 categories=["gold_funds"],
                 rule_bindings=[
@@ -365,7 +372,7 @@ async def _seed_sources() -> None:
                     "FUNDS_CAPITAL_MARKET_NEWS", "FUNDS_CODAL_NOTICES",
                 ],
                 reliability_score=0.75,
-                notes="بورس‌نیوز — صندوق‌های طلا، NAV، کدال، بازار سرمایه",
+                notes="بورس‌نیوز — غیرفعال (404)",
             ),
             # ── Google News Persian (guaranteed accessible) ──────────
             Source(
@@ -398,60 +405,116 @@ async def _seed_sources() -> None:
 # ── Lifespan ────────────────────────────────────────────────────────────
 
 
-async def _fix_source_urls() -> None:
-    """Fix known-broken source URLs for existing deployments."""
-    URL_FIXES: dict[str, dict] = {
-        "Kitco Gold News": {
-            "endpoints": ["https://www.kitco.com/news/rss"],
-        },
-        "MarketWatch Top Stories": {
-            "name": "Google News — Gold Market",
-            "base_url": "https://news.google.com",
-            "endpoints": [
-                "https://news.google.com/rss/search?q=gold+price+market&hl=en-US&gl=US&ceid=US:en",
-            ],
-        },
-        "CoinDesk": {
-            "name": "Google News — Crypto & Gold",
-            "base_url": "https://news.google.com",
-            "endpoints": [
-                "https://news.google.com/rss/search?q=bitcoin+gold+safe+haven&hl=en-US&gl=US&ceid=US:en",
-            ],
-        },
-        "Mining.com Gold": {
-            "name": "Google News — Gold Mining",
-            "base_url": "https://news.google.com",
-            "endpoints": [
-                "https://news.google.com/rss/search?q=gold+mining+supply&hl=en-US&gl=US&ceid=US:en",
-            ],
-        },
-        "Investing.com Commodities": {
-            "name": "Google News — Commodities",
-            "base_url": "https://news.google.com",
-            "endpoints": [
-                "https://news.google.com/rss/search?q=gold+commodities+dollar&hl=en-US&gl=US&ceid=US:en",
-            ],
-        },
-    }
+async def _migrate_sources_to_persian() -> None:
+    """Switch English Google News feeds to Persian, fix broken sources.
+
+    Runs once per deployment (tracked via settings table marker).
+    """
+    marker_key = "migration:persian_sources_v1"
     async with AsyncSessionLocal() as session:
+        # Check if already applied
+        result = await session.execute(
+            text("SELECT key FROM settings WHERE key = :k"),
+            {"k": marker_key},
+        )
+        if result.scalar_one_or_none() is not None:
+            return
+
+        # --- Switch English Google News to Persian ---
+        PERSIAN_FEEDS: dict[str, dict] = {
+            "Google News — Gold Market": {
+                "name": "Google News — طلا و قیمت جهانی",
+                "endpoints": [
+                    "https://news.google.com/rss/search?q=%D8%B7%D9%84%D8%A7+%D8%A7%D9%88%D9%86%D8%B3+%D9%82%DB%8C%D9%85%D8%AA+%D8%AC%D9%87%D8%A7%D9%86%DB%8C&hl=fa&gl=IR&ceid=IR:fa",
+                ],
+                "categories": ["global_gold", "iran_gold"],
+                "rule_bindings": [
+                    "GLOB_RATE_DECISION", "GLOB_DOLLAR_DXY",
+                    "GLOB_US_MACRO_DATA", "GLOB_CB_GOLD_RESERVES",
+                    "IR_FX_USD",
+                ],
+            },
+            "Google News — Commodities": {
+                "name": "Google News — تحریم و مذاکرات",
+                "endpoints": [
+                    "https://news.google.com/rss/search?q=%D8%AA%D8%AD%D8%B1%DB%8C%D9%85+%D8%A7%DB%8C%D8%B1%D8%A7%D9%86+%D9%85%D8%B0%D8%A7%DA%A9%D8%B1%D8%A7%D8%AA+%D8%A7%D8%B1%D8%B2&hl=fa&gl=IR&ceid=IR:fa",
+                ],
+                "categories": ["iran_gold"],
+                "rule_bindings": [
+                    "IR_RESERVES_SANCTIONS", "IR_FOREIGN_POLICY",
+                    "IR_GOV_FX_POLICY", "IR_FX_USD",
+                ],
+            },
+            "Google News — Crypto & Gold": {
+                "name": "Google News — تورم و بانک مرکزی",
+                "endpoints": [
+                    "https://news.google.com/rss/search?q=%D8%AA%D9%88%D8%B1%D9%85+%D9%86%D9%82%D8%AF%DB%8C%D9%86%DA%AF%DB%8C+%D8%A8%D8%A7%D9%86%DA%A9+%D9%85%D8%B1%DA%A9%D8%B2%DB%8C+%D9%86%D8%B1%D8%AE+%D8%A8%D9%87%D8%B1%D9%87&hl=fa&gl=IR&ceid=IR:fa",
+                ],
+                "categories": ["iran_gold", "coin"],
+                "rule_bindings": [
+                    "IR_MACRO_INFLATION_LIQ", "IR_RATES_CREDIT",
+                    "IR_BUDGET_FISCAL", "IR_ECON_MANAGEMENT_CHANGES",
+                ],
+            },
+            "Google News — Gold Mining": {
+                "name": "Google News — بورس و صندوق طلا",
+                "endpoints": [
+                    "https://news.google.com/rss/search?q=%D8%B5%D9%86%D8%AF%D9%88%D9%82+%D8%B7%D9%84%D8%A7+%D8%A8%D9%88%D8%B1%D8%B3+%D8%B3%D8%B1%D9%85%D8%A7%DB%8C%D9%87+%DA%AF%D8%B0%D8%A7%D8%B1%DB%8C&hl=fa&gl=IR&ceid=IR:fa",
+                ],
+                "categories": ["gold_funds"],
+                "rule_bindings": [
+                    "FUNDS_NAV_PREMIUM", "FUNDS_FLOW_VOLUME",
+                    "FUNDS_CAPITAL_MARKET_NEWS", "FUNDS_CODAL_NOTICES",
+                ],
+            },
+        }
+
         fixed = 0
-        for old_name, fix in URL_FIXES.items():
+        for old_name, updates in PERSIAN_FEEDS.items():
             result = await session.execute(
                 select(Source).where(Source.name == old_name)
             )
             source = result.scalar_one_or_none()
             if source is None:
                 continue
-            if "name" in fix:
-                source.name = fix["name"]
-            if "base_url" in fix:
-                source.base_url = fix["base_url"]
-            if "endpoints" in fix:
-                source.endpoints = fix["endpoints"]
+            source.name = updates["name"]
+            source.endpoints = updates["endpoints"]
+            source.categories = updates.get("categories", source.categories)
+            source.rule_bindings = updates.get("rule_bindings", source.rule_bindings)
             fixed += 1
-        if fixed:
-            await session.commit()
-            logger.info("Fixed URLs for %d source(s).", fixed)
+
+        # --- Disable broken sources ---
+        for broken_name in ("تجارت\u200cنیوز", "بورس\u200cنیوز"):
+            result = await session.execute(
+                select(Source).where(Source.name == broken_name)
+            )
+            source = result.scalar_one_or_none()
+            if source is not None:
+                source.enabled = False
+                fixed += 1
+
+        # --- Reduce English source frequency ---
+        for en_name in ("Kitco Gold News", "CNBC Finance", "Federal Reserve Press Releases"):
+            result = await session.execute(
+                select(Source).where(Source.name == en_name)
+            )
+            source = result.scalar_one_or_none()
+            if source is not None:
+                source.poll_interval_seconds = 600  # 10 min instead of 3 min
+                fixed += 1
+
+        # --- Delete all old alerts (one-time fresh start) ---
+        await session.execute(text("DELETE FROM alerts"))
+        logger.info("Cleared all old alerts for fresh Persian start.")
+
+        # --- Mark migration as done ---
+        await session.execute(
+            text("INSERT INTO settings (key, value, updated_at) "
+                 "VALUES (:k, '\"done\"', NOW())"),
+            {"k": marker_key},
+        )
+        await session.commit()
+        logger.info("Migrated %d source(s) to Persian feeds.", fixed)
 
 
 async def _flush_dedup_keys() -> None:
@@ -461,7 +524,7 @@ async def _flush_dedup_keys() -> None:
     Uses a marker key ``dedup:flushed:v2`` to avoid re-flushing on
     subsequent restarts.
     """
-    marker = "dedup:flushed:v2"
+    marker = "dedup:flushed:v3"
     try:
         r = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
         if await r.exists(marker):
@@ -497,7 +560,7 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     _run_migrations()
     await _seed_admin()
     await _seed_sources()
-    await _fix_source_urls()
+    await _migrate_sources_to_persian()
     await _flush_dedup_keys()
     await _snapshot_rules()
     logger.info("Startup complete.")

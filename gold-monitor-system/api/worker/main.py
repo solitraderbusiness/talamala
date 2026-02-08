@@ -67,6 +67,8 @@ CYCLE_INTERVAL = 60  # seconds between cycles
 LOCK_KEY = "worker:lock"
 LOCK_TTL = 55  # seconds — slightly less than CYCLE_INTERVAL
 FETCH_TIMEOUT = 30  # per-request HTTP timeout (seconds)
+MAX_ALERTS_PER_SOURCE = 10  # prevent any single source from flooding
+MIN_MATCH_SCORE = 0.12  # require at least ~2 keyword matches
 
 logger = logging.getLogger("worker")
 
@@ -323,7 +325,9 @@ class Worker:
             await dedup.mark_raw_item(content_hash)
             new_count += 1
 
-            # 5. Match rules and create alerts
+            # 5. Match rules and create alerts (capped per source)
+            if matched_count >= MAX_ALERTS_PER_SOURCE:
+                continue  # already hit limit for this source
             alerts_created = await self._match_and_alert(
                 item, raw_item_id, content_hash, source, db, dedup
             )
@@ -434,8 +438,16 @@ class Worker:
         if not match_results:
             return 0
 
+        # Filter out low-quality matches (require minimum score)
+        match_results = [
+            mr for mr in match_results if mr.match_score >= MIN_MATCH_SCORE
+        ]
+        if not match_results:
+            return 0
+
         logger.debug(
-            "Item %s matched %d rule(s)", item.url, len(match_results),
+            "Item %s matched %d rule(s) (score>=%.2f)",
+            item.url, len(match_results), MIN_MATCH_SCORE,
         )
 
         # Build a single combined alert from all matched rules
