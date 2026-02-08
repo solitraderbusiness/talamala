@@ -22,6 +22,7 @@ _FETCHER_MAP: dict[str, type[BaseFetcher]] = {
     "rss": RSSFetcher,
     "html": HTMLFetcher,
     "json": JSONFetcher,
+    "json_api": JSONFetcher,
 }
 
 

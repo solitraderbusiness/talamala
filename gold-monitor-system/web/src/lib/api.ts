@@ -121,9 +121,18 @@ export interface Source {
   name: string;
   type: string;
   base_url: string;
+  endpoints: string[];
   enabled: boolean;
-  poll_interval: number;
+  poll_interval_seconds: number;
+  categories: string[];
+  rule_bindings: string[];
+  reliability_score: number | null;
+  notes: string | null;
+  last_fetched_at: string | null;
+  last_success_at: string | null;
+  last_error: string | null;
   created_at?: string;
+  updated_at?: string;
 }
 
 export interface FetchLog {
@@ -132,8 +141,9 @@ export interface FetchLog {
   started_at: string;
   finished_at: string;
   status: string;
-  items_fetched: number;
-  error?: string;
+  items_fetched_count: number;
+  error_message?: string;
+  duration_ms?: number;
 }
 
 export interface AdminSettings {

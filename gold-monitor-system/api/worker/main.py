@@ -254,6 +254,14 @@ class Worker:
                 endpoints = [endpoints]
             source["endpoints"] = endpoints
 
+        # Ensure endpoints are absolute URLs (prepend base_url if relative)
+        base_url = (source.get("base_url") or "").rstrip("/")
+        if isinstance(source.get("endpoints"), list) and base_url:
+            source["endpoints"] = [
+                ep if ep.startswith("http") else f"{base_url}{ep}"
+                for ep in source["endpoints"]
+            ]
+
         # Normalise headers/auth_config
         for json_field in ("headers", "auth_config"):
             val = source.get(json_field)
@@ -471,7 +479,7 @@ class Worker:
             result = await db.execute(
                 text(
                     "SELECT value FROM settings "
-                    "WHERE key = 'llm_enabled' LIMIT 1"
+                    "WHERE key = 'enable_llm' LIMIT 1"
                 )
             )
             row = result.scalar_one_or_none()
