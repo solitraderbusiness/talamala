@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   getAlerts,
   getAlertStats,
@@ -16,6 +16,9 @@ import SeverityBadge from "@/components/SeverityBadge";
 
 const PRICE_KEYS = ["gold_global", "gold_18k", "usd", "emami_coin"] as const;
 
+/** How often to poll for new data (ms) */
+const REFRESH_INTERVAL_MS = 60_000;
+
 const PRICE_FALLBACK: Record<string, { label: string; unit: string; icon: string }> = {
   gold_global: { label: "طلای جهانی", unit: "USD/oz", icon: "🌍" },
   gold_18k: { label: "طلای ۱۸ عیار", unit: "تومان/گرم", icon: "💛" },
@@ -30,6 +33,10 @@ export default function DashboardPage() {
   const [totalAlerts, setTotalAlerts] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const refreshTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Filters
   const [severity, setSeverity] = useState("");
@@ -54,22 +61,29 @@ export default function DashboardPage() {
     }
   }, [severity, timeHorizon, search, page]);
 
+  /** Silently refresh all dashboard data (no loading spinner). */
+  const refreshAll = useCallback(async () => {
+    try {
+      const [statsData, , pricesData] = await Promise.allSettled([
+        getAlertStats(),
+        fetchAlerts(),
+        getPrices(),
+      ]);
+      if (statsData.status === "fulfilled") setStats(statsData.value);
+      if (pricesData.status === "fulfilled") setPrices(pricesData.value);
+      setLastUpdated(new Date());
+    } catch {
+      // Silent — don't overwrite the page with an error on a background poll
+    }
+  }, [fetchAlerts]);
+
+  // Initial load (with spinner)
   useEffect(() => {
     async function init() {
       setLoading(true);
       setError(null);
       try {
-        const [statsData, , pricesData] = await Promise.allSettled([
-          getAlertStats(),
-          fetchAlerts(),
-          getPrices(),
-        ]);
-        if (statsData.status === "fulfilled") {
-          setStats(statsData.value);
-        }
-        if (pricesData.status === "fulfilled") {
-          setPrices(pricesData.value);
-        }
+        await refreshAll();
       } catch (err) {
         setError(err instanceof Error ? err.message : "خطا در بارگذاری");
       } finally {
@@ -77,11 +91,26 @@ export default function DashboardPage() {
       }
     }
     init();
-  }, [fetchAlerts]);
+  }, [refreshAll]);
 
+  // Re-fetch alerts when filters change
   useEffect(() => {
     fetchAlerts();
   }, [fetchAlerts]);
+
+  // Auto-refresh polling
+  useEffect(() => {
+    if (refreshTimer.current) {
+      clearInterval(refreshTimer.current);
+      refreshTimer.current = null;
+    }
+    if (autoRefresh) {
+      refreshTimer.current = setInterval(refreshAll, REFRESH_INTERVAL_MS);
+    }
+    return () => {
+      if (refreshTimer.current) clearInterval(refreshTimer.current);
+    };
+  }, [autoRefresh, refreshAll]);
 
   if (loading) {
     return (
@@ -96,14 +125,40 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      {/* Page title */}
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">
-          داشبورد بازار
-        </h1>
-        <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-          نمای کلی بازار طلا و ارز
-        </p>
+      {/* Page title + refresh controls */}
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">
+            داشبورد بازار
+          </h1>
+          <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
+            نمای کلی بازار طلا و ارز
+          </p>
+        </div>
+        <div className="flex items-center gap-3 text-sm">
+          {lastUpdated && (
+            <span className="text-gray-400">
+              آخرین به‌روزرسانی:{" "}
+              {lastUpdated.toLocaleTimeString("fa-IR", { hour: "2-digit", minute: "2-digit" })}
+            </span>
+          )}
+          <button
+            onClick={() => refreshAll()}
+            className="btn-secondary inline-flex items-center gap-1 px-3 py-1.5 text-xs"
+            title="به‌روزرسانی"
+          >
+            &#x21bb; به‌روزرسانی
+          </button>
+          <label className="inline-flex cursor-pointer items-center gap-1.5">
+            <input
+              type="checkbox"
+              checked={autoRefresh}
+              onChange={(e) => setAutoRefresh(e.target.checked)}
+              className="h-4 w-4 accent-gold-600"
+            />
+            <span className="text-gray-500 dark:text-gray-400">خودکار</span>
+          </label>
+        </div>
       </div>
 
       {error && (
