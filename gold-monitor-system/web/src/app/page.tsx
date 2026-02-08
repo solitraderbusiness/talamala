@@ -1,0 +1,260 @@
+"use client";
+
+import { useState, useEffect, useCallback } from "react";
+import {
+  getAlerts,
+  getAlertStats,
+  type Alert,
+  type AlertStats,
+} from "@/lib/api";
+import AlertCard from "@/components/AlertCard";
+import RiskGauge from "@/components/RiskGauge";
+import SeverityBadge from "@/components/SeverityBadge";
+
+const marketCards = [
+  { label: "طلای جهانی", unit: "USD/oz", icon: "🌍" },
+  { label: "طلای ۱۸ عیار", unit: "تومان/گرم", icon: "💛" },
+  { label: "دلار", unit: "تومان", icon: "💵" },
+  { label: "سکه امامی", unit: "تومان", icon: "🪙" },
+];
+
+export default function DashboardPage() {
+  const [stats, setStats] = useState<AlertStats | null>(null);
+  const [alerts, setAlerts] = useState<Alert[]>([]);
+  const [totalAlerts, setTotalAlerts] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // Filters
+  const [severity, setSeverity] = useState("");
+  const [timeHorizon, setTimeHorizon] = useState("");
+  const [search, setSearch] = useState("");
+  const [page, setPage] = useState(0);
+  const limit = 10;
+
+  const fetchAlerts = useCallback(async () => {
+    try {
+      const data = await getAlerts({
+        severity: severity || undefined,
+        time_horizon: timeHorizon || undefined,
+        q: search || undefined,
+        limit,
+        offset: page * limit,
+      });
+      setAlerts(data.items || []);
+      setTotalAlerts(data.total || 0);
+    } catch {
+      // Alert list may fail independently
+    }
+  }, [severity, timeHorizon, search, page]);
+
+  useEffect(() => {
+    async function init() {
+      setLoading(true);
+      setError(null);
+      try {
+        const [statsData] = await Promise.allSettled([
+          getAlertStats(),
+          fetchAlerts(),
+        ]);
+        if (statsData.status === "fulfilled") {
+          setStats(statsData.value);
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "خطا در بارگذاری");
+      } finally {
+        setLoading(false);
+      }
+    }
+    init();
+  }, [fetchAlerts]);
+
+  useEffect(() => {
+    fetchAlerts();
+  }, [fetchAlerts]);
+
+  if (loading) {
+    return (
+      <div className="flex min-h-[60vh] items-center justify-center">
+        <div className="text-center">
+          <div className="mx-auto h-10 w-10 animate-spin rounded-full border-4 border-gold-500 border-t-transparent" />
+          <p className="mt-3 text-gray-500">در حال بارگذاری...</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Page title */}
+      <div>
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">
+          داشبورد بازار
+        </h1>
+        <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
+          نمای کلی بازار طلا و ارز
+        </p>
+      </div>
+
+      {error && (
+        <div className="rounded-lg bg-red-50 p-4 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-400">
+          {error}
+        </div>
+      )}
+
+      {/* Market price cards */}
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        {marketCards.map((card) => (
+          <div key={card.label} className="card text-center">
+            <span className="text-2xl">{card.icon}</span>
+            <h3 className="mt-2 text-sm font-medium text-gray-600 dark:text-gray-400">
+              {card.label}
+            </h3>
+            <p className="mt-1 text-lg font-bold text-gray-900 dark:text-gray-100">
+              ---
+            </p>
+            <p className="text-xs text-gray-400">{card.unit}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* Stats + Risk Gauge row */}
+      <div className="grid gap-4 md:grid-cols-3">
+        {/* Risk gauge */}
+        <div className="card flex flex-col items-center justify-center">
+          <h3 className="mb-3 text-sm font-medium text-gray-600 dark:text-gray-400">
+            شاخص ریسک
+          </h3>
+          <RiskGauge score={stats?.risk_score ?? 0} />
+        </div>
+
+        {/* Alert counts */}
+        <div className="card">
+          <h3 className="mb-3 text-sm font-medium text-gray-600 dark:text-gray-400">
+            هشدارهای امروز
+          </h3>
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <SeverityBadge severity="high" />
+              <span className="text-xl font-bold text-red-600">
+                {stats?.counts?.high ?? 0}
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <SeverityBadge severity="medium" />
+              <span className="text-xl font-bold text-amber-600">
+                {stats?.counts?.medium ?? 0}
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <SeverityBadge severity="low" />
+              <span className="text-xl font-bold text-gray-600 dark:text-gray-400">
+                {stats?.counts?.low ?? 0}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* Top alerts */}
+        <div className="card">
+          <h3 className="mb-3 text-sm font-medium text-gray-600 dark:text-gray-400">
+            مهم‌ترین هشدارها
+          </h3>
+          <div className="space-y-2">
+            {stats?.top_alerts && stats.top_alerts.length > 0 ? (
+              stats.top_alerts.slice(0, 3).map((alert) => (
+                <AlertCard key={alert.id} alert={alert} compact />
+              ))
+            ) : (
+              <p className="py-4 text-center text-sm text-gray-400">
+                هشداری موجود نیست
+              </p>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Alert feed with filters */}
+      <div>
+        <h2 className="mb-4 text-lg font-bold text-gray-900 dark:text-gray-100">
+          فید هشدارها
+        </h2>
+
+        {/* Filters */}
+        <div className="mb-4 flex flex-wrap gap-3">
+          <input
+            type="text"
+            placeholder="جستجو..."
+            value={search}
+            onChange={(e) => {
+              setSearch(e.target.value);
+              setPage(0);
+            }}
+            className="input-field max-w-xs"
+          />
+          <select
+            value={severity}
+            onChange={(e) => {
+              setSeverity(e.target.value);
+              setPage(0);
+            }}
+            className="select-field w-auto"
+          >
+            <option value="">همه شدت‌ها</option>
+            <option value="high">بالا</option>
+            <option value="medium">متوسط</option>
+            <option value="low">پایین</option>
+          </select>
+          <select
+            value={timeHorizon}
+            onChange={(e) => {
+              setTimeHorizon(e.target.value);
+              setPage(0);
+            }}
+            className="select-field w-auto"
+          >
+            <option value="">همه بازه‌ها</option>
+            <option value="immediate">فوری</option>
+            <option value="short">کوتاه‌مدت</option>
+            <option value="medium">میان‌مدت</option>
+            <option value="long">بلندمدت</option>
+          </select>
+        </div>
+
+        {/* Alert list */}
+        <div className="space-y-3">
+          {alerts.length > 0 ? (
+            alerts.map((alert) => <AlertCard key={alert.id} alert={alert} />)
+          ) : (
+            <div className="card py-12 text-center">
+              <p className="text-gray-400">هشداری یافت نشد</p>
+            </div>
+          )}
+        </div>
+
+        {/* Pagination */}
+        {totalAlerts > limit && (
+          <div className="mt-4 flex items-center justify-center gap-4">
+            <button
+              onClick={() => setPage(Math.max(0, page - 1))}
+              disabled={page === 0}
+              className="btn-secondary"
+            >
+              قبلی
+            </button>
+            <span className="text-sm text-gray-500">
+              صفحه {page + 1} از {Math.ceil(totalAlerts / limit)}
+            </span>
+            <button
+              onClick={() => setPage(page + 1)}
+              disabled={(page + 1) * limit >= totalAlerts}
+              className="btn-secondary"
+            >
+              بعدی
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

@@ -1,0 +1,325 @@
+"""
+SQLAlchemy ORM models for the Gold Monitor system.
+
+All tables use UUID primary keys and UTC timestamps.
+"""
+
+from __future__ import annotations
+
+import enum
+import uuid
+from datetime import datetime, timezone
+from typing import Any
+
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Enum,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
+from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from api.database import Base
+
+
+# ── Helpers ─────────────────────────────────────────────────────────────
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _new_uuid() -> uuid.UUID:
+    return uuid.uuid4()
+
+
+# ── Enums ───────────────────────────────────────────────────────────────
+
+class SourceType(str, enum.Enum):
+    rss = "rss"
+    html = "html"
+    json_api = "json_api"
+    websocket = "websocket"
+    file = "file"
+    custom = "custom"
+
+
+class Severity(str, enum.Enum):
+    low = "low"
+    medium = "medium"
+    high = "high"
+
+
+class TimeHorizon(str, enum.Enum):
+    immediate = "immediate"
+    short = "short"
+    medium = "medium"
+    long = "long"
+
+
+# ── Sources ─────────────────────────────────────────────────────────────
+
+class Source(Base):
+    __tablename__ = "sources"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=_new_uuid,
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    type: Mapped[SourceType] = mapped_column(
+        Enum(SourceType, name="source_type_enum", create_constraint=True),
+        nullable=False,
+    )
+    base_url: Mapped[str] = mapped_column(String(2048), nullable=False)
+    endpoints: Mapped[Any] = mapped_column(JSONB, default=list, server_default="[]")
+    method: Mapped[str] = mapped_column(String(10), default="GET", server_default="GET")
+    headers: Mapped[Any] = mapped_column(JSONB, default=dict, server_default="{}")
+    auth_config: Mapped[Any] = mapped_column(JSONB, default=dict, server_default="{}")
+    parser: Mapped[str] = mapped_column(String(255), nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    poll_interval_seconds: Mapped[int] = mapped_column(
+        Integer, default=60, server_default="60",
+    )
+    categories: Mapped[Any] = mapped_column(JSONB, default=list, server_default="[]")
+    rule_bindings: Mapped[Any] = mapped_column(JSONB, default=list, server_default="[]")
+    reliability_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Fetch tracking
+    last_fetched_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+    )
+    last_success_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+    )
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Timestamps
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default="now()",
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, server_default="now()",
+    )
+
+    # Relationships
+    raw_items: Mapped[list[RawItem]] = relationship(
+        "RawItem", back_populates="source", lazy="selectin",
+    )
+    fetch_logs: Mapped[list[FetchLog]] = relationship(
+        "FetchLog", back_populates="source", lazy="selectin",
+    )
+
+    def __repr__(self) -> str:
+        return f"<Source {self.name!r} ({self.type.value})>"
+
+
+# ── Raw Items ───────────────────────────────────────────────────────────
+
+class RawItem(Base):
+    __tablename__ = "raw_items"
+    __table_args__ = (
+        Index("ix_raw_items_content_hash", "content_hash"),
+        Index("ix_raw_items_source_id", "source_id"),
+        Index("ix_raw_items_fetched_at", "fetched_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=_new_uuid,
+    )
+    source_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("sources.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    title: Mapped[str] = mapped_column(String(1024), nullable=False)
+    url: Mapped[str] = mapped_column(String(2048), nullable=False)
+    published_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+    )
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, nullable=False,
+    )
+    content_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    metadata_: Mapped[Any] = mapped_column(
+        "metadata", JSONB, default=dict, server_default="{}",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default="now()",
+    )
+
+    # Relationships
+    source: Mapped[Source] = relationship("Source", back_populates="raw_items")
+    alert: Mapped[Alert | None] = relationship(
+        "Alert", back_populates="raw_item", uselist=False,
+    )
+
+    def __repr__(self) -> str:
+        return f"<RawItem {self.title[:40]!r}>"
+
+
+# ── Alerts ──────────────────────────────────────────────────────────────
+
+class Alert(Base):
+    __tablename__ = "alerts"
+    __table_args__ = (
+        UniqueConstraint("dedupe_key", name="uq_alerts_dedupe_key"),
+        Index("ix_alerts_dedupe_key", "dedupe_key"),
+        Index("ix_alerts_severity", "severity"),
+        Index("ix_alerts_timestamp_utc", "timestamp_utc"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=_new_uuid,
+    )
+    title: Mapped[str] = mapped_column(String(1024), nullable=False)
+    timestamp_utc: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, nullable=False,
+    )
+    source_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    source_url: Mapped[str] = mapped_column(String(2048), nullable=False)
+    matched_rule_ids: Mapped[Any] = mapped_column(
+        JSONB, default=list, server_default="[]",
+    )
+    summary_fa: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    why_important_fa: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    expected_impact: Mapped[Any] = mapped_column(
+        JSONB, default=dict, server_default="{}",
+    )
+    severity: Mapped[Severity] = mapped_column(
+        Enum(Severity, name="severity_enum", create_constraint=True),
+        nullable=False,
+        default=Severity.medium,
+    )
+    time_horizon: Mapped[TimeHorizon] = mapped_column(
+        Enum(TimeHorizon, name="time_horizon_enum", create_constraint=True),
+        nullable=False,
+        default=TimeHorizon.short,
+    )
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.5)
+    follow_up_questions: Mapped[Any] = mapped_column(
+        JSONB, default=list, server_default="[]",
+    )
+    dedupe_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    raw_item_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("raw_items.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    match_evidence: Mapped[Any] = mapped_column(
+        JSONB, default=dict, server_default="{}",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default="now()",
+    )
+
+    # Relationships
+    raw_item: Mapped[RawItem | None] = relationship(
+        "RawItem", back_populates="alert",
+    )
+
+    def __repr__(self) -> str:
+        return f"<Alert {self.severity.value} {self.title[:40]!r}>"
+
+
+# ── Fetch Logs ──────────────────────────────────────────────────────────
+
+class FetchLog(Base):
+    __tablename__ = "fetch_logs"
+    __table_args__ = (
+        Index("ix_fetch_logs_source_id", "source_id"),
+        Index("ix_fetch_logs_started_at", "started_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=_new_uuid,
+    )
+    source_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("sources.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, nullable=False,
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+    )
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="success",
+    )
+    items_fetched_count: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0",
+    )
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # Relationships
+    source: Mapped[Source] = relationship("Source", back_populates="fetch_logs")
+
+    def __repr__(self) -> str:
+        return f"<FetchLog {self.status} src={self.source_id}>"
+
+
+# ── Settings (key-value store) ──────────────────────────────────────────
+
+class Setting(Base):
+    __tablename__ = "settings"
+
+    key: Mapped[str] = mapped_column(String(255), primary_key=True)
+    value: Mapped[Any] = mapped_column(JSONB, nullable=False, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, server_default="now()",
+    )
+
+    def __repr__(self) -> str:
+        return f"<Setting {self.key!r}>"
+
+
+# ── Admin Users ─────────────────────────────────────────────────────────
+
+class AdminUser(Base):
+    __tablename__ = "admin_users"
+    __table_args__ = (
+        UniqueConstraint("email", name="uq_admin_users_email"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=_new_uuid,
+    )
+    email: Mapped[str] = mapped_column(String(320), nullable=False, unique=True)
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    role: Mapped[str] = mapped_column(
+        String(50), default="admin", server_default="admin",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default="now()",
+    )
+
+    def __repr__(self) -> str:
+        return f"<AdminUser {self.email!r}>"
+
+
+# ── Rules Snapshot ──────────────────────────────────────────────────────
+
+class RulesSnapshot(Base):
+    __tablename__ = "rules_snapshot"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=_new_uuid,
+    )
+    version: Mapped[str] = mapped_column(String(100), nullable=False)
+    yaml_content: Mapped[str] = mapped_column(Text, nullable=False)
+    loaded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, nullable=False,
+    )
+
+    def __repr__(self) -> str:
+        return f"<RulesSnapshot v{self.version!r}>"

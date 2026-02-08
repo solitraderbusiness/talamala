@@ -1,0 +1,923 @@
+version: "1.0"
+language: "fa"
+purpose: "Market monitoring rules for Gold (global + Iran), Coin, and Gold Funds"
+
+severity_levels:
+  low:
+    description: "خبر/داده با اثر احتمالی کم یا کوتاه‌مدت محدود"
+  medium:
+    description: "خبر/داده با اثر محتمل و قابل توجه، نیازمند توجه"
+  high:
+    description: "شوک یا تصمیم رسمی/غافلگیرکننده با احتمال اثر قیمتی بالا"
+
+time_horizons:
+  immediate: "دقایق تا چند ساعت"
+  short: "چند روز تا چند هفته"
+  medium: "چند هفته تا چند ماه"
+  long: "چند ماه تا چند سال"
+
+assets:
+  global_gold:
+    id: "XAUUSD"
+    name: "طلای جهانی (اونس / XAUUSD)"
+  iran_gold:
+    id: "IR_GOLD"
+    name: "طلای ایران (۱۸ عیار/مثقال/آبشده)"
+  coin:
+    id: "IR_COIN"
+    name: "سکه (تمام/نیم/ربع/گرمی)"
+  gold_funds:
+    id: "IR_GOLDFUNDS"
+    name: "صندوق‌های سرمایه‌گذاری طلا در بورس ایران (ETF طلا)"
+
+rules:
+  - id: "GLOB_RATE_DECISION"
+    section: "global_gold"
+    title: "تصمیم نرخ بهره (افزایش/کاهش/تثبیت)"
+    what_it_is: "اعلام رسمی نرخ بهره توسط بانک‌های مرکزی؛ مهم‌تر از همه فدرال رزرو."
+    watch_for:
+      keywords:
+        - "rate hike"
+        - "rate cut"
+        - "hold rates"
+        - "interest rate decision"
+        - "FOMC decision"
+        - "Fed rate"
+        - "ECB rate decision"
+        - "BoE rate decision"
+        - "BoJ rate decision"
+      signals:
+        - "افزایش نرخ بهره یا اشاره به افزایش‌های بیشتر"
+        - "کاهش نرخ بهره یا اشاره به کاهش‌های آینده"
+        - "تغییر مسیر سیاست (تعویق کاهش‌ها / تسریع کاهش‌ها)"
+    why_important: "نرخ بهره بالاتر معمولاً فشار نزولی بر طلا ایجاد می‌کند؛ نرخ بهره پایین‌تر معمولاً حمایتی است."
+    impact_hypothesis:
+      typical_effect:
+        - asset: "global_gold"
+          effect: "rate_up => bearish, rate_down => bullish"
+    importance_criteria:
+      high_if:
+        - "تصمیم برخلاف انتظار بازار باشد (Surprise)"
+        - "تغییر مسیر سیاست به‌صورت واضح اعلام شود"
+      medium_if:
+        - "تصمیم مطابق انتظار باشد ولی لحن بیانیه تغییر کند"
+      low_if:
+        - "خبر تکراری بدون اطلاعات جدید"
+    horizon: "immediate"
+
+  - id: "GLOB_QE_QT"
+    section: "global_gold"
+    title: "سیاست‌های انبساطی/انقباضی (QE/QT)"
+    what_it_is: "تغییر در تزریق یا جمع‌آوری نقدینگی و اندازه ترازنامه بانک مرکزی."
+    watch_for:
+      keywords:
+        - "quantitative easing"
+        - "QE"
+        - "asset purchases"
+        - "balance sheet expansion"
+        - "quantitative tightening"
+        - "QT"
+        - "balance sheet reduction"
+      signals:
+        - "اعلام برنامه جدید خرید دارایی (QE)"
+        - "کاهش سرعت QT یا توقف QT"
+        - "تشدید QT یا افزایش سرعت کاهش ترازنامه"
+    why_important: "QE معمولاً انتظارات تورمی/تضعیف پول را بالا می‌برد و برای طلا حمایتی است؛ QT برعکس."
+    impact_hypothesis:
+      typical_effect:
+        - asset: "global_gold"
+          effect: "QE => bullish, QT => bearish"
+    importance_criteria:
+      high_if:
+        - "شروع QE جدید یا تغییر بزرگ در ترازنامه اعلام شود"
+      medium_if:
+        - "تنها تغییر سرعت QT/QE گزارش شود"
+    horizon: "short"
+
+  - id: "GLOB_FED_COMM"
+    section: "global_gold"
+    title: "سخنرانی‌ها/بیانیه‌ها (Powell/Fed/ECB/BoE/BoJ)"
+    what_it_is: "راهنمایی کلامی (Forward guidance) که انتظارات نرخ بهره و دلار را تغییر می‌دهد."
+    watch_for:
+      keywords:
+        - "Powell"
+        - "Fed chair"
+        - "Fed minutes"
+        - "forward guidance"
+        - "hawkish"
+        - "dovish"
+        - "Lagarde"
+        - "Bailey"
+        - "Ueda"
+      signals:
+        - "تغییر لحن از سختگیرانه به نرم یا برعکس"
+        - "اشاره به نگرانی رکود/بحران بانکی"
+    why_important: "لحن سیاست‌گذار می‌تواند حتی بدون تغییر نرخ بهره، بازار را جابه‌جا کند."
+    impact_hypothesis:
+      typical_effect:
+        - asset: "global_gold"
+          effect: "dovish => bullish, hawkish => bearish"
+    importance_criteria:
+      high_if:
+        - "جمله/اشاره کلیدی جدید مسیر آینده نرخ بهره را تغییر دهد"
+      medium_if:
+        - "تکرار مواضع قبلی با جزئیات بیشتر"
+    horizon: "immediate"
+
+  - id: "GLOB_US_YIELDS"
+    section: "global_gold"
+    title: "بازده اوراق خزانه‌داری آمریکا (2Y/10Y/Real Yield)"
+    what_it_is: "نرخ بازده اوراق که با هزینه فرصت نگهداری طلا مرتبط است."
+    watch_for:
+      keywords:
+        - "10-year yield"
+        - "2-year yield"
+        - "Treasury yields"
+        - "real yields"
+        - "TIPS"
+      signals:
+        - "جهش یا سقوط ناگهانی بازده‌ها"
+        - "اخبار بحران بدهی/حراج اوراق بزرگ"
+    why_important: "بالا رفتن بازده‌ها معمولاً منفی برای طلاست؛ افت بازده‌ها حمایتی است."
+    impact_hypothesis:
+      typical_effect:
+        - asset: "global_gold"
+          effect: "yields_up => bearish, yields_down => bullish"
+    importance_criteria:
+      high_if:
+        - "حرکت شدید (مثلاً جهش/سقوط غیرعادی در یک روز)"
+    horizon: "immediate"
+
+  - id: "GLOB_DOLLAR_DXY"
+    section: "global_gold"
+    title: "شاخص دلار (DXY) و اخبار تقویت/تضعیف دلار"
+    what_it_is: "قدرت دلار در برابر سبد ارزها؛ رابطه معکوس رایج با طلا."
+    watch_for:
+      keywords:
+        - "DXY"
+        - "dollar index"
+        - "USD strengthens"
+        - "USD weakens"
+      signals:
+        - "جهش/سقوط شدید DXY"
+        - "دلایل بنیادی تقویت دلار (داده قوی، سیاست سختگیرانه)"
+    why_important: "دلار قوی معمولاً طلا را تحت فشار می‌گذارد."
+    impact_hypothesis:
+      typical_effect:
+        - asset: "global_gold"
+          effect: "dollar_up => bearish, dollar_down => bullish"
+    importance_criteria:
+      high_if:
+        - "شکست سطوح کلیدی یا حرکت بسیار سریع"
+    horizon: "immediate"
+
+  - id: "GLOB_US_MACRO_DATA"
+    section: "global_gold"
+    title: "داده‌های کلان آمریکا (CPI/PCE/NFP/PMI/…)"
+    what_it_is: "گزارش‌هایی که انتظارات نرخ بهره/دلار را تغییر می‌دهند."
+    watch_for:
+      keywords:
+        - "CPI"
+        - "core CPI"
+        - "PCE"
+        - "core PCE"
+        - "PPI"
+        - "NFP"
+        - "unemployment rate"
+        - "wage growth"
+        - "Retail Sales"
+        - "GDP"
+        - "PMI"
+        - "ISM"
+        - "JOLTS"
+      signals:
+        - "عدد «بالاتر از انتظار» یا «پایین‌تر از انتظار»"
+        - "بازنگری‌های بزرگ در داده‌ها"
+    why_important: "غافلگیری داده‌ها می‌تواند مسیر نرخ بهره و دلار را تغییر دهد."
+    impact_hypothesis:
+      typical_effect:
+        - asset: "global_gold"
+          effect: "hot_data => bearish (rate hike fear), cool_data => bullish"
+    importance_criteria:
+      high_if:
+        - "Surprise بزرگ باشد یا بازار واکنش شدید نشان دهد"
+      medium_if:
+        - "Surprise کوچک ولی جهت‌دار باشد"
+    horizon: "immediate"
+
+  - id: "GLOB_GEOPOL_RISK"
+    section: "global_gold"
+    title: "ژئوپلیتیک (جنگ/تشدید/حملات/کودتا/ترور بزرگ)"
+    what_it_is: "رویدادهای امنیتی-سیاسی که ریسک سیستماتیک و تقاضای دارایی امن را بالا می‌برد."
+    watch_for:
+      keywords:
+        - "war"
+        - "escalation"
+        - "strike"
+        - "missile"
+        - "invasion"
+        - "coup"
+        - "terror attack"
+        - "sanctions"
+        - "state of emergency"
+      signals:
+        - "شروع یا گسترش جنگ"
+        - "حمله به زیرساخت انرژی/کشتیرانی"
+        - "تحریم‌های بزرگ و ناگهانی"
+    why_important: "افزایش ریسک جهانی غالباً به نفع طلاست."
+    impact_hypothesis:
+      typical_effect:
+        - asset: "global_gold"
+          effect: "risk_up => bullish"
+    importance_criteria:
+      high_if:
+        - "تشدید رسمی/گسترش درگیری یا تحریم بزرگ"
+    horizon: "immediate"
+
+  - id: "GLOB_MINING_SUPPLY"
+    section: "global_gold"
+    title: "عرضه معدن (تولید/هزینه استخراج/عیار)"
+    what_it_is: "عوامل سمت عرضه که بیشتر اثر میان‌مدت/بلندمدت دارند."
+    watch_for:
+      keywords:
+        - "gold mine production"
+        - "output cut"
+        - "mine shutdown"
+        - "strike"
+        - "ore grade"
+        - "all-in sustaining costs"
+      signals:
+        - "افت تولید معنی‌دار یا تعطیلی معدن بزرگ"
+        - "گزارش افت عیار یا رشد هزینه استخراج"
+    why_important: "محدودیت عرضه و افزایش هزینه می‌تواند از قیمت حمایت کند."
+    impact_hypothesis:
+      typical_effect:
+        - asset: "global_gold"
+          effect: "supply_down => bullish"
+    importance_criteria:
+      high_if:
+        - "تعطیلی/افت تولید در مقیاس بزرگ گزارش شود"
+      medium_if:
+        - "روند هزینه‌ها/عیار در گزارش‌های معتبر تایید شود"
+    horizon: "medium"
+
+  - id: "GLOB_CB_GOLD_RESERVES"
+    section: "global_gold"
+    title: "خرید/فروش طلا توسط بانک‌های مرکزی"
+    what_it_is: "تقاضای نهادی بزرگ و سیگنال تنوع ذخایر."
+    watch_for:
+      keywords:
+        - "central bank gold reserves"
+        - "added to gold reserves"
+        - "sold gold reserves"
+        - "WGC"
+        - "World Gold Council"
+        - "PBoC gold"
+      signals:
+        - "خرید رکوردی/بزرگ توسط چین/روسیه/هند/ترکیه و…"
+        - "اعلام فروش یا برنامه فروش ذخایر"
+    why_important: "خریدهای بزرگ می‌تواند حمایت ساختاری ایجاد کند."
+    impact_hypothesis:
+      typical_effect:
+        - asset: "global_gold"
+          effect: "buying => bullish, selling => bearish"
+    importance_criteria:
+      high_if:
+        - "خرید/فروش بزرگ یا تغییر روند چندماهه"
+    horizon: "short"
+
+  - id: "GLOB_ASIA_PHYSICAL_DEMAND"
+    section: "global_gold"
+    title: "تقاضای فیزیکی چین/هند (فصلی/واردات/تعرفه/الگوی مصرف)"
+    what_it_is: "تقاضای جواهرات و سکه، تحت تاثیر فصل‌ها و سیاست‌های تجاری."
+    watch_for:
+      keywords:
+        - "India wedding season"
+        - "Chinese New Year"
+        - "gold imports"
+        - "import duty"
+        - "tariff"
+        - "jewelry demand"
+      signals:
+        - "افزایش غیرعادی تقاضای فصلی"
+        - "کاهش/افزایش تعرفه واردات طلا"
+        - "آمار واردات بسیار بالاتر/پایین‌تر از انتظار"
+    why_important: "این دو کشور سهم بالایی در تقاضای فیزیکی دارند."
+    impact_hypothesis:
+      typical_effect:
+        - asset: "global_gold"
+          effect: "demand_up => bullish"
+    importance_criteria:
+      high_if:
+        - "تغییر سیاست تعرفه‌ای یا واردات شوک‌آور"
+      medium_if:
+        - "گزارش فصلی قوی/ضعیف"
+    horizon: "short"
+
+  - id: "GLOB_CRYPTO_SHOCKS"
+    section: "global_gold"
+    title: "شوک‌های بزرگ بازار رمزارز (ریزش/جهش شدید)"
+    what_it_is: "جابه‌جایی توجه و نقدینگی بین دارایی‌های جایگزین."
+    watch_for:
+      keywords:
+        - "Bitcoin crash"
+        - "crypto liquidation"
+        - "exchange hack"
+        - "ETF inflows crypto"
+        - "Bitcoin surge"
+      signals:
+        - "ریزش شدید چندروزه یا لیکوییدیشن بزرگ"
+        - "جهش پرشتاب و موج ریسک‌پذیری"
+    why_important: "ترس کریپتو می‌تواند پول را به دارایی امن منتقل کند."
+    impact_hypothesis:
+      typical_effect:
+        - asset: "global_gold"
+          effect: "crypto_crash => bullish (safe haven flow)"
+    importance_criteria:
+      high_if:
+        - "ورشکستگی/هک بزرگ/ریزش بسیار شدید"
+    horizon: "immediate"
+
+  - id: "GLOB_EQUITY_RISK_OFF"
+    section: "global_gold"
+    title: "ریزش شدید بورس‌های جهانی / بحران بانکی"
+    what_it_is: "افزایش ریسک‌گریزی و تقاضا برای دارایی امن."
+    watch_for:
+      keywords:
+        - "stock market selloff"
+        - "bank crisis"
+        - "credit crunch"
+        - "recession fears"
+        - "VIX spike"
+      signals:
+        - "ریزش شدید شاخص‌ها یا جهش VIX"
+        - "خبر ورشکستگی بانک/نهاد بزرگ"
+    why_important: "Risk-off معمولاً به نفع طلاست."
+    impact_hypothesis:
+      typical_effect:
+        - asset: "global_gold"
+          effect: "risk_off => bullish"
+    importance_criteria:
+      high_if:
+        - "شوک سیستماتیک/بحران اعتباری"
+    horizon: "immediate"
+
+  - id: "IR_FX_USD"
+    section: "iran_gold"
+    title: "نرخ دلار آزاد و شکاف نرخ‌ها (آزاد/نیما/مرکز مبادله)"
+    what_it_is: "مهم‌ترین محرک ریالی طلا در ایران."
+    watch_for:
+      keywords:
+        - "دلار آزاد"
+        - "نرخ دلار"
+        - "بازار ارز"
+        - "نیما"
+        - "مرکز مبادله"
+        - "درهم"
+      signals:
+        - "جهش/ریزش ناگهانی نرخ ارز"
+        - "تغییر معنادار شکاف نرخ‌ها"
+    why_important: "قیمت طلا در ایران تقریباً اونس×دلار است؛ تغییر دلار سریعاً اثر می‌گذارد."
+    impact_hypothesis:
+      typical_effect:
+        - asset: "iran_gold"
+          effect: "dollar_up => bullish for iran_gold"
+        - asset: "coin"
+          effect: "dollar_up => bullish"
+    importance_criteria:
+      high_if:
+        - "حرکت شدید یا خبر سیاستی مستقیم"
+    horizon: "immediate"
+
+  - id: "IR_GOV_FX_POLICY"
+    section: "iran_gold"
+    title: "سیاست‌های ارزی دولت و بانک مرکزی"
+    what_it_is: "قواعد تخصیص/کنترل ارز و مداخلات ارزی."
+    watch_for:
+      keywords:
+        - "سیاست ارزی"
+        - "پیمان ارزی"
+        - "تخصیص ارز"
+        - "تزریق ارز"
+        - "محدودیت صرافی"
+      signals:
+        - "بخشنامه جدید ارزی"
+        - "تزریق/محدودیت بزرگ در بازار ارز"
+    why_important: "می‌تواند عرضه/تقاضای ارز و انتظارات را جابه‌جا کند."
+    impact_hypothesis:
+      typical_effect:
+        - asset: "iran_gold"
+          effect: "policy_restrictive => uncertain, policy_loose => bullish"
+    importance_criteria:
+      high_if:
+        - "قانون/بخشنامه جدید با اثر فوری"
+    horizon: "short"
+
+  - id: "IR_RESERVES_SANCTIONS"
+    section: "iran_gold"
+    title: "ذخایر ارزی، آزادسازی منابع، تحریم‌های ارزی"
+    what_it_is: "توان دسترسی به ارز و فشار/آزادسازی از بیرون."
+    watch_for:
+      keywords:
+        - "آزادسازی منابع"
+        - "پول‌های بلوکه"
+        - "تحریم ارزی"
+        - "تحریم بانکی"
+        - "سوئیفت"
+      signals:
+        - "آزادسازی یا مسدودسازی منابع"
+        - "تحریم جدید علیه بانک‌ها/نهادهای ارزی"
+    why_important: "مستقیماً دلار را تکان می‌دهد و به طلا منتقل می‌شود."
+    impact_hypothesis:
+      typical_effect:
+        - asset: "iran_gold"
+          effect: "sanctions_up => bullish, release => bearish"
+    importance_criteria:
+      high_if:
+        - "تحریم جدید بزرگ یا آزادسازی بزرگ منابع"
+    horizon: "immediate"
+
+  - id: "IR_MACRO_INFLATION_LIQ"
+    section: "iran_gold"
+    title: "تورم، نقدینگی، پایه پولی، رشد، بیکاری"
+    what_it_is: "پیشران‌های بنیادی ریال و انتظارات تورمی."
+    watch_for:
+      keywords:
+        - "تورم"
+        - "شاخص قیمت"
+        - "نقدینگی"
+        - "پایه پولی"
+        - "رشد اقتصادی"
+        - "بیکاری"
+      signals:
+        - "تورم ماهانه بالا"
+        - "رشد شدید نقدینگی/پایه پولی"
+        - "کاهش پایدار تورم یا بهبود رشد"
+    why_important: "تورم/نقدینگی بالا معمولاً تقاضای طلا را تقویت می‌کند."
+    impact_hypothesis:
+      typical_effect:
+        - asset: "iran_gold"
+          effect: "inflation_up => bullish"
+        - asset: "coin"
+          effect: "inflation_up => bullish"
+    importance_criteria:
+      high_if:
+        - "داده‌ها شوک‌آور یا رکوردی باشد"
+    horizon: "medium"
+
+  - id: "IR_BUDGET_FISCAL"
+    section: "iran_gold"
+    title: "بودجه، کسری، تامین مالی، اوراق، یارانه‌های نقدی"
+    what_it_is: "کانال سیاست مالی که انتظارات تورمی و نقدینگی را تغییر می‌دهد."
+    watch_for:
+      keywords:
+        - "بودجه"
+        - "کسری بودجه"
+        - "انتشار اوراق"
+        - "تامین مالی"
+        - "یارانه نقدی"
+      signals:
+        - "کسری بزرگ و روش‌های تامین مالی تورم‌زا"
+        - "انتشار سنگین اوراق یا سیاست‌های جمع‌آوری نقدینگی"
+    why_important: "کسری تورم‌زا معمولاً به نفع طلاست."
+    impact_hypothesis:
+      typical_effect:
+        - asset: "iran_gold"
+          effect: "deficit_up => bullish"
+    importance_criteria:
+      high_if:
+        - "اعلام سیاست مالی بزرگ یا تغییر ناگهانی"
+    horizon: "medium"
+
+  - id: "IR_RATES_CREDIT"
+    section: "iran_gold"
+    title: "نرخ سود بانکی، نرخ بهره رسمی، سیاست اعتباری"
+    what_it_is: "هزینه پول و جذابیت نگهداری ریال در بانک در برابر طلا."
+    watch_for:
+      keywords:
+        - "نرخ سود"
+        - "سود سپرده"
+        - "شورای پول و اعتبار"
+        - "سود بین بانکی"
+        - "سیاست اعتباری"
+      signals:
+        - "افزایش/کاهش نرخ سود"
+        - "بخشنامه جدید اعتبارات/تسهیلات"
+    why_important: "سود واقعی بالاتر می‌تواند تقاضای طلا را کم کند و بالعکس."
+    impact_hypothesis:
+      typical_effect:
+        - asset: "iran_gold"
+          effect: "rates_up => bearish, rates_down => bullish"
+    importance_criteria:
+      high_if:
+        - "تغییر نرخ سود یا سیاست اعتباری با اثر فوری"
+    horizon: "short"
+
+  - id: "IR_INTERNAL_POL_SOCIAL"
+    section: "iran_gold"
+    title: "ریسک داخلی (بی‌ثباتی سیاسی/اجتماعی)"
+    what_it_is: "افزایش نااطمینانی داخلی و تقاضای دارایی امن."
+    watch_for:
+      keywords:
+        - "اعتراضات"
+        - "نا‌آرامی"
+        - "بحران امنیتی"
+        - "ریسک سیاسی"
+      signals:
+        - "گسترش نا‌آرامی یا رخداد امنیتی مهم"
+    why_important: "می‌تواند انتظارات ارزی/تورمی را تغییر دهد."
+    impact_hypothesis:
+      typical_effect:
+        - asset: "iran_gold"
+          effect: "instability => bullish"
+    importance_criteria:
+      high_if:
+        - "رخداد گسترده یا اثرگذار بر اقتصاد"
+    horizon: "immediate"
+
+  - id: "IR_FOREIGN_POLICY"
+    section: "iran_gold"
+    title: "روابط خارجی و مذاکرات (برجام/تحولات منطقه‌ای مرتبط)"
+    what_it_is: "کانال سیاسی-اقتصادی اصلی برای دلار و انتظارات."
+    watch_for:
+      keywords:
+        - "مذاکرات"
+        - "برجام"
+        - "توافق"
+        - "تحریم جدید"
+        - "قطعنامه"
+      signals:
+        - "پیشرفت/شکست مهم مذاکرات"
+        - "تحریم‌های جدید یا تعلیق تحریم"
+    why_important: "اثر سریع روی نرخ ارز و در نتیجه طلا."
+    impact_hypothesis:
+      typical_effect:
+        - asset: "iran_gold"
+          effect: "deal_progress => bearish, deal_fail => bullish"
+    importance_criteria:
+      high_if:
+        - "خبر تاییدشده با اثر فوری بر دسترسی ارزی"
+    horizon: "immediate"
+
+  - id: "IR_PHYSICAL_SUPPLY_DEMAND"
+    section: "iran_gold"
+    title: "عرضه/تقاضای فیزیکی طلا (صنف، واردات، بازیافت، مالیات، قاچاق)"
+    what_it_is: "عوامل بازار فیزیکی که می‌تواند حباب/اختلال ایجاد کند."
+    watch_for:
+      keywords:
+        - "کمبود شمش"
+        - "واردات طلا"
+        - "بازیافت طلا"
+        - "مالیات ارزش افزوده طلا"
+        - "قاچاق طلا"
+        - "اتحادیه طلافروشان"
+      signals:
+        - "کاهش واردات طلای خام"
+        - "کاهش بازیافت طلای مستعمل"
+        - "تغییرات مالیاتی/محدودیت‌های معامله"
+    why_important: "اختلال عرضه یا افزایش هزینه معامله می‌تواند قیمت/حباب را بالا ببرد."
+    impact_hypothesis:
+      typical_effect:
+        - asset: "iran_gold"
+          effect: "supply_down => bullish"
+    importance_criteria:
+      high_if:
+        - "تغییر سیاستی (مالیات/محدودیت) یا کمبود جدی گزارش شود"
+    horizon: "short"
+
+  - id: "IR_ECON_MANAGEMENT_CHANGES"
+    section: "iran_gold"
+    title: "تغییر مدیران اقتصادی (رئیس بانک مرکزی، وزیر اقتصاد، سازمان برنامه و…)"
+    what_it_is: "شوک انتظارات و احتمال تغییر مسیر سیاست."
+    watch_for:
+      keywords:
+        - "برکناری"
+        - "انتصاب"
+        - "رئیس بانک مرکزی"
+        - "وزیر اقتصاد"
+        - "سازمان برنامه و بودجه"
+      signals:
+        - "تغییرات رسمی در تیم اقتصادی"
+    why_important: "اثر روانی کوتاه‌مدت و سیگنال سیاستی."
+    impact_hypothesis:
+      typical_effect:
+        - asset: "iran_gold"
+          effect: "uncertainty => short-term volatility"
+    importance_criteria:
+      high_if:
+        - "رئیس بانک مرکزی تغییر کند"
+      medium_if:
+        - "تغییرات دیگر تیم اقتصادی"
+    horizon: "immediate"
+
+  - id: "COIN_PREMIUM_BUBBLE"
+    section: "coin"
+    title: "حباب سکه (اختلاف قیمت بازار با ارزش ذاتی)"
+    what_it_is: "پریمیوم ناشی از انتظارات تورمی/سفته‌بازی و کمبود عرضه."
+    watch_for:
+      keywords:
+        - "حباب سکه"
+        - "اختلاف ارزش ذاتی"
+        - "پریمیوم سکه"
+      signals:
+        - "افزایش سریع حباب"
+        - "تخلیه سریع حباب"
+        - "رسیدن به سطوح تاریخی"
+    why_important: "حباب بزرگ ریسک اصلاح را بالا می‌برد."
+    impact_hypothesis:
+      typical_effect:
+        - asset: "coin"
+          effect: "bubble_high => correction risk"
+    importance_criteria:
+      high_if:
+        - "حباب به سطح غیرعادی/تاریخی برسد"
+    horizon: "short"
+
+  - id: "COIN_CB_AUCTIONS"
+    section: "coin"
+    title: "حراج/مزایده سکه و پیش‌فروش (بانک مرکزی/کارگشایی/مرکز مبادله)"
+    what_it_is: "ابزار سیاستی برای افزایش عرضه و کاهش التهاب."
+    watch_for:
+      keywords:
+        - "حراج سکه"
+        - "مزایده سکه"
+        - "پیش فروش سکه"
+        - "بانک کارگشایی"
+        - "مرکز مبادله"
+      signals:
+        - "اعلام تاریخ/حجم/قیمت پایه حراج"
+        - "شرایط پیش‌فروش"
+    why_important: "عرضه بزرگ می‌تواند حباب را کاهش دهد."
+    impact_hypothesis:
+      typical_effect:
+        - asset: "coin"
+          effect: "auction => bearish (more supply)"
+    importance_criteria:
+      high_if:
+        - "حجم عرضه بزرگ یا شرایط متفاوت از قبل"
+    horizon: "immediate"
+
+  - id: "COIN_MINT_SUPPLY"
+    section: "coin"
+    title: "تولید و توزیع سکه (ضرابخانه/ظرفیت ضرب/تاخیر توزیع/شمش)"
+    what_it_is: "سمت عرضه سکه که فقط از کانال رسمی می‌آید."
+    watch_for:
+      keywords:
+        - "ضرابخانه"
+        - "ضرب سکه"
+        - "برنامه ضرب"
+        - "تاخیر توزیع"
+        - "واردات شمش برای ضرب"
+        - "ذخایر طلا برای ضرب"
+      signals:
+        - "محدود شدن ضرب یا تاخیر توزیع"
+        - "افزایش ظرفیت ضرب"
+    why_important: "کاهش عرضه سکه می‌تواند قیمت و حباب را بالا ببرد."
+    impact_hypothesis:
+      typical_effect:
+        - asset: "coin"
+          effect: "supply_down => bullish"
+    importance_criteria:
+      high_if:
+        - "کاهش عرضه یا اختلال رسمی تایید شود"
+    horizon: "short"
+
+  - id: "COIN_SEASONAL_DEMAND"
+    section: "coin"
+    title: "تقاضای فصلی سکه (نوروز/شب عید/محرم-صفر/مهریه/فصل عروسی)"
+    what_it_is: "افزایش تقاضای فیزیکی و هدیه/سرمایه‌گذاری در زمان‌های خاص."
+    watch_for:
+      keywords:
+        - "شب عید"
+        - "نوروز"
+        - "محرم"
+        - "صفر"
+        - "مهریه"
+        - "فصل عروسی"
+      signals:
+        - "گزارش افزایش غیرعادی تقاضا یا صف خرید"
+    why_important: "موج تقاضا می‌تواند قیمت را کوتاه‌مدت بالا ببرد."
+    impact_hypothesis:
+      typical_effect:
+        - asset: "coin"
+          effect: "seasonal_demand => bullish"
+    importance_criteria:
+      medium_if:
+        - "تنها فصلی باشد"
+      high_if:
+        - "همزمان با کمبود عرضه یا شوک ارزی باشد"
+    horizon: "short"
+
+  - id: "COIN_POLICY_TAX_TARIFF"
+    section: "coin"
+    title: "قوانین/تعرفه/مالیات/معافیت‌های مرتبط با طلا و سکه (بورس کالا و واردات)"
+    what_it_is: "سیاست‌هایی که هزینه معامله و عرضه را تغییر می‌دهند."
+    watch_for:
+      keywords:
+        - "تعرفه گمرکی"
+        - "معافیت مالیاتی"
+        - "بورس کالا"
+        - "گواهی سپرده سکه"
+      signals:
+        - "تعرفه صفر یا تغییر مقررات واردات"
+        - "معافیت مالیاتی یا تغییر کارمزد"
+    why_important: "می‌تواند عرضه را افزایش یا هزینه‌ها را کاهش دهد."
+    impact_hypothesis:
+      typical_effect:
+        - asset: "coin"
+          effect: "tax_down => bearish (more supply), tax_up => bullish"
+    importance_criteria:
+      high_if:
+        - "تغییر قانونی بزرگ تصویب شود"
+    horizon: "medium"
+
+  - id: "COIN_SENTIMENT_SOCIAL"
+    section: "coin"
+    title: "جو روانی بازار سکه (شبکه‌های اجتماعی/خبرگزاری‌های اقتصادی)"
+    what_it_is: "موج‌های خبری و شایعات که رفتار جمعی را تحریک می‌کند."
+    watch_for:
+      keywords:
+        - "صف خرید سکه"
+        - "کمبود سکه"
+        - "فروشنده نیست"
+        - "سکه انفجاری"
+      signals:
+        - "ترند شدن واژه‌ها و افزایش ناگهانی حجم گفتگو"
+    why_important: "می‌تواند حرکت قیمت را تشدید کند."
+    impact_hypothesis:
+      typical_effect:
+        - asset: "coin"
+          effect: "panic_buy => bullish short-term"
+    importance_criteria:
+      medium_if:
+        - "بدون تایید از داده/منبع معتبر باشد"
+      high_if:
+        - "همزمان با داده واقعی (دلار/حراج/کمبود) باشد"
+    horizon: "immediate"
+
+  - id: "FUNDS_NAV_PREMIUM"
+    section: "gold_funds"
+    title: "NAV صندوق و فاصله قیمت بازار با NAV (Premium/Discount)"
+    what_it_is: "ارزش واقعی دارایی‌ها و انحراف قیمت بازار از آن."
+    watch_for:
+      keywords:
+        - "NAV"
+        - "premium"
+        - "discount"
+        - "ارزش خالص دارایی"
+      signals:
+        - "Premium زیاد (قیمت بازار بسیار بالاتر از NAV)"
+        - "Discount زیاد (قیمت بازار پایین‌تر از NAV)"
+    why_important: "Premium بالا ریسک اصلاح؛ Discount بالا می‌تواند فرصت/فشار فروش باشد."
+    impact_hypothesis:
+      typical_effect:
+        - asset: "gold_funds"
+          effect: "premium_high => correction risk"
+    importance_criteria:
+      high_if:
+        - "انحراف شدید یا ناگهانی رخ دهد"
+    horizon: "short"
+
+  - id: "FUNDS_FLOW_VOLUME"
+    section: "gold_funds"
+    title: "حجم معاملات و ورود/خروج پول به صندوق‌های طلا"
+    what_it_is: "نشانه ریسک‌گریزی و تقاضای طلا در بازار سرمایه."
+    watch_for:
+      keywords:
+        - "ورود پول"
+        - "خروج پول"
+        - "حجم معاملات"
+        - "صندوق طلا"
+      signals:
+        - "افزایش غیرعادی حجم/ارزش معاملات"
+        - "موج خروج پول"
+    why_important: "می‌تواند حرکت قیمت صندوق‌ها را تقویت کند."
+    impact_hypothesis:
+      typical_effect:
+        - asset: "gold_funds"
+          effect: "inflow => bullish, outflow => bearish"
+    importance_criteria:
+      high_if:
+        - "حجم/ورود پول رکوردی یا غیرعادی باشد"
+    horizon: "short"
+
+  - id: "FUNDS_CAPITAL_MARKET_NEWS"
+    section: "gold_funds"
+    title: "اخبار بازار سرمایه و مشوق‌های قانونی (کارمزد/معافیت/صندوق جدید)"
+    what_it_is: "محرک‌های تقاضای صندوق‌های طلا از مسیر قوانین و رفتار سرمایه‌گذاران."
+    watch_for:
+      keywords:
+        - "کارمزد"
+        - "معافیت مالیاتی"
+        - "صندوق جدید طلا"
+        - "قانون جدید بورس"
+      signals:
+        - "مشوق قانونی جدید یا تغییر کارمزد"
+        - "راه‌اندازی صندوق طلا جدید"
+    why_important: "تغییرات هزینه و دسترسی تقاضا را تغییر می‌دهد."
+    impact_hypothesis:
+      typical_effect:
+        - asset: "gold_funds"
+          effect: "incentive => bullish demand"
+    importance_criteria:
+      medium_if:
+        - "خبر جزئی باشد"
+      high_if:
+        - "قانون/مشوق بزرگ باشد"
+    horizon: "medium"
+
+  - id: "FUNDS_CODAL_NOTICES"
+    section: "gold_funds"
+    title: "اعلانات کدال (افزایش واحدها، تغییر ارکان، توقف/بازگشایی، امیدنامه)"
+    what_it_is: "اطلاعیه‌های رسمی که ساختار/نقدشوندگی/قیمت را متاثر می‌کنند."
+    watch_for:
+      keywords:
+        - "کدال"
+        - "افزایش واحد"
+        - "کاهش واحد"
+        - "توقف نماد"
+        - "بازگشایی نماد"
+        - "تغییر امیدنامه"
+        - "تغییر مدیر/متولی"
+      signals:
+        - "Creation/Redemption units"
+        - "توقف یا تغییر ارکان صندوق"
+    why_important: "می‌تواند Premium را تعدیل کند یا ریسک اجرایی ایجاد کند."
+    impact_hypothesis:
+      typical_effect:
+        - asset: "gold_funds"
+          effect: "creation => premium_down, suspension => risk_up"
+    importance_criteria:
+      high_if:
+        - "توقف نماد یا تغییرات ساختاری"
+      medium_if:
+        - "افزایش واحدها برای کاهش Premium"
+    horizon: "short"
+
+technical_signals:
+  common:
+    - id: "TECH_SUPPORT_RESIST_BREAK"
+      name: "شکست حمایت/مقاومت"
+      what_to_compute: "تشخیص شکست سطوح کلیدی (به‌خصوص سطوح تاریخی/روانی)."
+      alert_when:
+        - "شکست سطح کلیدی با تایید (مثلاً بسته شدن کندل بالای سطح)"
+      importance: "high"
+    - id: "TECH_RSI_EXTREMES"
+      name: "اشباع خرید/فروش و واگرایی RSI"
+      what_to_compute: "RSI > 70 یا RSI < 30 و واگرایی‌ها."
+      alert_when:
+        - "همزمان با خبر فاندامنتال یا شکست سطح"
+      importance: "medium"
+    - id: "TECH_MACD_CROSS"
+      name: "کراس MACD"
+      what_to_compute: "کراس‌های مهم MACD در تایم‌فریم روزانه/هفتگی."
+      importance: "low"
+    - id: "TECH_MA_200"
+      name: "عبور از میانگین متحرک 200"
+      what_to_compute: "عبور قیمت از MA200 و تثبیت."
+      importance: "medium"
+    - id: "TECH_VOLATILITY_SHOCK"
+      name: "شوک نوسان"
+      what_to_compute: "حرکت‌های بسیار بزرگ نسبت به میانگین نوسان."
+      importance: "high"
+
+alert_template:
+  fields:
+    - "title"
+    - "timestamp_utc"
+    - "source_name"
+    - "source_url"
+    - "matched_rule_ids"
+    - "summary_fa"
+    - "why_important_fa"
+    - "expected_impact"
+    - "severity"
+    - "time_horizon"
+    - "confidence"
+    - "follow_up_questions"
+  expected_impact_format:
+    - asset: "global_gold|iran_gold|coin|gold_funds"
+      direction: "bullish|bearish|mixed|unclear"
+      mechanism: "explain in Persian in 1-2 sentences"
+  severity_guidance:
+    high: "تصمیم رسمی/شوک/غافلگیری بزرگ یا تغییر مسیر سیاست"
+    medium: "خبر اثرگذار ولی بدون شوک"
+    low: "اطلاعات مکمل/تکراری/اثر محدود"
+
+scheduled_events:
+  us_macro:
+    - "CPI"
+    - "Core CPI"
+    - "PCE"
+    - "Core PCE"
+    - "PPI"
+    - "NFP"
+    - "GDP"
+    - "PMI"
+    - "ISM"
+    - "Retail Sales"
+  central_banks:
+    - "FOMC meetings"
+    - "ECB policy meeting"
+    - "BoE policy meeting"
+    - "BoJ policy meeting"
