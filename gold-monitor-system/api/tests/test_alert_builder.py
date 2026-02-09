@@ -94,10 +94,11 @@ class TestGenerateDedupeKey:
         key2 = generate_dedupe_key(["rule1"], "title_b", "source")
         assert key1 != key2
 
-    def test_different_source_different_key(self):
+    def test_same_title_different_source_same_key(self):
+        # Cross-source dedup: same title + same rules = same key regardless of source
         key1 = generate_dedupe_key(["rule1"], "title", "source_a")
         key2 = generate_dedupe_key(["rule1"], "title", "source_b")
-        assert key1 != key2
+        assert key1 == key2
 
     def test_rule_order_does_not_matter(self):
         # Rules are sorted internally, so order should not affect the key

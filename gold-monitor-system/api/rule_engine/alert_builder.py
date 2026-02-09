@@ -42,10 +42,10 @@ _SEVERITY_RANK: dict[str, int] = {
 def generate_dedupe_key(rule_ids: list[str], title: str, source: str) -> str:
     """Generate a stable deduplication key.
 
-    The key is a SHA-256 hex digest of the sorted rule IDs, the normalised
-    title, and the source name.  Two news items that match the same rules,
-    carry the same title, and come from the same source will produce the same
-    key — enabling downstream deduplication.
+    The key is a SHA-256 hex digest of the sorted rule IDs and the normalised
+    title.  Source is intentionally excluded so that the same story reported
+    by multiple outlets (IRNA, Mehr, etc.) produces the same key —
+    preventing duplicate alerts for the same news.
 
     Parameters
     ----------
@@ -54,7 +54,7 @@ def generate_dedupe_key(rule_ids: list[str], title: str, source: str) -> str:
     title:
         News item title (will be normalised).
     source:
-        Source / publisher name (will be normalised).
+        Source / publisher name (kept for API compatibility, not used in hash).
 
     Returns
     -------
@@ -64,7 +64,6 @@ def generate_dedupe_key(rule_ids: list[str], title: str, source: str) -> str:
     parts = [
         ",".join(sorted(rule_ids)),
         normalize_text(title),
-        normalize_text(source),
     ]
     payload = "|".join(parts).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()

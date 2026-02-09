@@ -1048,6 +1048,168 @@ async def _migrate_sources_v7() -> None:
         logger.info("Migration v7: updated %d source poll intervals.", fixed)
 
 
+async def _migrate_sources_v8() -> None:
+    """Add new RSS sources from user's list + re-enable Kitco with new URL.
+
+    Adds international gold RSS feeds and Iranian news sources.
+    Runs once (tracked via settings marker).
+    """
+    marker_key = "migration:sources_v8"
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            text("SELECT key FROM settings WHERE key = :k"),
+            {"k": marker_key},
+        )
+        if result.scalar_one_or_none() is not None:
+            return
+
+        # --- Re-enable Kitco with new mining RSS URL ---
+        result = await session.execute(
+            select(Source).where(Source.name == "Kitco Gold News")
+        )
+        kitco = result.scalar_one_or_none()
+        if kitco is not None:
+            kitco.endpoints = ["https://www.kitco.com/news/category/mining/rss"]
+            kitco.enabled = True
+            kitco.poll_interval_seconds = 120
+            kitco.notes = "Kitco — gold mining news (new RSS URL)"
+
+        # --- New international gold/commodity RSS feeds ---
+        new_sources = [
+            Source(
+                name="Goldbroker News",
+                type="rss",
+                base_url="https://goldbroker.com",
+                endpoints=["https://goldbroker.com/news/rss-feed-40"],
+                enabled=True,
+                poll_interval_seconds=180,
+                categories=["global_gold"],
+                rule_bindings=[
+                    "GLOB_GOLD_PRICE", "GLOB_CB_GOLD_RESERVES",
+                    "GLOB_RATE_DECISION", "GLOB_DOLLAR_DXY",
+                ],
+                reliability_score=0.8,
+                notes="Goldbroker \u2014 gold market news and economic reports",
+            ),
+            Source(
+                name="GoodReturns Business",
+                type="rss",
+                base_url="https://www.goodreturns.in",
+                endpoints=["https://www.goodreturns.in/rss/"],
+                enabled=True,
+                poll_interval_seconds=180,
+                categories=["global_gold"],
+                rule_bindings=[
+                    "GLOB_GOLD_PRICE", "GLOB_ASIA_PHYSICAL_DEMAND",
+                    "GLOB_DOLLAR_DXY", "GLOB_US_MACRO_DATA",
+                ],
+                reliability_score=0.7,
+                notes="GoodReturns \u2014 India gold, commodities, currency",
+            ),
+            Source(
+                name="Commodity-TV RSS",
+                type="rss",
+                base_url="https://www.commodity-tv.com",
+                endpoints=["https://www.commodity-tv.com/api/feeds/rss/"],
+                enabled=True,
+                poll_interval_seconds=180,
+                categories=["global_gold"],
+                rule_bindings=[
+                    "GLOB_GOLD_PRICE", "GLOB_MINING_SUPPLY",
+                    "GLOB_CB_GOLD_RESERVES", "GLOB_ASIA_PHYSICAL_DEMAND",
+                ],
+                reliability_score=0.75,
+                notes="Commodity-TV \u2014 commodities including gold/precious metals",
+            ),
+            Source(
+                name="DailyForex News",
+                type="rss",
+                base_url="https://www.dailyforex.com",
+                endpoints=["https://www.dailyforex.com/forex-rss"],
+                enabled=True,
+                poll_interval_seconds=300,
+                categories=["global_gold"],
+                rule_bindings=[
+                    "GLOB_GOLD_PRICE", "GLOB_DOLLAR_DXY",
+                    "GLOB_US_MACRO_DATA", "GLOB_RATE_DECISION",
+                ],
+                reliability_score=0.7,
+                notes="DailyForex \u2014 forex/financial analysis and gold",
+            ),
+            Source(
+                name="Investing.com RSS",
+                type="rss",
+                base_url="https://www.investing.com",
+                endpoints=[
+                    "https://www.investing.com/rss/news_14.rss",
+                ],
+                enabled=True,
+                poll_interval_seconds=180,
+                categories=["global_gold"],
+                rule_bindings=[
+                    "GLOB_GOLD_PRICE", "GLOB_RATE_DECISION",
+                    "GLOB_DOLLAR_DXY", "GLOB_US_MACRO_DATA",
+                    "GLOB_GEOPOL_RISK",
+                ],
+                reliability_score=0.85,
+                notes="Investing.com \u2014 commodities RSS feed",
+            ),
+            # --- Iranian sources ---
+            Source(
+                name="\u062e\u0628\u0631 \u0641\u0627\u0631\u0633\u06cc",
+                type="rss",
+                base_url="https://khabarfarsi.com",
+                endpoints=["https://khabarfarsi.com/rss"],
+                enabled=True,
+                poll_interval_seconds=180,
+                categories=["iran_gold", "coin"],
+                rule_bindings=[
+                    "IR_GOLD_COIN_PRICE", "IR_FX_USD",
+                    "IR_GOV_FX_POLICY", "IR_MACRO_INFLATION_LIQ",
+                    "GLOB_GOLD_PRICE",
+                ],
+                reliability_score=0.7,
+                notes="\u062e\u0628\u0631 \u0641\u0627\u0631\u0633\u06cc \u2014 RSS \u0627\u062e\u0628\u0627\u0631 \u0627\u0642\u062a\u0635\u0627\u062f\u06cc \u0648 \u0637\u0644\u0627/\u062f\u0644\u0627\u0631/\u0633\u06a9\u0647",
+            ),
+            Source(
+                name="\u062e\u0628\u0631\u06af\u0632\u0627\u0631\u06cc \u062a\u0633\u0646\u06cc\u0645 - \u0627\u0642\u062a\u0635\u0627\u062f\u06cc",
+                type="rss",
+                base_url="https://www.tasnimnews.com",
+                endpoints=["https://www.tasnimnews.com/fa/rss"],
+                enabled=False,  # Previously had DNS failure from Docker
+                poll_interval_seconds=180,
+                categories=["iran_gold", "coin"],
+                rule_bindings=[
+                    "IR_FX_USD", "IR_GOV_FX_POLICY",
+                    "IR_RESERVES_SANCTIONS", "IR_FOREIGN_POLICY",
+                    "IR_GOLD_COIN_PRICE",
+                ],
+                reliability_score=0.85,
+                notes="\u062a\u0633\u0646\u06cc\u0645 \u2014 \u063a\u06cc\u0631\u0641\u0639\u0627\u0644 (DNS failure \u0627\u0632 Docker)",
+            ),
+        ]
+
+        added = 0
+        for src in new_sources:
+            existing = await session.execute(
+                select(Source).where(Source.name == src.name)
+            )
+            if existing.scalar_one_or_none() is None:
+                session.add(src)
+                added += 1
+
+        await session.execute(
+            text("INSERT INTO settings (key, value, updated_at) "
+                 "VALUES (:k, '\"done\"', NOW())"),
+            {"k": marker_key},
+        )
+        await session.commit()
+        logger.info(
+            "Migration v8: added %d new sources, re-enabled Kitco.",
+            added,
+        )
+
+
 async def _create_sentiment_scores_table() -> None:
     """Create the sentiment_scores table if it doesn't exist.
 
@@ -1067,7 +1229,7 @@ async def _flush_dedup_keys() -> None:
     Uses a marker key ``dedup:flushed:v2`` to avoid re-flushing on
     subsequent restarts.
     """
-    marker = "dedup:flushed:v9"
+    marker = "dedup:flushed:v10"
     try:
         r = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
         if await r.exists(marker):
@@ -1110,6 +1272,7 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     await _migrate_sources_v5()
     await _migrate_sources_v6()
     await _migrate_sources_v7()
+    await _migrate_sources_v8()
     await _create_sentiment_scores_table()
     await _flush_dedup_keys()
     await _snapshot_rules()
