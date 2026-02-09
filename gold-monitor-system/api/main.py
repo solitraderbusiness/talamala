@@ -503,10 +503,6 @@ async def _migrate_sources_to_persian() -> None:
                 source.poll_interval_seconds = 600  # 10 min instead of 3 min
                 fixed += 1
 
-        # --- Delete all old alerts (one-time fresh start) ---
-        await session.execute(text("DELETE FROM alerts"))
-        logger.info("Cleared all old alerts for fresh Persian start.")
-
         # --- Mark migration as done ---
         await session.execute(
             text("INSERT INTO settings (key, value, updated_at) "
@@ -569,9 +565,6 @@ async def _migrate_sources_v2() -> None:
                 source.enabled = False
                 fixed += 1
 
-        # --- Clear old alerts for fresh start ---
-        await session.execute(text("DELETE FROM alerts"))
-
         # --- Mark as done ---
         await session.execute(
             text("INSERT INTO settings (key, value, updated_at) "
@@ -579,7 +572,7 @@ async def _migrate_sources_v2() -> None:
             {"k": marker_key},
         )
         await session.commit()
-        logger.info("Migration v2: updated %d source(s), cleared alerts.", fixed)
+        logger.info("Migration v2: updated %d source(s).", fixed)
 
 
 async def _migrate_sources_v3() -> None:
@@ -690,10 +683,6 @@ async def _migrate_sources_v3() -> None:
             kitco.enabled = False
             fixed += 1
 
-        # --- Clear old alerts for fresh start ---
-        await session.execute(text("DELETE FROM alerts"))
-        await session.execute(text("DELETE FROM raw_items"))
-
         # --- Mark as done ---
         await session.execute(
             text("INSERT INTO settings (key, value, updated_at) "
@@ -701,7 +690,7 @@ async def _migrate_sources_v3() -> None:
             {"k": marker_key},
         )
         await session.commit()
-        logger.info("Migration v3: switched %d source(s) to English Google News, cleared data.", fixed)
+        logger.info("Migration v3: switched %d source(s) to English Google News.", fixed)
 
 
 async def _migrate_sources_v4() -> None:
@@ -839,10 +828,6 @@ async def _migrate_sources_v4() -> None:
                 session.add(src)
                 added += 1
 
-        # --- Clear all alerts for fresh start with stricter matching ---
-        await session.execute(text("DELETE FROM alerts"))
-        await session.execute(text("DELETE FROM raw_items"))
-
         # --- Mark as done ---
         await session.execute(
             text("INSERT INTO settings (key, value, updated_at) "
@@ -850,7 +835,7 @@ async def _migrate_sources_v4() -> None:
             {"k": marker_key},
         )
         await session.commit()
-        logger.info("Migration v4: added %d new gold sources, cleared data for re-matching.", added)
+        logger.info("Migration v4: added %d new gold source(s).", added)
 
 
 async def _flush_dedup_keys() -> None:
