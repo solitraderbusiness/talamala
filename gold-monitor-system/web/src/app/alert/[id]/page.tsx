@@ -9,7 +9,6 @@ import {
   formatDate,
   timeHorizonLabel,
   directionLabel,
-  confidencePercent,
 } from "@/lib/utils";
 
 /** Check if text is mostly Latin/English. */
@@ -34,13 +33,11 @@ function extractDomain(url: string): string {
 /** Normalize expected_impact to an array of ImpactItem. */
 function normalizeImpact(impact: unknown): ImpactItem[] {
   if (!impact) return [];
-  // Array format (new)
   if (Array.isArray(impact)) {
     return impact.filter(
       (item) => item && typeof item === "object" && item.asset
     );
   }
-  // Object/dict format (legacy)
   if (typeof impact === "object" && impact !== null) {
     return Object.entries(impact as Record<string, { direction?: string; mechanism?: string }>).map(
       ([asset, details]) => ({
@@ -52,6 +49,42 @@ function normalizeImpact(impact: unknown): ImpactItem[] {
   }
   return [];
 }
+
+type Direction = "bullish" | "bearish" | "neutral";
+
+/** Determine per-alert market direction. */
+function getAlertDirection(alert: Alert): Direction {
+  const impacts = normalizeImpact(alert.expected_impact);
+  if (impacts.length > 0) {
+    const hasUp = impacts.some((i) => i.direction === "up");
+    const hasDown = impacts.some((i) => i.direction === "down");
+    if (hasUp && !hasDown) return "bullish";
+    if (hasDown && !hasUp) return "bearish";
+  }
+  const text = ((alert.title || "") + " " + (alert.summary_fa || "")).toLowerCase();
+  const bullishPatterns = [
+    "rises", "rally", "surges", "gains", "climbs", "jumps", "soars",
+    "record high", "rate cut", "dovish", "safe haven",
+    "صعود", "افزایش قیمت", "رشد", "جهش", "بالا رفت", "رکورد",
+    "کاهش نرخ بهره", "تحریم", "بازگشت به بالا",
+  ];
+  const bearishPatterns = [
+    "falls", "drops", "slips", "declines", "plunges", "sinks", "crashes",
+    "rate hike", "hawkish", "stronger dollar",
+    "نزول", "کاهش قیمت", "افت", "سقوط", "ریزش", "افزایش نرخ بهره",
+  ];
+  const hasBull = bullishPatterns.some((p) => text.includes(p));
+  const hasBear = bearishPatterns.some((p) => text.includes(p));
+  if (hasBull && !hasBear) return "bullish";
+  if (hasBear && !hasBull) return "bearish";
+  return "neutral";
+}
+
+const DIR_CONFIG: Record<Direction, { icon: string; label: string; color: string; bg: string }> = {
+  bullish: { icon: "▲", label: "صعودی برای طلا", color: "text-emerald-600 dark:text-emerald-400", bg: "bg-emerald-50 border-emerald-200 dark:bg-emerald-950/30 dark:border-emerald-800" },
+  bearish: { icon: "▼", label: "نزولی برای طلا", color: "text-red-600 dark:text-red-400", bg: "bg-red-50 border-red-200 dark:bg-red-950/30 dark:border-red-800" },
+  neutral: { icon: "◆", label: "تاثیر نامشخص", color: "text-gray-600 dark:text-gray-400", bg: "bg-gray-50 border-gray-200 dark:bg-gray-900 dark:border-gray-700" },
+};
 
 export default function AlertDetailPage() {
   const params = useParams();
@@ -239,23 +272,28 @@ export default function AlertDetailPage() {
         ) : null;
       })()}
 
-      {/* Confidence */}
-      <div className="card">
-        <h2 className="mb-2 text-sm font-semibold text-gray-500 dark:text-gray-400">
-          سطح اطمینان
-        </h2>
-        <div className="flex items-center gap-3">
-          <div className="h-3 flex-1 overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700">
-            <div
-              className="h-full rounded-full bg-gold-500 transition-all"
-              style={{ width: `${alert.confidence * 100}%` }}
-            />
+      {/* Market Direction */}
+      {(() => {
+        const direction = getAlertDirection(alert);
+        const dc = DIR_CONFIG[direction];
+        return (
+          <div className={`rounded-xl border p-4 ${dc.bg}`}>
+            <div className="flex items-center gap-3">
+              <span className={`text-2xl font-bold ${dc.color}`}>
+                {dc.icon}
+              </span>
+              <div>
+                <h2 className={`text-base font-semibold ${dc.color}`}>
+                  {dc.label}
+                </h2>
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  بر اساس تحلیل قوانین و محتوای خبر
+                </p>
+              </div>
+            </div>
           </div>
-          <span className="text-sm font-bold text-gray-700 dark:text-gray-300">
-            {confidencePercent(alert.confidence)}
-          </span>
-        </div>
-      </div>
+        );
+      })()}
 
       {/* Follow-up Questions */}
       {alert.follow_up_questions && alert.follow_up_questions.length > 0 && (
