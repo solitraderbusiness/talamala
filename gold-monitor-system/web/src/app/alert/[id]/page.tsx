@@ -15,10 +15,10 @@ import {
 /** Check if text is mostly Latin/English. */
 function isLikelyEnglish(text: string): boolean {
   if (!text) return false;
-  const latinChars = text.replace(/[\s\d\p{P}\p{S}]/gu, "");
-  if (!latinChars) return false;
-  const latinCount = (latinChars.match(/[a-zA-Z]/g) || []).length;
-  return latinCount / latinChars.length > 0.5;
+  const letters = text.replace(/[\s\d.,;:!?'"()\-\[\]{}/\\@#$%^&*+=<>|~`_]/g, "");
+  if (!letters) return false;
+  const latinCount = (letters.match(/[a-zA-Z]/g) || []).length;
+  return latinCount / letters.length > 0.5;
 }
 
 export default function AlertDetailPage() {

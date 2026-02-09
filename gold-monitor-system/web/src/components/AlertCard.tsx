@@ -8,10 +8,11 @@ import SeverityBadge from "./SeverityBadge";
 /** Check if a string is mostly Latin/English characters. */
 function isLikelyEnglish(text: string): boolean {
   if (!text) return false;
-  const latinChars = text.replace(/[\s\d\p{P}\p{S}]/gu, "");
-  if (!latinChars) return false;
-  const latinCount = (latinChars.match(/[a-zA-Z]/g) || []).length;
-  return latinCount / latinChars.length > 0.5;
+  // Strip spaces, digits, and common punctuation
+  const letters = text.replace(/[\s\d.,;:!?'"()\-\[\]{}/\\@#$%^&*+=<>|~`_]/g, "");
+  if (!letters) return false;
+  const latinCount = (letters.match(/[a-zA-Z]/g) || []).length;
+  return latinCount / letters.length > 0.5;
 }
 
 /** Get the best display title — prefer Persian summary over English title. */
