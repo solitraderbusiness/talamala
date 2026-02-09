@@ -68,7 +68,8 @@ LOCK_KEY = "worker:lock"
 LOCK_TTL = 55  # seconds — slightly less than CYCLE_INTERVAL
 FETCH_TIMEOUT = 30  # per-request HTTP timeout (seconds)
 MAX_ALERTS_PER_SOURCE = 10  # prevent any single source from flooding
-MIN_MATCH_SCORE = 0.18  # require meaningful match (~2 keywords or 1 kw + 1 signal)
+MIN_MATCH_SCORE = 0.10  # lowered from 0.18 to capture English title-only content
+HIGH_CONFIDENCE_SCORE = 0.30  # above this, skip LLM relevance check
 MAX_ARTICLE_AGE_HOURS = 48  # skip RSS items older than this
 
 logger = logging.getLogger("worker")
@@ -449,9 +450,9 @@ class Worker:
             return 0
 
         # Filter out low-quality matches by minimum score threshold.
-        # Score of 0.18 means at least ~1 keyword on a 3-keyword rule (0.2)
-        # or 1 keyword on a 5-keyword rule with 1 signal (0.24).
-        # Single keywords on rules with many keywords (score <0.18) are filtered.
+        # Score of 0.10 means at least ~1 compound keyword on a 10-keyword rule.
+        # Compound keywords (e.g. "gold price", "قیمت طلا") are specific enough
+        # that even a single match indicates relevance.
         top = match_results[0]
         match_results = [
             mr for mr in match_results
@@ -469,9 +470,34 @@ class Worker:
             )
             return 0
 
+        best_score = match_results[0].match_score
+
+        # LLM relevance filter for borderline matches (score < HIGH_CONFIDENCE_SCORE).
+        # High-confidence matches (>= 0.30) skip this check.
+        # This catches false positives like sports articles mentioning "gold".
+        if best_score < HIGH_CONFIDENCE_SCORE:
+            llm_enabled = await self._check_llm_enabled(db)
+            if llm_enabled and settings.OPENROUTER_API_KEY:
+                try:
+                    is_relevant = await self._llm_relevance_check(
+                        item.title or "", item.content_text or "", db=db,
+                    )
+                    if not is_relevant:
+                        logger.info(
+                            "  LLM says NOT relevant (score=%.3f): %s",
+                            best_score,
+                            (item.title or "")[:60],
+                        )
+                        return 0
+                except Exception:
+                    logger.debug(
+                        "LLM relevance check failed, proceeding with alert",
+                        exc_info=True,
+                    )
+
         logger.info(
             "  MATCH score=%.3f rules=%d for: %s",
-            match_results[0].match_score,
+            best_score,
             len(match_results),
             (item.title or "")[:80],
         )
@@ -635,6 +661,68 @@ class Worker:
                 "Could not read llm_enabled from settings", exc_info=True
             )
         return False
+
+    async def _llm_relevance_check(
+        self, title: str, content: str, db=None,
+    ) -> bool:
+        """Quick LLM check: is this article relevant to gold/financial markets?
+
+        Uses a minimal prompt (~100 tokens) to verify borderline matches.
+        Returns True if relevant, True on any error (fail-open).
+        """
+        text = title
+        if content:
+            text += "\n" + content[:500]
+
+        model = await self._get_llm_model(db) if db else "anthropic/claude-sonnet-4"
+
+        prompt = (
+            "Is this news article relevant to ANY of these topics? "
+            "Gold/precious metals, currency/forex, interest rates, "
+            "central bank policy, economic data, geopolitics affecting markets, "
+            "Iranian economy, stock market crisis.\n\n"
+            f"Article: {text[:600]}\n\n"
+            "Reply with ONLY 'YES' or 'NO'."
+        )
+
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0,
+            "max_tokens": 5,
+        }
+        headers = {
+            "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+            "Content-Type": "application/json",
+        }
+
+        try:
+            async with self._http_session.post(  # type: ignore[union-attr]
+                "https://openrouter.ai/api/v1/chat/completions",
+                json=payload,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                resp.raise_for_status()
+                data = await resp.json()
+
+            reply = (
+                data.get("choices", [{}])[0]
+                .get("message", {})
+                .get("content", "")
+                .strip()
+                .upper()
+            )
+            is_relevant = reply.startswith("YES")
+            logger.debug(
+                "LLM relevance check: %s → %s",
+                title[:60] if title else "?",
+                "YES" if is_relevant else "NO",
+            )
+            return is_relevant
+        except Exception:
+            logger.debug("LLM relevance check failed, assuming relevant", exc_info=True)
+            return True  # Fail-open: let it through on error
 
     async def _get_llm_model(self, db) -> str:
         """Read the configured LLM model from settings, with fallback."""

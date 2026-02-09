@@ -240,6 +240,12 @@ def match_rules(
     results: list[MatchResult] = []
 
     for rule in rules:
+        # Check negative keywords first — if any match, skip this rule
+        if rule.negative_keywords:
+            neg_matches = keyword_match(combined, rule.negative_keywords)
+            if neg_matches:
+                continue
+
         kw_matches = keyword_match(combined, rule.watch_for_keywords)
         sig_matches = signal_match(combined, rule.watch_for_signals)
 

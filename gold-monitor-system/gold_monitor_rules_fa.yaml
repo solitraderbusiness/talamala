@@ -39,6 +39,11 @@ rules:
       keywords:
         - "gold price"
         - "gold market"
+        - "gold rises"
+        - "gold drops"
+        - "gold surges"
+        - "gold record"
+        - "gold forecast"
         - "قیمت طلا"
         - "اونس طلا"
         - "بازار طلا"
@@ -48,11 +53,26 @@ rules:
         - "gold futures"
         - "gold rally"
         - "precious metal"
+        - "gold etf"
+        - "gold trading"
+        - "XAUUSD"
         - "طلای جهانی"
         - "شمش طلا"
         - "فلزات گرانبها"
         - "نرخ طلا"
         - "طلای ۱۸ عیار"
+      negative_keywords:
+        - "gold medal"
+        - "gold medalist"
+        - "golden globe"
+        - "golden gate"
+        - "golden state"
+        - "golden age"
+        - "gold coast"
+        - "olympic gold"
+        - "مدال طلا"
+        - "طلای المپیک"
+        - "مدال طلای"
     why_important: "اخبار مستقیم قیمت طلا مهم‌ترین سیگنال برای معامله‌گران و سرمایه‌گذاران است."
     impact_hypothesis:
       typical_effect:
@@ -88,6 +108,11 @@ rules:
         - "صرافی"
         - "مثقال"
         - "قیمت طلا"
+      negative_keywords:
+        - "مدال طلا"
+        - "طلای المپیک"
+        - "مدال طلای"
+        - "قهرمانی"
     why_important: "قیمت سکه و طلا در ایران مستقیماً به دلار و اونس جهانی وابسته است و تحت تاثیر عرضه و تقاضای داخلی."
     impact_hypothesis:
       typical_effect:
@@ -285,19 +310,27 @@ rules:
     what_it_is: "رویدادهای امنیتی-سیاسی که ریسک سیستماتیک و تقاضای دارایی امن را بالا می‌برد."
     watch_for:
       keywords:
-        - "war"
+        - "military strike"
         - "escalation"
-        - "strike"
         - "missile"
         - "invasion"
         - "coup"
         - "terror attack"
         - "sanctions"
         - "state of emergency"
+        - "armed conflict"
       signals:
         - "شروع یا گسترش جنگ"
         - "حمله به زیرساخت انرژی/کشتیرانی"
         - "تحریم‌های بزرگ و ناگهانی"
+        - "safe haven"
+        - "geopolitical risk"
+      negative_keywords:
+        - "star wars"
+        - "bowling strike"
+        - "strike action"
+        - "labor strike"
+        - "workers strike"
     why_important: "افزایش ریسک جهانی غالباً به نفع طلاست."
     impact_hypothesis:
       typical_effect:
@@ -317,9 +350,10 @@ rules:
         - "gold mine production"
         - "output cut"
         - "mine shutdown"
-        - "strike"
+        - "mining strike"
         - "ore grade"
         - "all-in sustaining costs"
+        - "gold mining"
       signals:
         - "افت تولید معنی‌دار یا تعطیلی معدن بزرگ"
         - "گزارش افت عیار یا رشد هزینه استخراج"

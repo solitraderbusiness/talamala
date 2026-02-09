@@ -167,9 +167,16 @@ Before any matching, all text goes through:
 
 ### Matching Algorithm
 
-For each rule, the system checks keywords AND signals against the normalized title+content:
+For each rule, the system first checks **negative keywords** — if any match, the rule is skipped entirely (prevents false positives like "gold medal" matching gold price rules).
+
+Then it checks keywords AND signals against the normalized title+content:
 
 ```
+# Step 1: Negative keyword filter
+if any(neg_kw in text for neg_kw in rule.negative_keywords):
+    skip this rule
+
+# Step 2: Positive matching
 keyword_matches = [kw for kw in rule.keywords if normalized(kw) in normalized(text)]
 signal_matches  = [sig for sig in rule.signals if normalized(sig) in normalized(text)]
 ```
@@ -192,10 +199,19 @@ Keywords are weighted 60% (more specific) vs signals at 40%.
 
 The worker filters out low-quality matches:
 ```
-MIN_MATCH_SCORE = 0.18
+MIN_MATCH_SCORE = 0.10
 ```
-- 1 keyword out of 5 = 0.12 → **filtered out**
+- 1 keyword out of 10 = 0.06 → **filtered out**
+- 1 keyword out of 5 = 0.12 → **passes** (enough for English title-only content)
 - 2 keywords out of 6 = 0.20 → **passes**
+
+### LLM Relevance Filter (Optional)
+
+For borderline matches (score between 0.10 and 0.30), if LLM is enabled, the system asks the LLM: "Is this article relevant to gold/financial markets?" Articles that score >= 0.30 skip this check (high confidence). This prevents false positives like sports or IT articles that happen to contain a financial keyword.
+
+```
+HIGH_CONFIDENCE_SCORE = 0.30  # above this, no LLM check needed
+```
 
 ### Confidence (derived from match score)
 
@@ -545,7 +561,8 @@ After 6 hours, the same story can create a new alert (useful if the story develo
 |-----------|-------|
 | Keyword weight in score | 60% |
 | Signal weight in score | 40% |
-| Min match score (worker) | 0.18 |
+| Min match score (worker) | 0.10 |
+| High confidence score (skip LLM check) | 0.30 |
 | Confidence range | 0.30–0.95 |
 
 ### Activity Score

@@ -40,6 +40,7 @@ class Rule:
     importance_criteria: dict[str, list[str]]  # {high_if, medium_if, low_if}
     impact_hypothesis: dict[str, Any]
     horizon: str  # immediate | short | medium | long
+    negative_keywords: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
@@ -324,6 +325,7 @@ def _dict_to_rule(raw: dict[str, Any], *, section: str) -> Rule | None:
     watch_for = _safe_dict(raw.get("watch_for", {}))
     keywords = raw.get("watch_for_keywords") or watch_for.get("keywords")
     signals = raw.get("watch_for_signals") or watch_for.get("signals")
+    negative_kw = raw.get("negative_keywords") or watch_for.get("negative_keywords")
 
     return Rule(
         id=str(rule_id),
@@ -336,4 +338,5 @@ def _dict_to_rule(raw: dict[str, Any], *, section: str) -> Rule | None:
         importance_criteria=importance_criteria,
         impact_hypothesis=_safe_dict(raw.get("impact_hypothesis", {})),
         horizon=str(raw.get("horizon", "medium")),
+        negative_keywords=_safe_list(negative_kw),
     )

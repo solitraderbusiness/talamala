@@ -11,7 +11,7 @@ These are features that already exist in the design/prototype but are broken or 
 
 | # | Feature | Description | Status | Notes |
 |---|---------|-------------|--------|-------|
-| 1 | **Fix News Source Reliability** | Get stable Persian + English gold news feeds that don't break. This is the heart of the system — everything depends on it. | ⬜ Not Started | Multiple feeds disabled/broken. Google News switched between EN/FA. Kitco disabled. Many fix commits around failing sources. |
+| 1 | **Fix News Source Reliability** | Get stable Persian + English gold news feeds that don't break. This is the heart of the system — everything depends on it. | 🔄 In Progress | Lowered MIN_MATCH_SCORE 0.18→0.10 for English content. Added negative keywords to prevent false positives (gold medal, etc). Added LLM relevance filter for borderline matches. Bumped dedup flush to reprocess items. |
 | 2 | **Impact Matrix per Alert** | Each alert should show its effect on all 4 assets (global gold, iran gold, coin, gold funds). Data exists in YAML `impact_hypothesis`, just not displayed. | ⬜ Not Started | Was fully built in `gold-monitor/` prototype as `ImpactMatrix.tsx`. Dropped in `gold-monitor-system/`. |
 | 3 | **Glossary Tooltips** | Restore the 18-term glossary (FOMC, CPI, QE, NAV, ETF, RSI, etc.) with hover tooltips so users understand financial terms. | ⬜ Not Started | Was in prototype as `Tooltip.tsx` + `GlossaryText`. 18 terms defined in `constants.ts`. |
 | 4 | **Cause-Effect Maps** | Restore visual diagrams: محرک→مکانیزم→اثر (Driver→Mechanism→Effect). Shows users WHY an event matters for gold. | ⬜ Not Started | Was in prototype as `CauseEffect.tsx`. 3 hardcoded examples existed. |
