@@ -53,7 +53,7 @@ PRICE_META = {
 BRSAPI_SYMBOL_MAP = {
     "XAUUSD": "gold_global",
     "IR_GOLD_18K": "gold_18k",
-    "USD": "usd",
+    "USDT_IRT": "usd",
     "IR_COIN_EMAMI": "emami_coin",
 }
 
@@ -61,7 +61,7 @@ BRSAPI_SYMBOL_MAP = {
 TGJU_INDICATORS = {
     "gold_global": "ons",
     "gold_18k": "geram18",
-    "usd": "price_dollar_rl",
+    "usd": "usdt-irr",
     "emami_coin": "sekee",
 }
 
