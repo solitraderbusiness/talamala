@@ -1210,6 +1210,87 @@ async def _migrate_sources_v8() -> None:
         )
 
 
+async def _migrate_sources_v9() -> None:
+    """Disable broken RSS sources and add DailyFX gold feed.
+
+    Broken sources (404, 403, or malformed XML):
+    - GoldSeek News (404)
+    - Mining.com Gold (403)
+    - BullionVault Gold News (404)
+    - Goldbroker News (malformed XML)
+    - GoodReturns Business (malformed XML)
+    - Commodity-TV RSS (malformed XML)
+    - Kitco Gold News (malformed XML)
+    - خبر فارسی (malformed XML)
+    """
+    marker_key = "migration:sources_v9"
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            text("SELECT key FROM settings WHERE key = :k"),
+            {"k": marker_key},
+        )
+        if result.scalar_one_or_none() is not None:
+            return
+
+        broken_sources = [
+            "GoldSeek News",
+            "Mining.com Gold",
+            "BullionVault Gold News",
+            "Goldbroker News",
+            "GoodReturns Business",
+            "Commodity-TV RSS",
+            "Kitco Gold News",
+            "\u062e\u0628\u0631 \u0641\u0627\u0631\u0633\u06cc",  # خبر فارسی
+        ]
+
+        disabled = 0
+        for name in broken_sources:
+            result = await session.execute(
+                select(Source).where(Source.name == name)
+            )
+            src = result.scalar_one_or_none()
+            if src is not None and src.enabled:
+                src.enabled = False
+                src.notes = (src.notes or "") + " [disabled v9: broken feed]"
+                disabled += 1
+
+        # Add DailyFX gold RSS as a working replacement
+        existing = await session.execute(
+            select(Source).where(Source.name == "DailyFX Gold")
+        )
+        added = 0
+        if existing.scalar_one_or_none() is None:
+            session.add(Source(
+                name="DailyFX Gold",
+                type="rss",
+                base_url="https://www.dailyfx.com",
+                endpoints=[
+                    "https://www.dailyfx.com/feeds/gold-commodities",
+                ],
+                enabled=True,
+                poll_interval_seconds=180,
+                categories=["global_gold"],
+                rule_bindings=[
+                    "GLOB_GOLD_PRICE", "GLOB_RATE_DECISION",
+                    "GLOB_DOLLAR_DXY", "GLOB_FED_COMM",
+                ],
+                reliability_score=0.8,
+                notes="DailyFX \u2014 gold and commodities analysis",
+            ))
+            added = 1
+
+        await session.execute(
+            text("INSERT INTO settings (key, value, updated_at) "
+                 "VALUES (:k, '\"done\"', NOW())"),
+            {"k": marker_key},
+        )
+        await session.commit()
+        logger.info(
+            "Migration v9: disabled %d broken sources, added %d new.",
+            disabled, added,
+        )
+
+
 async def _create_sentiment_scores_table() -> None:
     """Create the sentiment_scores table if it doesn't exist.
 
@@ -1229,7 +1310,7 @@ async def _flush_dedup_keys() -> None:
     Uses a marker key ``dedup:flushed:v2`` to avoid re-flushing on
     subsequent restarts.
     """
-    marker = "dedup:flushed:v12"
+    marker = "dedup:flushed:v13"
     try:
         r = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
         if await r.exists(marker):
@@ -1273,6 +1354,7 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     await _migrate_sources_v6()
     await _migrate_sources_v7()
     await _migrate_sources_v8()
+    await _migrate_sources_v9()
     await _create_sentiment_scores_table()
     await _flush_dedup_keys()
     await _snapshot_rules()
