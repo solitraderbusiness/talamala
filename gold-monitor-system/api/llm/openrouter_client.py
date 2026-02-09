@@ -49,7 +49,9 @@ follow these rules strictly:
    Those are handled by a separate deterministic system. Never mention severity \
    or importance levels in your output.
 3. Respond ONLY with a valid JSON object — no markdown fences, no commentary.
-4. The JSON object must have exactly three keys:
+4. The JSON object must have exactly four keys:
+   - "title_fa": A short, descriptive title in Persian (maximum 80 characters). \
+     This should capture the main point of the news in a concise Persian headline.
    - "summary_fa": A concise summary of the news in 2-3 Persian sentences.
    - "why_important_fa": Why this news matters for the gold and precious metals \
      market, written as 2-3 Persian bullet points (use "- " prefix for each point).
@@ -57,7 +59,7 @@ follow these rules strictly:
      that a gold market analyst should investigate next.
 
 Example output format (content is illustrative):
-{"summary_fa": "بانک مرکزی نرخ بهره را ۰.۲۵ درصد افزایش داد. این تصمیم پس از افزایش تورم در ماه گذشته اتخاذ شد.", "why_important_fa": "- افزایش نرخ بهره معمولاً فشار نزولی بر قیمت طلا وارد می‌کند\\n- سرمایه‌گذاران ممکن است به سمت اوراق قرضه حرکت کنند\\n- تأثیر بر تقاضای طلا به عنوان پناهگاه امن", "follow_up_questions": ["آیا بانک‌های مرکزی دیگر نیز مسیر مشابهی را دنبال خواهند کرد؟", "تأثیر این تصمیم بر تقاضای فیزیکی طلا چگونه خواهد بود؟"]}
+{"title_fa": "افزایش نرخ بهره بانک مرکزی آمریکا", "summary_fa": "بانک مرکزی نرخ بهره را ۰.۲۵ درصد افزایش داد. این تصمیم پس از افزایش تورم در ماه گذشته اتخاذ شد.", "why_important_fa": "- افزایش نرخ بهره معمولاً فشار نزولی بر قیمت طلا وارد می‌کند\\n- سرمایه‌گذاران ممکن است به سمت اوراق قرضه حرکت کنند\\n- تأثیر بر تقاضای طلا به عنوان پناهگاه امن", "follow_up_questions": ["آیا بانک‌های مرکزی دیگر نیز مسیر مشابهی را دنبال خواهند کرد؟", "تأثیر این تصمیم بر تقاضای فیزیکی طلا چگونه خواهد بود؟"]}
 """
 
 # ── User prompt template ────────────────────────────────────────────────
@@ -328,6 +330,7 @@ class OpenRouterClient:
             return None
 
         # Validate required keys
+        title_fa = parsed.get("title_fa")
         summary_fa = parsed.get("summary_fa")
         why_important_fa = parsed.get("why_important_fa")
         follow_up_questions = parsed.get("follow_up_questions")
@@ -352,8 +355,14 @@ class OpenRouterClient:
             if isinstance(q, str) and q.strip()
         ]
 
-        return {
+        result: dict[str, Any] = {
             "summary_fa": summary_fa.strip(),
             "why_important_fa": why_important_fa.strip(),
             "follow_up_questions": clean_questions,
         }
+
+        # title_fa is optional — include if valid
+        if isinstance(title_fa, str) and title_fa.strip():
+            result["title_fa"] = title_fa.strip()
+
+        return result

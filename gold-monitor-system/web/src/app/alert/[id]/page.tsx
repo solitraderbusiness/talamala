@@ -12,6 +12,15 @@ import {
   confidencePercent,
 } from "@/lib/utils";
 
+/** Check if text is mostly Latin/English. */
+function isLikelyEnglish(text: string): boolean {
+  if (!text) return false;
+  const latinChars = text.replace(/[\s\d\p{P}\p{S}]/gu, "");
+  if (!latinChars) return false;
+  const latinCount = (latinChars.match(/[a-zA-Z]/g) || []).length;
+  return latinCount / latinChars.length > 0.5;
+}
+
 export default function AlertDetailPage() {
   const params = useParams();
   const router = useRouter();
@@ -82,8 +91,15 @@ export default function AlertDetailPage() {
         <div className="flex flex-wrap items-start gap-3">
           <div className="flex-1">
             <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100">
-              {alert.title}
+              {isLikelyEnglish(alert.title) && alert.summary_fa && !isLikelyEnglish(alert.summary_fa)
+                ? alert.summary_fa.split(/[.۔。]/)[0]?.trim() || alert.summary_fa
+                : alert.title}
             </h1>
+            {isLikelyEnglish(alert.title) && (
+              <p className="mt-1 text-sm text-gray-400 dark:text-gray-500" dir="ltr">
+                {alert.title}
+              </p>
+            )}
             <div className="mt-2 flex flex-wrap items-center gap-2">
               <SeverityBadge severity={alert.severity} />
               <span

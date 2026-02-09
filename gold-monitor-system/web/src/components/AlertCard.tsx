@@ -5,12 +5,37 @@ import type { Alert } from "@/lib/api";
 import { timeAgo, timeHorizonLabel, sectionLabel } from "@/lib/utils";
 import SeverityBadge from "./SeverityBadge";
 
+/** Check if a string is mostly Latin/English characters. */
+function isLikelyEnglish(text: string): boolean {
+  if (!text) return false;
+  const latinChars = text.replace(/[\s\d\p{P}\p{S}]/gu, "");
+  if (!latinChars) return false;
+  const latinCount = (latinChars.match(/[a-zA-Z]/g) || []).length;
+  return latinCount / latinChars.length > 0.5;
+}
+
+/** Get the best display title — prefer Persian summary over English title. */
+function getDisplayTitle(alert: Alert): string {
+  if (isLikelyEnglish(alert.title) && alert.summary_fa && !isLikelyEnglish(alert.summary_fa)) {
+    // Use first sentence of summary_fa as title (up to 120 chars)
+    const firstSentence = alert.summary_fa.split(/[.۔。،؛]/)[0]?.trim();
+    if (firstSentence && firstSentence.length > 10) {
+      return firstSentence.length > 120 ? firstSentence.slice(0, 117) + "..." : firstSentence;
+    }
+    return alert.summary_fa.length > 120 ? alert.summary_fa.slice(0, 117) + "..." : alert.summary_fa;
+  }
+  return alert.title;
+}
+
 interface AlertCardProps {
   alert: Alert;
   compact?: boolean;
 }
 
 export default function AlertCard({ alert, compact = false }: AlertCardProps) {
+  const displayTitle = getDisplayTitle(alert);
+  const hasEnglishTitle = isLikelyEnglish(alert.title) && displayTitle !== alert.title;
+
   return (
     <Link href={`/alert/${alert.id}`}>
       <div className="card group cursor-pointer transition-shadow hover:shadow-md">
@@ -21,9 +46,14 @@ export default function AlertCard({ alert, compact = false }: AlertCardProps) {
                 compact ? "text-sm" : "text-base"
               }`}
             >
-              {alert.title}
+              {displayTitle}
             </h3>
-            {!compact && (
+            {hasEnglishTitle && !compact && (
+              <p className="mt-0.5 text-xs text-gray-400 dark:text-gray-500" dir="ltr">
+                {alert.title}
+              </p>
+            )}
+            {!compact && !hasEnglishTitle && (
               <p className="mt-1 line-clamp-2 text-sm text-gray-600 dark:text-gray-400">
                 {alert.summary_fa}
               </p>

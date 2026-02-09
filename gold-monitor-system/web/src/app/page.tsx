@@ -136,13 +136,13 @@ export default function DashboardPage() {
     }
   }, [fetchAlerts]);
 
-  // Initial load (with spinner)
+  // Initial load (with spinner) — sentiment loads separately to avoid blocking
   useEffect(() => {
     async function init() {
       setLoading(true);
       setError(null);
       try {
-        await Promise.allSettled([refreshAll(), fetchSentiment()]);
+        await refreshAll();
       } catch (err) {
         setError(err instanceof Error ? err.message : "خطا در بارگذاری");
       } finally {
@@ -150,7 +150,12 @@ export default function DashboardPage() {
       }
     }
     init();
-  }, [refreshAll, fetchSentiment]);
+  }, [refreshAll]);
+
+  // Sentiment loads independently (non-blocking) since it may be slow (LLM call)
+  useEffect(() => {
+    fetchSentiment();
+  }, [fetchSentiment]);
 
   // Re-fetch alerts when filters change
   useEffect(() => {
@@ -242,12 +247,12 @@ export default function DashboardPage() {
       )}
 
       {/* ─── Sentiment Analysis Panel ─── */}
-      {sentiment && (
-        <div className="card">
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-sm font-bold text-gray-900 dark:text-gray-100">
-              تحلیل احساسات بازار
-            </h2>
+      <div className="card">
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-sm font-bold text-gray-900 dark:text-gray-100">
+            تحلیل احساسات بازار
+          </h2>
+          {sentiment && (
             <div className="flex gap-1">
               {(["1h", "4h", "24h"] as const).map((tf) => (
                 <button
@@ -263,57 +268,62 @@ export default function DashboardPage() {
                 </button>
               ))}
             </div>
-          </div>
-
-          {activeSentiment ? (
-            <div className="space-y-3">
-              {/* Sentiment badge + summary */}
-              <div className={`flex items-start gap-4 rounded-lg border p-3 ${SENTIMENT_BG[activeSentiment.sentiment] || SENTIMENT_BG.neutral}`}>
-                <div className="text-center">
-                  <div className={`text-2xl font-bold ${SENTIMENT_COLORS[activeSentiment.sentiment] || ""}`}>
-                    {activeSentiment.sentiment_label}
-                  </div>
-                  <div className="mt-0.5 text-xs text-gray-500">
-                    {activeSentiment.alert_count} هشدار
-                  </div>
-                </div>
-                <div className="flex-1 text-sm text-gray-700 dark:text-gray-300">
-                  <p>{activeSentiment.summary}</p>
-                  {activeSentiment.outlook && (
-                    <p className="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
-                      چشم‌انداز: {activeSentiment.outlook}
-                    </p>
-                  )}
-                </div>
-              </div>
-
-              {/* Key drivers */}
-              {activeSentiment.key_drivers && activeSentiment.key_drivers.length > 0 && (
-                <div className="flex flex-wrap gap-2">
-                  {activeSentiment.key_drivers.map((d, i) => (
-                    <div
-                      key={i}
-                      className="inline-flex items-center gap-1.5 rounded-full bg-gray-100 px-3 py-1 text-xs dark:bg-gray-800"
-                    >
-                      <span className={IMPACT_COLOR[d.impact] || ""}>
-                        {IMPACT_ICON[d.impact] || "●"}
-                      </span>
-                      <span className="text-gray-700 dark:text-gray-300">{d.title}</span>
-                      {d.weight === "high" && (
-                        <span className="text-[10px] font-bold text-amber-500">!</span>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          ) : (
-            <p className="py-4 text-center text-sm text-gray-400">
-              در حال بارگذاری تحلیل...
-            </p>
           )}
         </div>
-      )}
+
+        {!sentiment ? (
+          <div className="flex items-center justify-center gap-2 py-4">
+            <div className="h-4 w-4 animate-spin rounded-full border-2 border-gold-500 border-t-transparent" />
+            <span className="text-sm text-gray-400">در حال بارگذاری تحلیل...</span>
+          </div>
+        ) : activeSentiment ? (
+          <div className="space-y-3">
+            {/* Sentiment badge + summary */}
+            <div className={`flex items-start gap-4 rounded-lg border p-3 ${SENTIMENT_BG[activeSentiment.sentiment] || SENTIMENT_BG.neutral}`}>
+              <div className="text-center">
+                <div className={`text-2xl font-bold ${SENTIMENT_COLORS[activeSentiment.sentiment] || ""}`}>
+                  {activeSentiment.sentiment_label}
+                </div>
+                <div className="mt-0.5 text-xs text-gray-500">
+                  {activeSentiment.alert_count} هشدار
+                </div>
+              </div>
+              <div className="flex-1 text-sm text-gray-700 dark:text-gray-300">
+                <p>{activeSentiment.summary}</p>
+                {activeSentiment.outlook && (
+                  <p className="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                    چشم‌انداز: {activeSentiment.outlook}
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {/* Key drivers */}
+            {activeSentiment.key_drivers && activeSentiment.key_drivers.length > 0 && (
+              <div className="flex flex-wrap gap-2">
+                {activeSentiment.key_drivers.map((d, i) => (
+                  <div
+                    key={i}
+                    className="inline-flex items-center gap-1.5 rounded-full bg-gray-100 px-3 py-1 text-xs dark:bg-gray-800"
+                  >
+                    <span className={IMPACT_COLOR[d.impact] || ""}>
+                      {IMPACT_ICON[d.impact] || "●"}
+                    </span>
+                    <span className="text-gray-700 dark:text-gray-300">{d.title}</span>
+                    {d.weight === "high" && (
+                      <span className="text-[10px] font-bold text-amber-500">!</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : (
+          <p className="py-4 text-center text-sm text-gray-400">
+            داده‌ای موجود نیست
+          </p>
+        )}
+      </div>
 
       {/* ─── Market Price Cards ─── */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
