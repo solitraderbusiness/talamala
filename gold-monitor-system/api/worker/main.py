@@ -600,8 +600,8 @@ class Worker:
                 "source_name": alert.get("source_name", ""),
                 "source_url": alert.get("source_url", ""),
                 "rule_ids": json.dumps(alert.get("matched_rule_ids", []), default=str),
-                "summary_fa": alert.get("summary_fa", ""),
-                "why_important_fa": alert.get("why_important_fa", ""),
+                "summary_fa": _ensure_str(alert.get("summary_fa", "")),
+                "why_important_fa": _ensure_str(alert.get("why_important_fa", "")),
                 "impact": json.dumps(alert.get("expected_impact", {}), default=str),
                 "severity": alert.get("severity", "medium"),
                 "time_horizon": alert.get("time_horizon", "short"),
@@ -708,10 +708,17 @@ class Worker:
         # Try to parse as JSON; fall back to raw text.
         try:
             parsed = json.loads(text_content)
+            # Ensure text fields are strings (LLM sometimes returns lists)
+            why_fa = parsed.get("why_important_fa")
+            if isinstance(why_fa, list):
+                why_fa = "\n".join(str(x) for x in why_fa)
+            summary_fa = parsed.get("summary_fa")
+            if isinstance(summary_fa, list):
+                summary_fa = "\n".join(str(x) for x in summary_fa)
             return {
                 "title_fa": parsed.get("title_fa"),
-                "summary_fa": parsed.get("summary_fa"),
-                "why_important_fa": parsed.get("why_important_fa"),
+                "summary_fa": summary_fa,
+                "why_important_fa": why_fa,
             }
         except (json.JSONDecodeError, TypeError):
             return {"title_fa": None, "summary_fa": reply, "why_important_fa": None}
@@ -886,6 +893,15 @@ def _load_rules(yaml_path: str) -> list[dict[str, Any]]:
     except Exception:
         logger.exception("Failed to load rules from %s", path)
         return []
+
+
+def _ensure_str(value: Any) -> str:
+    """Coerce *value* to a string. Lists are joined with newlines."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return "\n".join(str(x) for x in value)
+    return str(value) if value is not None else ""
 
 
 def _ensure_datetime(value: Any) -> datetime:
