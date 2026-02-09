@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     # ── LLM / OpenRouter ───────────────────────────────────────────────
     OPENROUTER_API_KEY: str = ""
 
+    # ── Prices API (brsapi.ir) ───────────────────────────────────────
+    BRSAPI_KEY: str = ""
+
     # ── Security ────────────────────────────────────────────────────────
     SECRET_KEY: str = "change-me-in-production"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 24 hours

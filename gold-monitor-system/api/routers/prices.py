@@ -1,24 +1,16 @@
 """
 Prices router -- real-time gold, currency, and coin market prices.
 
-Fetches live prices from TGJU (tgju.org), the most popular
-Iranian gold/currency data provider.  Results are cached in Redis
-for 30 seconds to avoid excessive API calls.
+Primary source: **BrsAPI** (``brsapi.ir/Api/Market/Gold_Currency.php``)
+- Returns gold, currency, and crypto prices in a single call
+- Requires an API key (``BRSAPI_KEY`` env var)
+- Prices are already in Toman (no Rial conversion needed)
 
-Primary endpoint: ``https://call4.tgju.org/ajax.json``
-Returns all current prices in a single call::
+Fallback: **TGJU** (``call4.tgju.org/ajax.json``)
+- Used when BrsAPI key is not configured or request fails
+- Returns all prices in one call, prices in Rial (÷10 for Toman)
 
-    {
-        "current": {
-            "ons": {"p": "5,013.53", "h": "...", "l": "...", "d": "52.38", "dp": 1.06, ...},
-            "geram18": {"p": "187,804,000", ...},
-            "price_dollar_rl": {"p": "1,589,500", ...},
-            "sekee": {"p": "1,909,950,000", ...}
-        }
-    }
-
-The ``p`` field is the current live price.
-Iranian prices are in **Rial** (divide by 10 for Toman).
+Results are cached in Redis for 60 seconds.
 """
 
 from __future__ import annotations
@@ -41,21 +33,13 @@ router = APIRouter(tags=["prices"])
 # ── Configuration ─────────────────────────────────────────────────────
 
 CACHE_KEY = "prices:latest"
-CACHE_TTL_SECONDS = 30  # 30s cache — real-time prices update frequently
+CACHE_TTL_SECONDS = 60  # 60s cache
 
-# TGJU real-time endpoint (returns all prices in one call)
+# BrsAPI endpoint
+BRSAPI_URL = "https://brsapi.ir/Api/Market/Gold_Currency.php"
+
+# TGJU fallback
 TGJU_REALTIME_URL = "https://call4.tgju.org/ajax.json"
-# Fallback: individual indicator endpoints (daily candle data, less fresh)
-TGJU_API_BASE = "https://api.tgju.org/v1/market/indicator/summary-table-data"
-ACCESSBAN_API_BASE = "https://api.accessban.com/v1/market/indicator/summary-table-data"
-
-# Map our price keys to TGJU indicator slugs
-INDICATORS = {
-    "gold_global": "ons",             # اونس جهانی طلا — USD/oz
-    "gold_18k": "geram18",            # طلای ۱۸ عیار — ریال/گرم
-    "usd": "price_dollar_rl",         # دلار آمریکا — ریال
-    "emami_coin": "sekee",            # سکه امامی — ریال
-}
 
 # Display metadata for the frontend
 PRICE_META = {
@@ -65,8 +49,24 @@ PRICE_META = {
     "emami_coin": {"label": "سکه امامی", "unit": "تومان", "icon": "🪙"},
 }
 
+# Map BrsAPI symbols to our price keys
+BRSAPI_SYMBOL_MAP = {
+    "XAUUSD": "gold_global",
+    "IR_GOLD_18K": "gold_18k",
+    "USD": "usd",
+    "IR_COIN_EMAMI": "emami_coin",
+}
 
-# ── Price parsing ────────────────────────────────────────────────────
+# Map TGJU indicator slugs to our price keys (fallback)
+TGJU_INDICATORS = {
+    "gold_global": "ons",
+    "gold_18k": "geram18",
+    "usd": "price_dollar_rl",
+    "emami_coin": "sekee",
+}
+
+
+# ── Price parsing helpers ────────────────────────────────────────────
 
 
 def _parse_number(raw: Any) -> float | None:
@@ -86,39 +86,115 @@ def _parse_number(raw: Any) -> float | None:
     return None
 
 
-def _format_price(value: float, key: str) -> str:
-    """Format price for display."""
-    if key == "gold_global":
-        # USD price — show with 2 decimals
-        return f"{value:,.2f}"
-    # Iranian prices are in Rial — convert to Toman (÷10)
-    toman = value / 10
-    return f"{toman:,.0f}"
+def _format_toman(value: float) -> str:
+    """Format a Toman value with commas."""
+    return f"{value:,.0f}"
 
 
-def _format_change(change: float, change_pct: float, key: str) -> dict[str, str]:
-    """Format price change for display."""
-    if key == "gold_global":
-        return {
-            "change": f"{change:+,.2f}",
-            "change_pct": f"{change_pct:+.2f}%",
+def _format_usd(value: float) -> str:
+    """Format a USD value with 2 decimals."""
+    return f"{value:,.2f}"
+
+
+# ── BrsAPI price fetching (primary) ──────────────────────────────────
+
+
+async def _fetch_prices_brsapi() -> dict[str, Any]:
+    """Fetch prices from BrsAPI.
+
+    Response is an array with one element containing ``gold`` and
+    ``currency`` arrays.  Each item has: symbol, name, price,
+    change_value, change_percent, unit.
+
+    Prices are already in Toman (gold) or Toman (currency).
+    Gold ounce is in USD.
+    """
+    api_key = app_settings.BRSAPI_KEY
+    if not api_key:
+        return {}
+
+    prices: dict[str, Any] = {}
+
+    async with httpx.AsyncClient(
+        timeout=10.0,
+        headers={
+            "User-Agent": "Mozilla/5.0 (compatible; GoldMonitor/1.0)",
+            "Accept": "application/json",
+        },
+    ) as client:
+        try:
+            resp = await client.get(BRSAPI_URL, params={"key": api_key})
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception:
+            logger.warning("Failed to fetch prices from BrsAPI", exc_info=True)
+            return prices
+
+    # Response is a list with one element
+    if isinstance(data, list) and len(data) > 0:
+        container = data[0]
+    elif isinstance(data, dict):
+        container = data
+    else:
+        logger.warning("BrsAPI unexpected format: %s", type(data))
+        return prices
+
+    # Process gold items
+    gold_items = container.get("gold", [])
+    currency_items = container.get("currency", [])
+    all_items = gold_items + currency_items
+
+    for item in all_items:
+        if not isinstance(item, dict):
+            continue
+
+        symbol = item.get("symbol", "")
+        our_key = BRSAPI_SYMBOL_MAP.get(symbol)
+        if not our_key:
+            continue
+
+        price = _parse_number(item.get("price"))
+        if price is None:
+            continue
+
+        meta = PRICE_META[our_key]
+        is_usd = our_key == "gold_global"
+
+        entry: dict[str, Any] = {
+            "value": price,
+            "formatted": _format_usd(price) if is_usd else _format_toman(price),
+            "label": meta["label"],
+            "unit": meta["unit"],
+            "icon": meta["icon"],
         }
-    change_toman = change / 10
-    return {
-        "change": f"{change_toman:+,.0f}",
-        "change_pct": f"{change_pct:+.2f}%",
-    }
+
+        # Add change info
+        change_value = _parse_number(item.get("change_value"))
+        change_pct = _parse_number(item.get("change_percent"))
+        if change_value is not None and change_pct is not None:
+            if is_usd:
+                entry["change"] = f"{change_value:+,.2f}"
+            else:
+                entry["change"] = f"{change_value:+,.0f}"
+            entry["change_pct"] = f"{change_pct:+.2f}%"
+            entry["direction"] = (
+                "up" if change_value > 0
+                else "down" if change_value < 0
+                else "flat"
+            )
+
+        prices[our_key] = entry
+
+    return prices
 
 
-# ── Real-time price fetching (primary) ───────────────────────────────
+# ── TGJU fallback ────────────────────────────────────────────────────
 
 
-async def _fetch_prices_realtime() -> dict[str, Any]:
-    """Fetch all current prices from TGJU real-time endpoint.
+async def _fetch_prices_tgju() -> dict[str, Any]:
+    """Fallback: fetch prices from TGJU real-time endpoint.
 
-    Returns all prices in a single HTTP call. The ``current`` object
-    contains each indicator with ``p`` (price), ``d`` (change),
-    ``dp`` (change %), ``h`` (high), ``l`` (low).
+    TGJU prices are in Rial — divide by 10 for Toman.
     """
     prices: dict[str, Any] = {}
 
@@ -135,12 +211,12 @@ async def _fetch_prices_realtime() -> dict[str, Any]:
             resp.raise_for_status()
             data = resp.json()
         except Exception:
-            logger.warning("Failed to fetch real-time prices from TGJU", exc_info=True)
+            logger.warning("Failed to fetch prices from TGJU", exc_info=True)
             return prices
 
     current = data.get("current", data)
 
-    for key, slug in INDICATORS.items():
+    for key, slug in TGJU_INDICATORS.items():
         indicator_data = current.get(slug)
         if not indicator_data or not isinstance(indicator_data, dict):
             continue
@@ -150,9 +226,11 @@ async def _fetch_prices_realtime() -> dict[str, Any]:
             continue
 
         meta = PRICE_META[key]
+        is_usd = key == "gold_global"
+
         entry: dict[str, Any] = {
             "value": price,
-            "formatted": _format_price(price, key),
+            "formatted": _format_usd(price) if is_usd else _format_toman(price / 10),
             "label": meta["label"],
             "unit": meta["unit"],
             "icon": meta["icon"],
@@ -162,60 +240,15 @@ async def _fetch_prices_realtime() -> dict[str, Any]:
         change = _parse_number(indicator_data.get("d"))
         change_pct = _parse_number(indicator_data.get("dp"))
         if change is not None and change_pct is not None:
-            entry.update(_format_change(change, change_pct, key))
+            if is_usd:
+                entry["change"] = f"{change:+,.2f}"
+                entry["change_pct"] = f"{change_pct:+.2f}%"
+            else:
+                entry["change"] = f"{change / 10:+,.0f}"
+                entry["change_pct"] = f"{change_pct:+.2f}%"
             entry["direction"] = "up" if change > 0 else "down" if change < 0 else "flat"
 
         prices[key] = entry
-
-    return prices
-
-
-# ── Fallback: individual indicator endpoints (daily data) ────────────
-
-
-def _extract_close_price(data: dict[str, Any]) -> float | None:
-    """Extract close price from TGJU DataTables response (fallback)."""
-    rows = data.get("data")
-    if not isinstance(rows, list) or not rows:
-        return None
-    first_row = rows[0]
-    if not isinstance(first_row, list) or len(first_row) < 4:
-        return None
-    return _parse_number(first_row[3])
-
-
-async def _fetch_prices_fallback() -> dict[str, Any]:
-    """Fallback: fetch prices from individual indicator endpoints (daily candle)."""
-    prices: dict[str, Any] = {}
-
-    async with httpx.AsyncClient(
-        timeout=15.0,
-        headers={
-            "User-Agent": "Mozilla/5.0 (compatible; GoldMonitor/1.0)",
-            "Accept": "application/json",
-        },
-        follow_redirects=True,
-    ) as client:
-        for key, indicator in INDICATORS.items():
-            for base_url in (TGJU_API_BASE, ACCESSBAN_API_BASE):
-                url = f"{base_url}/{indicator}"
-                try:
-                    resp = await client.get(url, params={"start": "0", "length": "1"})
-                    resp.raise_for_status()
-                    data = resp.json()
-                    price = _extract_close_price(data)
-                    if price is not None:
-                        meta = PRICE_META[key]
-                        prices[key] = {
-                            "value": price,
-                            "formatted": _format_price(price, key),
-                            "label": meta["label"],
-                            "unit": meta["unit"],
-                            "icon": meta["icon"],
-                        }
-                        break
-                except Exception:
-                    continue
 
     return prices
 
@@ -258,26 +291,28 @@ async def _set_cached_prices(prices: dict[str, Any]) -> None:
 async def get_prices() -> dict[str, Any]:
     """Return current market prices.
 
-    Prices are cached for 30 seconds.  Primary source is the TGJU
-    real-time endpoint; falls back to individual indicator endpoints.
+    Prices are cached for 60 seconds.  Primary source is BrsAPI;
+    falls back to TGJU real-time endpoint.
     """
     # Try cache first
     cached = await _get_cached_prices()
     if cached:
         return cached
 
-    # Try real-time endpoint first
-    prices = await _fetch_prices_realtime()
+    # Try BrsAPI first (primary)
+    source = "brsapi.ir"
+    prices = await _fetch_prices_brsapi()
 
-    # Fallback to individual endpoints if real-time failed
+    # Fallback to TGJU if BrsAPI failed or returned nothing
     if not prices:
-        logger.info("Real-time prices empty, trying fallback endpoints")
-        prices = await _fetch_prices_fallback()
+        logger.info("BrsAPI prices empty, trying TGJU fallback")
+        source = "tgju.org"
+        prices = await _fetch_prices_tgju()
 
     result = {
         "prices": prices,
         "updated_at": time.time(),
-        "source": "tgju.org",
+        "source": source,
     }
 
     # Cache the result (even if partial)

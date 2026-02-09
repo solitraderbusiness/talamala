@@ -241,6 +241,7 @@ docker compose up -d
 | `DATABASE_URL_SYNC` | Sync DB connection (psycopg2) | `postgresql://...@db:5432/goldmonitor` |
 | `REDIS_URL` | Redis connection | `redis://redis:6379/0` |
 | `OPENROUTER_API_KEY` | OpenRouter API key (optional) | empty |
+| `BRSAPI_KEY` | BrsAPI market data key (brsapi.ir) | empty |
 | `SECRET_KEY` | JWT signing secret | `change-me-to-a-random-string` |
 | `ADMIN_EMAIL` | Default admin email | `admin@goldmonitor.ir` |
 | `ADMIN_PASSWORD` | Default admin password | `admin123` |
@@ -322,9 +323,9 @@ The LLM is used ONLY for generating text (summary, key_drivers, outlook). The nu
 - Historical scores via `/api/sentiment/history?timeframe=4h&hours=48`
 
 ### Prices API
-Real-time prices from TGJU (تی‌جی‌یو) with 30-second cache:
-- **Primary endpoint**: `https://call4.tgju.org/ajax.json` — returns all prices in one call
-- **Fallback**: Individual `api.tgju.org/v1/market/indicator/summary-table-data/{slug}` endpoints
+Real-time prices with 60-second Redis cache:
+- **Primary**: BrsAPI (`brsapi.ir/Api/Market/Gold_Currency.php`) — requires `BRSAPI_KEY` env var. Prices already in Toman.
+- **Fallback**: TGJU (`call4.tgju.org/ajax.json`) — used when BrsAPI key not set. Prices in Rial (÷10 for Toman).
 - Returns: gold_global (USD/oz), gold_18k (toman/gram), usd (toman), emami_coin (toman)
 - Each price includes: `value`, `formatted`, `change`, `change_pct`, `direction` (up/down/flat)
 
@@ -358,7 +359,8 @@ The worker fetches from these RSS sources (via Google News and direct feeds):
 
 ### External APIs
 - **OpenRouter** (`https://openrouter.ai/api/v1/chat/completions`) — Persian text generation for alert summaries and sentiment analysis. Only called when `OPENROUTER_API_KEY` is set.
-- **TGJU** (`https://call4.tgju.org/ajax.json`) — Real-time gold, USD, and coin prices for Iranian market. No API key required.
+- **BrsAPI** (`https://brsapi.ir/Api/Market/Gold_Currency.php`) — Primary price data source for gold, currency, and coins. Requires `BRSAPI_KEY`. Prices in Toman.
+- **TGJU** (`https://call4.tgju.org/ajax.json`) — Fallback price data when BrsAPI is unavailable. No API key required. Prices in Rial.
 
 ## 8. Database Schema
 
@@ -699,10 +701,11 @@ docker compose exec db psql -U goldmon -d goldmonitor -c \
 - Redis dedup might be blocking: bump dedup flush version in `api/main.py` and restart
 
 **Prices not updating:**
-- TGJU API (`call4.tgju.org/ajax.json`) is the primary source
+- Primary source is BrsAPI (`brsapi.ir`) — requires `BRSAPI_KEY` in `.env`
+- Fallback is TGJU (`call4.tgju.org/ajax.json`) — used when BrsAPI key not set
 - Some prices (دلار, سکه, طلای ۱۸ عیار) only update during Iran market hours (~9 AM to 6 PM IRST)
 - طلای جهانی (global gold) updates 24/7
-- Cache TTL is 30 seconds
+- Cache TTL is 60 seconds
 
 **Sentiment score stuck at 50 (neutral):**
 - Sentiment requires alerts to exist — if no alerts, fallback is neutral
