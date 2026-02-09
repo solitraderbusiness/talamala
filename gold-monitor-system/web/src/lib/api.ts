@@ -56,12 +56,14 @@ function authRequest<T>(
 
 /* ---------- Alert types ---------- */
 
-export interface ExpectedImpact {
-  [asset: string]: {
-    direction: "up" | "down" | "mixed";
-    mechanism: string;
-  };
+export interface ImpactItem {
+  asset: string;
+  direction: string;
+  mechanism: string;
 }
+
+/** Expected impact: array of {asset, direction, mechanism} from backend. */
+export type ExpectedImpact = ImpactItem[];
 
 export interface Alert {
   id: string;

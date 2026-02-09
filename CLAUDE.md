@@ -252,7 +252,7 @@ docker compose up -d
 2. Seeds default admin user if not exists
 3. Creates `sentiment_scores` table if not exists (via `checkfirst=True`)
 4. Takes a snapshot of the YAML rules file
-5. Runs one-time dedup flush (versioned marker `v7`) to reset Redis dedup after rule changes
+5. Runs one-time dedup flush (versioned marker `v10`) to reset Redis dedup after rule changes
 6. Worker starts 60-second fetch cycle
 
 ### Running Tests
@@ -295,12 +295,31 @@ python -m pytest api/tests/ -v
 | `GET` | `/api/sources/{id}/logs` | Fetch logs (last 50) |
 | `GET` | `/api/sources/{id}/raw-items` | Raw items (last 50, searchable) |
 
-### Sentiment Score
-The dashboard's "شاخص احساسات" gauge shows a 0-100 numeric sentiment score per timeframe (1h, 4h, 24h):
-- **very_bullish** = 90, **bullish** = 70, **neutral** = 50, **bearish** = 30, **very_bearish** = 10
-- Scores are persisted to the `sentiment_scores` table on each sentiment API call
-- The `/api/alerts/stats/today` endpoint returns the latest 4h score as `risk_score`
-- Historical scores can be retrieved via `/api/sentiment/history?timeframe=4h&hours=48`
+### Sentiment Score (3-Layer Weighted Formula)
+The dashboard's sentiment gauge shows a 0-100 numeric score per timeframe (1h, 4h, 24h), computed deterministically:
+
+**Layer 1 — Per-alert signal:** `RSS_i = Polarity × Confidence`
+- Polarity: +1 (bullish) / -1 (bearish) / 0 (neutral), detected from `expected_impact.direction`
+- Falls back to severity-based default: high=0.3, medium=0.15, low=0.05
+
+**Layer 2 — Importance weighting:** `WS_i = RSS_i × W_imp`
+- Weights: critical=3.0, high=2.0, medium=1.0, low=0.5
+
+**Layer 3 — Exponential time decay:** `W_time = e^(-λ × hours_ago)`
+- λ: 1h=2.0, 4h=0.5, 24h=0.1
+
+**Aggregation:**
+- `raw = Σ(WS_i × W_time_i) / Σ(|W_imp_i × W_time_i|) × 100` → [-100, +100]
+- Volume dampening: `min(1.0, n / threshold)` where thresholds are 1h=10, 4h=20, 24h=30
+- Final: `50 + dampened / 2` clamped to [0, 100]
+
+**Score → Category mapping:**
+- 80+ = very_bullish (بسیار صعودی), 62-79 = bullish (صعودی), 38-61 = neutral (خنثی), 20-37 = bearish (نزولی), <20 = very_bearish (بسیار نزولی)
+
+The LLM is used ONLY for generating text (summary, key_drivers, outlook). The numeric score is always deterministic.
+- Scores persist to `sentiment_scores` table on each API call
+- `/api/alerts/stats/today` returns the latest 4h score as `risk_score`
+- Historical scores via `/api/sentiment/history?timeframe=4h&hours=48`
 
 ### Prices API
 Real-time prices from TGJU (تی‌جی‌یو) with 30-second cache:
@@ -319,16 +338,23 @@ Real-time prices from TGJU (تی‌جی‌یو) with 30-second cache:
 | `json` | `JSONFetcher` | Configurable field mapping via `metadata` (`title_field`, `url_field`, `content_field`, `date_field`, `items_path`) |
 
 ### Configured News Sources
-The worker fetches from these RSS sources (Google News in Persian):
-1. **اخبار طلای جهانی** (RSS) — `news.google.com/rss/search?q=طلای+جهانی&hl=fa` — poll: 120s
-2. **اخبار دلار و ارز** (RSS) — `news.google.com/rss/search?q=قیمت+دلار+ارز&hl=fa` — poll: 120s
-3. **اخبار سکه و طلای داخلی** (RSS) — `news.google.com/rss/search?q=سکه+طلا+ایران&hl=fa` — poll: 120s
-4. **اخبار صندوق‌های طلا** (RSS) — `news.google.com/rss/search?q=صندوق+طلا+بورس&hl=fa` — poll: 180s
-5. **Reuters Gold** (RSS) — `news.google.com/rss/search?q=gold+price+reuters` — poll: 120s
-6. **Kitco Gold** (RSS) — `news.google.com/rss/search?q=gold+kitco+price` — poll: 120s
-7. **Bloomberg Commodities** (RSS) — `news.google.com/rss/search?q=gold+commodities+bloomberg` — poll: 180s
-8. **CNBC Gold** (RSS) — `news.google.com/rss/search?q=gold+cnbc+market` — poll: 180s
-9. **Investing.com Gold** (RSS) — `news.google.com/rss/search?q=gold+investing.com+price` — poll: 120s
+The worker fetches from these RSS sources (via Google News and direct feeds):
+
+**International (English):**
+1. **Reuters Gold** (RSS) — `news.google.com/rss/search?q=gold+price+reuters` — poll: 120s
+2. **Kitco Gold** (RSS) — `news.google.com/rss/search?q=gold+kitco+price` — poll: 120s
+3. **Bloomberg Commodities** (RSS) — `news.google.com/rss/search?q=gold+commodities+bloomberg` — poll: 180s
+4. **CNBC Gold** (RSS) — `news.google.com/rss/search?q=gold+cnbc+market` — poll: 180s
+5. **Investing.com Gold** (RSS) — `news.google.com/rss/search?q=gold+investing.com+price` — poll: 120s
+6. **Goldbroker** (RSS) — `goldbroker.com/feed` — poll: 300s
+7. **GoodReturns Gold** (RSS) — `news.google.com/rss/search?q=gold+price+good+returns` — poll: 300s
+8. **Commodity-TV Gold** (RSS) — `news.google.com/rss/search?q=gold+commodity-tv` — poll: 300s
+9. **DailyForex Gold** (RSS) — `news.google.com/rss/search?q=gold+dailyforex` — poll: 300s
+
+**Iranian/Persian:**
+10. **خبر فارسی - طلا** (RSS) — `khabarfarsi.com/rss/gold` — poll: 180s
+
+**Note:** Persian Google News feeds were disabled (migration v6) as they return zero items from outside Iran. All Persian gold news now comes via international sources that mention gold-related Persian keywords.
 
 ### External APIs
 - **OpenRouter** (`https://openrouter.ai/api/v1/chat/completions`) — Persian text generation for alert summaries and sentiment analysis. Only called when `OPENROUTER_API_KEY` is set.
@@ -476,7 +502,7 @@ Indexed on `(timeframe, created_at)` for efficient history queries.
 
 ### Deduplication
 - **Raw items**: SHA-256 of `title|url|content_text`. Redis key `raw_items:hash:<hash>` with 24h TTL. DB fallback.
-- **Alerts**: `dedupe_key` = SHA-256 of sorted rule IDs + normalized title + source. Redis key `alert:dedup:<key>` with configurable window (default 6h from settings table).
+- **Alerts**: `dedupe_key` = SHA-256 of sorted rule IDs + normalized title (source intentionally excluded for cross-source dedup — same story from IRNA/Mehr/ISNA produces same key). Redis key `alert:dedup:<key>` with configurable window (default 6h from settings table).
 
 ### Frontend Patterns
 - **RTL layout**: `<html lang="fa" dir="rtl">` in root layout.
@@ -507,7 +533,7 @@ Indexed on `(timeframe, created_at)` for efficient history queries.
 - Database schema with Alembic migration + startup table creation
 - Worker pipeline: fetch → dedup → match → alert (60s cycle)
 - Three fetcher types (RSS, HTML, JSON)
-- Deterministic rule engine with 32+ rules
+- Deterministic rule engine with 32+ rules (catch-all rules limited to 3 keywords for match score threshold)
 - Persian text normalization for matching
 - JWT authentication for admin endpoints
 - Web dashboard with:
@@ -515,13 +541,21 @@ Indexed on `(timeframe, created_at)` for efficient history queries.
   - Multi-timeframe sentiment gauge (1h/4h/Daily) with chart toggle
   - Categorized alert sections (global_gold, iran_gold, coin, gold_funds)
   - Alert feed with severity/time-horizon filters and pagination
-  - Auto-refresh (60s for data, 5min for sentiment)
+  - Smart auto-refresh: 60s for data, sentiment refreshes on new alert detection (2min fallback)
+  - Smooth CSS transitions for sentiment updates
 - Admin panel (sources CRUD, settings, login)
-- Alert detail page with impact matrix
+- Alert detail page with:
+  - Expected impact table (handles both array and dict formats)
+  - Clean source URL display with "مشاهده منبع" button
+  - Bullet-point rendering for why_important_fa
+  - English title detection with Persian fallback
 - Rule library browser
-- Deduplication (Redis + DB)
-- OpenRouter LLM integration for sentiment analysis and alert summaries
+- Cross-source deduplication (same news from IRNA/Mehr/ISNA produces one alert)
+- OpenRouter LLM integration for text generation (summary, key_drivers, outlook)
+- **Deterministic 3-layer weighted sentiment scoring** (polarity × confidence × importance × time decay × volume dampening)
 - Sentiment scoring system (0-100) with historical persistence
+- 16 RSS sources (9 international, 1 Persian, 6 disabled)
+- Worker LLM type safety (_ensure_str helper prevents list-to-str crashes)
 - Rule engine unit tests (matcher, severity, alert_builder) — 105 tests passing
 
 ### Known Issues
@@ -529,6 +563,7 @@ Indexed on `(timeframe, created_at)` for efficient history queries.
 - Passwords are truncated to 72 bytes for bcrypt compatibility (`auth.py:_truncate_for_bcrypt`)
 - Web frontend's `fetchSourceNow` calls `/api/sources/{id}/fetch` but the API route is `/api/sources/{id}/fetch-now`
 - The `gold-monitor/` prototype uses mock data only; not connected to the backend
+- Most existing alerts have empty `expected_impact.direction` — polarity defaults to severity-based heuristic
 
 ## 11. Common Tasks
 
@@ -696,5 +731,15 @@ docker volume ls                 # List volumes
 ### Match Score Tuning
 - `MIN_MATCH_SCORE = 0.18` in `worker/main.py` — controls minimum threshold for alerts
 - Match score = 60% keyword ratio + 40% signal ratio
-- Example: 1 keyword match on 3-keyword rule = 0.2 (passes); 1 keyword on 6-keyword rule = 0.1 (rejected)
+- Example: 1 keyword match on 3-keyword rule = 0.333 (passes); 1 keyword on 6-keyword rule = 0.1 (rejected)
+- **Critical**: Keep catch-all rules to ≤3 keywords so 1 match = 0.333, well above threshold
 - Lowering this too much → spam alerts; raising too high → missed alerts
+
+### Sentiment Score Tuning
+- Formula parameters in `api/routers/sentiment.py`
+- **Default polarity** (`_DEFAULT_POLARITY`): high=0.3, medium=0.15, low=0.05
+- **Importance weights** (`_IMPORTANCE_WEIGHT`): critical=3.0, high=2.0, medium=1.0, low=0.5
+- **Decay λ** (`_DECAY_LAMBDA`): 1h=2.0, 4h=0.5, 24h=0.1
+- **Volume thresholds** (`_VOLUME_THRESHOLD`): 1h=10, 4h=20, 24h=30
+- **Score ranges**: 80+ very_bullish, 62-79 bullish, 38-61 neutral, 20-37 bearish, <20 very_bearish
+- With 16 medium alerts (no direction data): score ≈ 51-53 (neutral) — correctly reflects low-signal volume

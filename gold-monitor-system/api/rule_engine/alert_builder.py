@@ -218,8 +218,9 @@ def _build_expected_impact(
     """Aggregate ``impact_hypothesis`` from all matched rules.
 
     Each rule's impact_hypothesis may contain keys like ``asset``,
-    ``direction``, ``mechanism``, or it may contain a list of impacts.
-    We normalise everything into a flat list of dicts with those three keys.
+    ``direction``, ``mechanism``, or a ``typical_effect`` list with
+    ``asset`` and ``effect`` fields.  We normalise everything into a
+    flat list of dicts with ``asset``, ``direction``, ``mechanism``.
     """
     impacts: list[dict[str, str]] = []
     seen: set[str] = set()
@@ -229,26 +230,49 @@ def _build_expected_impact(
         if not hyp:
             continue
 
-        # Handle list-of-dicts or single-dict
+        # Collect candidate item dicts from various YAML layouts
         items: list[dict[str, Any]]
         if "impacts" in hyp and isinstance(hyp["impacts"], list):
             items = hyp["impacts"]
+        elif "typical_effect" in hyp and isinstance(hyp["typical_effect"], list):
+            items = hyp["typical_effect"]
         elif "asset" in hyp:
             items = [hyp]
         else:
-            # Try treating all values as impact dicts
-            items = [v for v in hyp.values() if isinstance(v, dict)]
+            # Try treating all values as impact dicts or lists
+            items = []
+            for v in hyp.values():
+                if isinstance(v, dict):
+                    items.append(v)
+                elif isinstance(v, list):
+                    items.extend(d for d in v if isinstance(d, dict))
             if not items:
-                # Last resort: wrap the whole dict
                 items = [hyp]
 
         for item in items:
             if not isinstance(item, dict):
                 continue
+
+            asset = str(item.get("asset", ""))
+            direction = str(item.get("direction", ""))
+            mechanism = str(item.get("mechanism", "") or item.get("effect", ""))
+
+            # Try to infer direction from effect text when not explicit
+            if not direction and mechanism:
+                ml = mechanism.lower()
+                has_bull = "bullish" in ml or "price_up" in ml
+                has_bear = "bearish" in ml or "price_down" in ml
+                if has_bull and has_bear:
+                    direction = "mixed"
+                elif has_bull:
+                    direction = "up"
+                elif has_bear:
+                    direction = "down"
+
             entry = {
-                "asset": str(item.get("asset", "")),
-                "direction": str(item.get("direction", "")),
-                "mechanism": str(item.get("mechanism", "")),
+                "asset": asset,
+                "direction": direction,
+                "mechanism": mechanism,
             }
             fingerprint = f"{entry['asset']}|{entry['direction']}|{entry['mechanism']}"
             if fingerprint not in seen:
