@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 
 const navItems = [
   { href: "/", label: "داشبورد" },
+  { href: "/prices", label: "قیمت‌ها" },
   { href: "/library", label: "کتابخانه قوانین" },
   { href: "/admin/sources", label: "مدیریت" },
 ];

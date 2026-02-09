@@ -320,3 +320,119 @@ async def get_prices() -> dict[str, Any]:
         await _set_cached_prices(result)
 
     return result
+
+
+# ── All-prices endpoint (full BrsAPI data) ───────────────────────────
+
+
+ALL_CACHE_KEY = "prices:all"
+ALL_CACHE_TTL_SECONDS = 60
+
+
+async def _fetch_all_prices_brsapi() -> dict[str, Any] | None:
+    """Fetch the full BrsAPI response with all gold, currency, crypto items."""
+    api_key = app_settings.BRSAPI_KEY
+    if not api_key:
+        return None
+
+    async with httpx.AsyncClient(
+        timeout=10.0,
+        headers={
+            "User-Agent": "Mozilla/5.0 (compatible; GoldMonitor/1.0)",
+            "Accept": "application/json",
+        },
+    ) as client:
+        try:
+            resp = await client.get(BRSAPI_URL, params={"key": api_key})
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception:
+            logger.warning("Failed to fetch all prices from BrsAPI", exc_info=True)
+            return None
+
+    if isinstance(data, list) and len(data) > 0:
+        container = data[0]
+    elif isinstance(data, dict):
+        container = data
+    else:
+        return None
+
+    def _build_items(raw_items: list) -> list[dict[str, Any]]:
+        result_items: list[dict[str, Any]] = []
+        for item in raw_items:
+            if not isinstance(item, dict):
+                continue
+            price = _parse_number(item.get("price"))
+            if price is None:
+                continue
+            entry: dict[str, Any] = {
+                "symbol": item.get("symbol", ""),
+                "name": item.get("name", ""),
+                "name_en": item.get("name_en", ""),
+                "price": price,
+                "unit": item.get("unit", ""),
+                "date": item.get("date", ""),
+                "time": item.get("time", ""),
+            }
+            change_value = _parse_number(item.get("change_value"))
+            change_pct = _parse_number(item.get("change_percent"))
+            if change_pct is not None:
+                entry["change_percent"] = change_pct
+                entry["direction"] = (
+                    "up" if (change_value or 0) > 0
+                    else "down" if (change_value or 0) < 0
+                    else "flat"
+                )
+            if change_value is not None:
+                entry["change_value"] = change_value
+            # Crypto items may have description and market_cap icon
+            if item.get("description"):
+                entry["description"] = item["description"]
+            if item.get("market_cap") and isinstance(item["market_cap"], str) and item["market_cap"].startswith("http"):
+                entry["icon_url"] = item["market_cap"]
+            result_items.append(entry)
+        return result_items
+
+    return {
+        "gold": _build_items(container.get("gold", [])),
+        "currency": _build_items(container.get("currency", [])),
+        "cryptocurrency": _build_items(container.get("cryptocurrency", [])),
+    }
+
+
+@router.get("/all")
+async def get_all_prices() -> dict[str, Any]:
+    """Return all available prices grouped by category (gold, currency, crypto).
+
+    Uses BrsAPI as the sole source since TGJU doesn't provide full data.
+    Cached for 60 seconds.
+    """
+    # Try cache first
+    try:
+        r = await _get_redis()
+        raw = await r.get(ALL_CACHE_KEY)
+        await r.aclose()
+        if raw:
+            return json.loads(raw)
+    except Exception:
+        pass
+
+    data = await _fetch_all_prices_brsapi()
+    if data is None:
+        return {"gold": [], "currency": [], "cryptocurrency": [], "updated_at": time.time(), "source": "unavailable"}
+
+    result = {
+        **data,
+        "updated_at": time.time(),
+        "source": "brsapi.ir",
+    }
+
+    # Cache
+    try:
+        r = await _get_redis()
+        await r.setex(ALL_CACHE_KEY, ALL_CACHE_TTL_SECONDS, json.dumps(result))
+        await r.aclose()
+    except Exception:
+        pass
+
+    return result

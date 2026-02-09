@@ -173,6 +173,31 @@ export interface PricesResponse {
   source: string;
 }
 
+/* ---------- All-Prices types ---------- */
+
+export interface AllPriceItem {
+  symbol: string;
+  name: string;
+  name_en: string;
+  price: number;
+  unit: string;
+  date: string;
+  time: string;
+  change_percent?: number;
+  change_value?: number;
+  direction?: "up" | "down" | "flat";
+  description?: string;
+  icon_url?: string;
+}
+
+export interface AllPricesResponse {
+  gold: AllPriceItem[];
+  currency: AllPriceItem[];
+  cryptocurrency: AllPriceItem[];
+  updated_at: number;
+  source: string;
+}
+
 /* ---------- Rules types ---------- */
 
 export interface Rule {
@@ -268,6 +293,10 @@ export function getAlertStats(): Promise<AlertStats> {
 
 export function getPrices(): Promise<PricesResponse> {
   return request<PricesResponse>("/api/prices");
+}
+
+export function getAllPrices(): Promise<AllPricesResponse> {
+  return request<AllPricesResponse>("/api/prices/all");
 }
 
 export function getRulesLibrary(): Promise<RulesLibrary> {

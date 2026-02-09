@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import Link from "next/link";
 import {
   getAlerts,
   getAlertStats,
@@ -349,7 +350,7 @@ export default function DashboardPage() {
       </div>
 
       {/* ─── Market Price Cards ─── */}
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
         {PRICE_KEYS.map((key) => {
           const priceItem: PriceItem | undefined = prices?.prices?.[key];
           const fallback = PRICE_FALLBACK[key];
@@ -377,6 +378,18 @@ export default function DashboardPage() {
             </div>
           );
         })}
+        <Link
+          href="/prices"
+          className="card flex flex-col items-center justify-center text-center transition-colors hover:border-gold-500 hover:bg-gold-50 dark:hover:border-gold-600 dark:hover:bg-gold-900/20"
+        >
+          <span className="text-2xl">📊</span>
+          <span className="mt-2 text-sm font-medium text-gold-600 dark:text-gold-400">
+            بیشتر
+          </span>
+          <span className="mt-0.5 text-xs text-gray-400">
+            طلا، ارز، رمزارز
+          </span>
+        </Link>
       </div>
 
       {/* ─── Sentiment Score + Stats Row ─── */}
