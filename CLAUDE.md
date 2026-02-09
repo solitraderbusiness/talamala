@@ -76,7 +76,7 @@ The repo contains two sub-projects:
 
 | Service | Image / Build | Port | Purpose |
 |---------|---------------|------|---------|
-| `db` | `postgres:16-alpine` | 5432 | Primary data store (7 tables) |
+| `db` | `postgres:16-alpine` | 5432 | Primary data store (8 tables) |
 | `redis` | `redis:7-alpine` | 6379 | Dedup cache, worker lock |
 | `api` | `api/Dockerfile` (Python 3.12) | 8000 | FastAPI REST API + startup migrations |
 | `worker` | Same image as `api` | — | Periodic fetch-match-alert pipeline (60s cycle) |
@@ -114,7 +114,7 @@ talamala/
 │   │   ├── main.py                              ← FastAPI app factory + startup lifecycle
 │   │   ├── config.py                            ← Pydantic settings (env vars)
 │   │   ├── database.py                          ← SQLAlchemy async/sync engines
-│   │   ├── models.py                            ← ORM models (7 tables)
+│   │   ├── models.py                            ← ORM models (8 tables)
 │   │   ├── schemas.py                           ← Pydantic request/response schemas
 │   │   ├── auth.py                              ← JWT + bcrypt authentication
 │   │   ├── seed.py                              ← Standalone data seeder script
@@ -130,6 +130,8 @@ talamala/
 │   │   │   ├── sources.py                       ← CRUD + fetch-now + logs (admin-only)
 │   │   │   ├── admin.py                         ← Login, settings, user info
 │   │   │   ├── rules.py                         ← Rule library + single rule
+│   │   │   ├── prices.py                        ← Real-time prices via TGJU API
+│   │   │   ├── sentiment.py                     ← Multi-timeframe sentiment analysis + history
 │   │   │   └── health.py                        ← Health check (DB + Redis + rules)
 │   │   ├── rule_engine/
 │   │   │   ├── __init__.py                      ← Public API re-exports
@@ -181,7 +183,8 @@ talamala/
 │           ├── components/
 │           │   ├── TopBar.tsx                   ← Navigation bar + links
 │           │   ├── AlertCard.tsx                ← Alert summary card
-│           │   ├── RiskGauge.tsx                ← SVG circular risk gauge (0-100)
+│           │   ├── RiskGauge.tsx                ← SVG half-circle sentiment gauge (0-100)
+│           │   ├── SentimentChart.tsx            ← SVG sentiment history line chart
 │           │   └── SeverityBadge.tsx            ← Colored severity label
 │           └── lib/
 │               ├── api.ts                       ← API client + TypeScript types
@@ -247,8 +250,10 @@ docker compose up -d
 ### Startup Sequence
 1. API runs Alembic migrations (`upgrade head`)
 2. Seeds default admin user if not exists
-3. Takes a snapshot of the YAML rules file
-4. Worker starts 60-second fetch cycle
+3. Creates `sentiment_scores` table if not exists (via `checkfirst=True`)
+4. Takes a snapshot of the YAML rules file
+5. Runs one-time dedup flush (versioned marker `v7`) to reset Redis dedup after rule changes
+6. Worker starts 60-second fetch cycle
 
 ### Running Tests
 ```bash
@@ -264,8 +269,11 @@ python -m pytest api/tests/ -v
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/api/alerts` | List alerts (filterable: severity, time_horizon, asset, q, from_date, to_date; paginated: limit, offset) |
-| `GET` | `/api/alerts/stats/today` | Today's stats: risk score, severity counts, top 3 alerts |
+| `GET` | `/api/alerts/stats/today` | Today's stats: sentiment score, severity counts, top 3 alerts, sections |
 | `GET` | `/api/alerts/{id}` | Single alert detail |
+| `GET` | `/api/prices` | Real-time gold, USD, coin prices via TGJU (30s cache) |
+| `GET` | `/api/sentiment` | Multi-timeframe sentiment analysis (1h, 4h, 24h) with numeric scores |
+| `GET` | `/api/sentiment/history` | Historical sentiment scores for charting (params: timeframe, hours) |
 | `GET` | `/api/rules/library` | All rules grouped by section |
 | `GET` | `/api/rules/{rule_id}` | Single rule with full metadata |
 | `GET` | `/api/health` | Health check: DB, Redis, rules count, last worker run |
@@ -287,8 +295,19 @@ python -m pytest api/tests/ -v
 | `GET` | `/api/sources/{id}/logs` | Fetch logs (last 50) |
 | `GET` | `/api/sources/{id}/raw-items` | Raw items (last 50, searchable) |
 
-### Risk Score Calculation
-Risk score (0-100) = sum of: `high * 15 + medium * 7 + low * 2`, capped at 100.
+### Sentiment Score
+The dashboard's "شاخص احساسات" gauge shows a 0-100 numeric sentiment score per timeframe (1h, 4h, 24h):
+- **very_bullish** = 90, **bullish** = 70, **neutral** = 50, **bearish** = 30, **very_bearish** = 10
+- Scores are persisted to the `sentiment_scores` table on each sentiment API call
+- The `/api/alerts/stats/today` endpoint returns the latest 4h score as `risk_score`
+- Historical scores can be retrieved via `/api/sentiment/history?timeframe=4h&hours=48`
+
+### Prices API
+Real-time prices from TGJU (تی‌جی‌یو) with 30-second cache:
+- **Primary endpoint**: `https://call4.tgju.org/ajax.json` — returns all prices in one call
+- **Fallback**: Individual `api.tgju.org/v1/market/indicator/summary-table-data/{slug}` endpoints
+- Returns: gold_global (USD/oz), gold_18k (toman/gram), usd (toman), emami_coin (toman)
+- Each price includes: `value`, `formatted`, `change`, `change_pct`, `direction` (up/down/flat)
 
 ## 7. Data Sources
 
@@ -299,18 +318,25 @@ Risk score (0-100) = sum of: `high * 15 + medium * 7 + low * 2`, capped at 100.
 | `html` | `HTMLFetcher` | BeautifulSoup text extraction (supports CSS selectors via `metadata.css_selector`) |
 | `json` | `JSONFetcher` | Configurable field mapping via `metadata` (`title_field`, `url_field`, `content_field`, `date_field`, `items_path`) |
 
-### Pre-seeded Example Sources
-1. **Reuters Gold News** (RSS) — global gold, poll: 120s
-2. **تجارت‌نیوز** (HTML) — Iran gold/coin, poll: 180s
-3. **Kitco Gold News** (RSS) — global gold, poll: 120s
-4. **TSETMC / کدال** (JSON API) — gold funds, poll: 300s (disabled)
+### Configured News Sources
+The worker fetches from these RSS sources (Google News in Persian):
+1. **اخبار طلای جهانی** (RSS) — `news.google.com/rss/search?q=طلای+جهانی&hl=fa` — poll: 120s
+2. **اخبار دلار و ارز** (RSS) — `news.google.com/rss/search?q=قیمت+دلار+ارز&hl=fa` — poll: 120s
+3. **اخبار سکه و طلای داخلی** (RSS) — `news.google.com/rss/search?q=سکه+طلا+ایران&hl=fa` — poll: 120s
+4. **اخبار صندوق‌های طلا** (RSS) — `news.google.com/rss/search?q=صندوق+طلا+بورس&hl=fa` — poll: 180s
+5. **Reuters Gold** (RSS) — `news.google.com/rss/search?q=gold+price+reuters` — poll: 120s
+6. **Kitco Gold** (RSS) — `news.google.com/rss/search?q=gold+kitco+price` — poll: 120s
+7. **Bloomberg Commodities** (RSS) — `news.google.com/rss/search?q=gold+commodities+bloomberg` — poll: 180s
+8. **CNBC Gold** (RSS) — `news.google.com/rss/search?q=gold+cnbc+market` — poll: 180s
+9. **Investing.com Gold** (RSS) — `news.google.com/rss/search?q=gold+investing.com+price` — poll: 120s
 
 ### External APIs
-- **OpenRouter** (`https://openrouter.ai/api/v1/chat/completions`) — Persian text generation for alert summaries. Only called when `enable_llm` setting is `true` AND `OPENROUTER_API_KEY` is set.
+- **OpenRouter** (`https://openrouter.ai/api/v1/chat/completions`) — Persian text generation for alert summaries and sentiment analysis. Only called when `OPENROUTER_API_KEY` is set.
+- **TGJU** (`https://call4.tgju.org/ajax.json`) — Real-time gold, USD, and coin prices for Iranian market. No API key required.
 
 ## 8. Database Schema
 
-**7 tables**, all using UUID primary keys and UTC timestamps.
+**8 tables**, all using UUID primary keys and UTC timestamps.
 
 ### sources
 Configurable data sources for the worker to fetch.
@@ -410,6 +436,20 @@ YAML version tracking (SHA-256 hash of content).
 | `yaml_content` | TEXT | Full YAML content |
 | `loaded_at` | TIMESTAMPTZ | |
 
+### sentiment_scores
+Historical sentiment scores for charting (created by sentiment API on each call).
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | UUID | PK |
+| `timeframe` | VARCHAR(10) | `1h`, `4h`, `24h` |
+| `score` | INTEGER | 0-100 numeric score |
+| `sentiment` | VARCHAR(20) | `very_bullish`, `bullish`, `neutral`, `bearish`, `very_bearish` |
+| `sentiment_label` | VARCHAR(50) | Persian label (e.g., صعودی) |
+| `alert_count` | INTEGER | Number of alerts in that window |
+| `created_at` | TIMESTAMPTZ | Auto-set to now() |
+
+Indexed on `(timeframe, created_at)` for efficient history queries.
+
 ### Relationships
 - `sources` → `raw_items` (one-to-many, CASCADE delete)
 - `sources` → `fetch_logs` (one-to-many, CASCADE delete)
@@ -463,33 +503,32 @@ YAML version tracking (SHA-256 hash of content).
 
 ### Working
 - Full Docker Compose orchestration (5 services with health checks)
-- API with all endpoints (alerts, sources, admin, rules, health)
-- Database schema with Alembic migration
-- Worker pipeline: fetch → dedup → match → alert
+- API with all endpoints (alerts, sources, admin, rules, health, prices, sentiment)
+- Database schema with Alembic migration + startup table creation
+- Worker pipeline: fetch → dedup → match → alert (60s cycle)
 - Three fetcher types (RSS, HTML, JSON)
 - Deterministic rule engine with 32+ rules
 - Persian text normalization for matching
 - JWT authentication for admin endpoints
-- Web dashboard with alert feed, risk gauge, filters
+- Web dashboard with:
+  - Real-time price cards (gold, USD, coin) with change % and directional colors
+  - Multi-timeframe sentiment gauge (1h/4h/Daily) with chart toggle
+  - Categorized alert sections (global_gold, iran_gold, coin, gold_funds)
+  - Alert feed with severity/time-horizon filters and pagination
+  - Auto-refresh (60s for data, 5min for sentiment)
 - Admin panel (sources CRUD, settings, login)
 - Alert detail page with impact matrix
 - Rule library browser
 - Deduplication (Redis + DB)
-- OpenRouter LLM integration (optional)
-- Rule engine unit tests (matcher, severity, alert_builder)
-
-### In Progress / Incomplete
-- Market price cards on dashboard show `---` (no real-time price feed connected)
-- `fetch-now` endpoint references `api.fetcher.run_fetch` which doesn't exist (gracefully degrades)
-- The fetcher registry maps `"json"` but the source type enum includes `"json_api"` — potential mismatch when worker processes `json_api` sources
-- The `gold-monitor/` prototype uses mock data only; not connected to the backend
+- OpenRouter LLM integration for sentiment analysis and alert summaries
+- Sentiment scoring system (0-100) with historical persistence
+- Rule engine unit tests (matcher, severity, alert_builder) — 105 tests passing
 
 ### Known Issues
 - CORS is fully permissive (`allow_origins=["*"]`) — needs restriction for production
-- `seed.py` is a standalone script (run via `python -m api.seed`) separate from the `main.py` startup seeder
 - Passwords are truncated to 72 bytes for bcrypt compatibility (`auth.py:_truncate_for_bcrypt`)
-- The worker's `_call_llm` method uses a different model (`openai/gpt-4o-mini`) than the `OpenRouterClient` which reads model from settings — two separate LLM code paths exist
 - Web frontend's `fetchSourceNow` calls `/api/sources/{id}/fetch` but the API route is `/api/sources/{id}/fetch-now`
+- The `gold-monitor/` prototype uses mock data only; not connected to the backend
 
 ## 11. Common Tasks
 
@@ -556,3 +595,106 @@ python -m pytest api/tests/ -v
 ```bash
 docker compose exec db psql -U goldmon -d goldmonitor
 ```
+
+### Useful SQL Queries
+```sql
+-- Count alerts by severity
+SELECT severity, COUNT(*) FROM alerts GROUP BY severity;
+
+-- Recent alerts
+SELECT title, severity, created_at FROM alerts ORDER BY created_at DESC LIMIT 10;
+
+-- Check sentiment scores
+SELECT timeframe, score, sentiment_label, alert_count, created_at
+FROM sentiment_scores ORDER BY created_at DESC LIMIT 20;
+
+-- Check source fetch status
+SELECT name, type, enabled, last_fetched_at, last_success_at, last_error
+FROM sources ORDER BY name;
+
+-- Count raw items per source
+SELECT s.name, COUNT(r.id) as items
+FROM sources s LEFT JOIN raw_items r ON s.id = r.source_id
+GROUP BY s.name ORDER BY items DESC;
+
+-- Clear dedup cache (forces re-processing of all items)
+-- Run in Redis: FLUSHDB
+-- Or bump the dedup flush version in api/main.py
+```
+
+## 12. Server & Deployment
+
+### Production Server
+The system runs on a server accessible at the configured domain. All services run via Docker Compose.
+
+### Deploying Updates
+After pushing code changes to the git branch:
+```bash
+# SSH into server, then:
+cd ~/projects/talamala
+git pull origin claude/analyze-project-structure-m8YuH
+cd gold-monitor-system
+docker compose up -d --build
+```
+
+This rebuilds all changed images and restarts containers. The API automatically runs migrations and seeds on startup.
+
+### Monitoring
+```bash
+# Check all services are running
+docker compose ps
+
+# Watch worker cycles in real-time
+docker compose logs -f worker
+
+# Check API health
+curl http://localhost:8000/api/health
+
+# Check recent fetch logs
+docker compose exec db psql -U goldmon -d goldmonitor -c \
+  "SELECT s.name, f.status, f.items_fetched_count, f.started_at FROM fetch_logs f JOIN sources s ON f.source_id = s.id ORDER BY f.started_at DESC LIMIT 20;"
+```
+
+### Troubleshooting
+
+**No alerts appearing:**
+- Check worker logs: `docker compose logs -f worker`
+- Verify sources are enabled: Admin panel → Sources
+- Check MIN_MATCH_SCORE threshold (currently 0.18 in `worker/main.py`)
+- Redis dedup might be blocking: bump dedup flush version in `api/main.py` and restart
+
+**Prices not updating:**
+- TGJU API (`call4.tgju.org/ajax.json`) is the primary source
+- Some prices (دلار, سکه, طلای ۱۸ عیار) only update during Iran market hours (~9 AM to 6 PM IRST)
+- طلای جهانی (global gold) updates 24/7
+- Cache TTL is 30 seconds
+
+**Sentiment score stuck at 50 (neutral):**
+- Sentiment requires alerts to exist — if no alerts, fallback is neutral
+- LLM sentiment analysis requires `OPENROUTER_API_KEY` to be set
+- Without LLM, rule-based fallback is used (less nuanced)
+- Check: `docker compose logs api | grep -i sentiment`
+
+**Docker disk space:**
+```bash
+docker system prune -f           # Clean unused images/containers
+docker volume ls                 # List volumes
+```
+
+## 13. Critical Rules for Development
+
+### NEVER Do These
+1. **NEVER add `DELETE FROM alerts` or `DELETE FROM raw_items` to migrations** — this wipes all user data on deploy. Migrations run on every startup.
+2. **NEVER change matching rules and expect old alerts to update** — old alerts stay as-is. Only new items will match with new rules.
+3. **NEVER force-push to the main branch** without explicit permission.
+
+### Safe Operations
+- **Redis FLUSHDB** is safe — it only clears dedup cache, causing items to be re-fetched and re-processed (no data loss)
+- **Bumping dedup flush version** in `api/main.py` triggers a one-time Redis flush on next startup
+- **Adding new columns** to existing tables should use `checkfirst=True` pattern (see `_create_sentiment_scores_table` in `main.py`)
+
+### Match Score Tuning
+- `MIN_MATCH_SCORE = 0.18` in `worker/main.py` — controls minimum threshold for alerts
+- Match score = 60% keyword ratio + 40% signal ratio
+- Example: 1 keyword match on 3-keyword rule = 0.2 (passes); 1 keyword on 6-keyword rule = 0.1 (rejected)
+- Lowering this too much → spam alerts; raising too high → missed alerts

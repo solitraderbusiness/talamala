@@ -16,6 +16,7 @@ import {
 } from "@/lib/api";
 import AlertCard from "@/components/AlertCard";
 import RiskGauge from "@/components/RiskGauge";
+import SentimentChart from "@/components/SentimentChart";
 import SeverityBadge from "@/components/SeverityBadge";
 
 const PRICE_KEYS = ["gold_global", "gold_18k", "usd", "emami_coin"] as const;
@@ -81,6 +82,7 @@ export default function DashboardPage() {
   const [page, setPage] = useState(0);
   const [activeSection, setActiveSection] = useState<string | null>(null);
   const [sentimentTab, setSentimentTab] = useState<"1h" | "4h" | "24h">("4h");
+  const [gaugeView, setGaugeView] = useState<"gauge" | "chart">("gauge");
   const limit = 10;
 
   const fetchAlerts = useCallback(async () => {
@@ -363,12 +365,58 @@ export default function DashboardPage() {
 
       {/* ─── Sentiment Score + Stats Row ─── */}
       <div className="grid gap-4 md:grid-cols-3">
-        {/* Sentiment score gauge */}
-        <div className="card flex flex-col items-center justify-center">
-          <h3 className="mb-3 text-sm font-medium text-gray-600 dark:text-gray-400">
-            شاخص احساسات
-          </h3>
-          <RiskGauge score={stats?.risk_score ?? 50} />
+        {/* Sentiment score gauge / chart */}
+        <div className="card flex flex-col">
+          <div className="mb-2 flex items-center justify-between">
+            <h3 className="text-sm font-medium text-gray-600 dark:text-gray-400">
+              شاخص احساسات
+            </h3>
+            <button
+              onClick={() => setGaugeView(gaugeView === "gauge" ? "chart" : "gauge")}
+              className="rounded-md p-1 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-800"
+              title={gaugeView === "gauge" ? "نمودار" : "گیج"}
+            >
+              {gaugeView === "gauge" ? (
+                <svg className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                  <path d="M2 11a1 1 0 011-1h2a1 1 0 011 1v5a1 1 0 01-1 1H3a1 1 0 01-1-1v-5zm6-4a1 1 0 011-1h2a1 1 0 011 1v9a1 1 0 01-1 1H9a1 1 0 01-1-1V7zm6-3a1 1 0 011-1h2a1 1 0 011 1v12a1 1 0 01-1 1h-2a1 1 0 01-1-1V4z" />
+                </svg>
+              ) : (
+                <svg className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clipRule="evenodd" />
+                </svg>
+              )}
+            </button>
+          </div>
+          {/* Timeframe buttons */}
+          <div className="mb-2 flex justify-center gap-1">
+            {(["1h", "4h", "24h"] as const).map((tf) => (
+              <button
+                key={tf}
+                onClick={() => setSentimentTab(tf)}
+                className={`rounded-md px-2.5 py-0.5 text-[11px] font-medium transition-colors ${
+                  sentimentTab === tf
+                    ? "bg-gold-600 text-white"
+                    : "text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800"
+                }`}
+              >
+                {tf === "24h" ? "روزانه" : tf}
+              </button>
+            ))}
+          </div>
+          {/* Gauge or Chart view */}
+          <div className="flex flex-1 items-center justify-center">
+            {gaugeView === "gauge" ? (
+              <RiskGauge
+                score={
+                  sentiment?.timeframes?.[sentimentTab]?.score ??
+                  stats?.risk_score ??
+                  50
+                }
+              />
+            ) : (
+              <SentimentChart timeframe={sentimentTab} hours={48} height={130} />
+            )}
+          </div>
         </div>
 
         {/* Alert counts */}
