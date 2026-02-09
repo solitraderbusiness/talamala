@@ -500,13 +500,13 @@ export default function DashboardPage() {
           <h2 className="mb-3 text-lg font-bold text-gray-900 dark:text-gray-100">
             دسته‌بندی هشدارها
           </h2>
-          {/* Section tabs */}
+          {/* Section filter tabs */}
           <div className="mb-4 flex flex-wrap gap-2">
             <button
               onClick={() => setActiveSection(null)}
-              className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+              className={`rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${
                 activeSection === null
-                  ? "bg-gold-600 text-white"
+                  ? "bg-gold-600 text-white shadow-sm"
                   : "bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-400"
               }`}
             >
@@ -516,9 +516,9 @@ export default function DashboardPage() {
               <button
                 key={sec.id}
                 onClick={() => setActiveSection(sec.id === activeSection ? null : sec.id)}
-                className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+                className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${
                   activeSection === sec.id
-                    ? "bg-gold-600 text-white"
+                    ? "bg-gold-600 text-white shadow-sm"
                     : "bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-400"
                 }`}
               >
@@ -527,54 +527,76 @@ export default function DashboardPage() {
                 <span className="rounded-full bg-black/10 px-1.5 text-[10px] dark:bg-white/10">
                   {sec.total}
                 </span>
-                {sec.high > 0 && (
-                  <span className="rounded-full bg-red-500/20 px-1.5 text-[10px] text-red-600 dark:text-red-400">
-                    {sec.high}
-                  </span>
-                )}
               </button>
             ))}
           </div>
 
-          {/* Section cards */}
-          <div className="space-y-4">
-            {displayedSections.map((sec) => (
-              <div key={sec.id} className="card">
-                <div className="mb-3 flex items-center justify-between">
-                  <h3 className="flex items-center gap-2 text-sm font-bold text-gray-900 dark:text-gray-100">
-                    <span>{sec.icon}</span>
-                    {sec.label}
-                    <span className="text-xs font-normal text-gray-400">
-                      ({sec.total} هشدار)
-                    </span>
-                  </h3>
-                  {sec.high > 0 && (
-                    <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700 dark:bg-red-900/30 dark:text-red-400">
-                      {sec.high} مهم
-                    </span>
+          {/* Section grid — 2 columns on desktop */}
+          <div className="grid gap-4 md:grid-cols-2">
+            {displayedSections.map((sec) => {
+              const visibleAlerts = sec.alerts
+                .filter((a) => a.severity !== "low")
+                .slice(0, 4);
+              return (
+                <div
+                  key={sec.id}
+                  className="rounded-xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-900"
+                >
+                  {/* Section header */}
+                  <div className="flex items-center justify-between border-b border-gray-100 px-4 py-3 dark:border-gray-800">
+                    <h3 className="flex items-center gap-2 text-sm font-bold text-gray-900 dark:text-gray-100">
+                      <span>{sec.icon}</span>
+                      {sec.label}
+                    </h3>
+                    <div className="flex items-center gap-2">
+                      {sec.high > 0 && (
+                        <span className="rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-bold text-red-700 dark:bg-red-900/30 dark:text-red-400">
+                          {sec.high} مهم
+                        </span>
+                      )}
+                      <span className="text-[10px] text-gray-400">
+                        {sec.total} هشدار
+                      </span>
+                    </div>
+                  </div>
+                  {/* Alert rows */}
+                  <div className="divide-y divide-gray-50 dark:divide-gray-800/50">
+                    {visibleAlerts.length > 0 ? (
+                      visibleAlerts.map((alert) => (
+                        <AlertCard key={alert.id} alert={alert} compact />
+                      ))
+                    ) : (
+                      <p className="py-6 text-center text-xs text-gray-400">
+                        هشدار مهمی در این دسته نیست
+                      </p>
+                    )}
+                  </div>
+                  {/* "See all" footer */}
+                  {sec.total > 4 && (
+                    <div className="border-t border-gray-100 px-4 py-2 text-center dark:border-gray-800">
+                      <button
+                        onClick={() => {
+                          setActiveSection(sec.id);
+                          setSeverity("");
+                          setPage(0);
+                          // Scroll to the feed section
+                          document.getElementById("alert-feed")?.scrollIntoView({ behavior: "smooth" });
+                        }}
+                        className="text-xs font-medium text-gold-600 hover:text-gold-700 dark:text-gold-400"
+                      >
+                        مشاهده همه {sec.total} هشدار ←
+                      </button>
+                    </div>
                   )}
                 </div>
-                <div className="space-y-2">
-                  {sec.alerts
-                    .filter((a) => a.severity !== "low")
-                    .slice(0, 3)
-                    .map((alert) => (
-                      <AlertCard key={alert.id} alert={alert} compact />
-                    ))}
-                  {sec.alerts.filter((a) => a.severity !== "low").length === 0 && (
-                    <p className="py-2 text-center text-xs text-gray-400">
-                      هشدار مهمی در این دسته نیست
-                    </p>
-                  )}
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
 
       {/* ─── Full Alert Feed ─── */}
-      <div>
+      <div id="alert-feed">
         <h2 className="mb-4 text-lg font-bold text-gray-900 dark:text-gray-100">
           فید هشدارها
         </h2>

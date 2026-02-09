@@ -63,15 +63,20 @@ function getAlertDirection(alert: Alert): Direction {
   }
   const text = ((alert.title || "") + " " + (alert.summary_fa || "")).toLowerCase();
   const bullishPatterns = [
-    "rises", "rally", "surges", "gains", "climbs", "jumps", "soars",
-    "record high", "rate cut", "dovish", "safe haven",
-    "صعود", "افزایش قیمت", "رشد", "جهش", "بالا رفت", "رکورد",
-    "کاهش نرخ بهره", "تحریم", "بازگشت به بالا",
+    "gold rises", "gold surges", "gold rallies", "gold jumps", "gold soars",
+    "gold climbs", "gold gains", "gold hits record", "gold all-time high",
+    "gold safe haven", "gold demand", "rate cut", "dovish",
+    "طلا صعود", "طلا افزایش یافت", "قیمت طلا بالا", "رشد قیمت طلا",
+    "رکورد قیمت طلا", "رکورد طلا", "جهش طلا", "جهش قیمت طلا",
+    "طلا رشد کرد", "بازگشت طلا به بالا", "رشد طلا", "کاهش نرخ بهره",
   ];
   const bearishPatterns = [
-    "falls", "drops", "slips", "declines", "plunges", "sinks", "crashes",
+    "gold falls", "gold drops", "gold slips", "gold declines", "gold plunges",
+    "gold sinks", "gold crashes", "gold slides", "gold retreats",
     "rate hike", "hawkish", "stronger dollar",
-    "نزول", "کاهش قیمت", "افت", "سقوط", "ریزش", "افزایش نرخ بهره",
+    "طلا نزول", "طلا کاهش یافت", "قیمت طلا پایین", "کاهش قیمت طلا",
+    "افت طلا", "سقوط طلا", "ریزش طلا", "افت قیمت طلا",
+    "افزایش نرخ بهره", "تقویت دلار",
   ];
   const hasBull = bullishPatterns.some((p) => text.includes(p));
   const hasBear = bearishPatterns.some((p) => text.includes(p));
