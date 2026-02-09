@@ -957,6 +957,48 @@ async def _migrate_sources_v5() -> None:
         )
 
 
+async def _migrate_sources_v6() -> None:
+    """Disable Persian Google News feeds (server is outside Iran, returns 0).
+
+    Migration v5 added 3 Persian Google News feeds using hl=fa&gl=IR but
+    the server is outside Iran so Google silently overrides the locale,
+    returning 0 results for Persian queries.  Disable them.
+
+    Runs once (tracked via settings marker).
+    """
+    marker_key = "migration:sources_v6"
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            text("SELECT key FROM settings WHERE key = :k"),
+            {"k": marker_key},
+        )
+        if result.scalar_one_or_none() is not None:
+            return
+
+        disabled = 0
+        for name in (
+            "Google News \u2014 \u0642\u06cc\u0645\u062a \u0637\u0644\u0627 \u0648 \u0633\u06a9\u0647",
+            "Google News \u2014 \u062f\u0644\u0627\u0631 \u0648 \u0627\u0631\u0632",
+            "Google News \u2014 \u0628\u0627\u0632\u0627\u0631 \u0637\u0644\u0627 \u0648 \u062c\u0648\u0627\u0647\u0631 \u0627\u06cc\u0631\u0627\u0646",
+        ):
+            result = await session.execute(
+                select(Source).where(Source.name == name)
+            )
+            source = result.scalar_one_or_none()
+            if source is not None:
+                source.enabled = False
+                source.notes = (source.notes or "") + " — غیرفعال (سرور خارج ایران)"
+                disabled += 1
+
+        await session.execute(
+            text("INSERT INTO settings (key, value, updated_at) "
+                 "VALUES (:k, '\"done\"', NOW())"),
+            {"k": marker_key},
+        )
+        await session.commit()
+        logger.info("Migration v6: disabled %d broken Persian feeds.", disabled)
+
+
 async def _create_sentiment_scores_table() -> None:
     """Create the sentiment_scores table if it doesn't exist.
 
@@ -976,7 +1018,7 @@ async def _flush_dedup_keys() -> None:
     Uses a marker key ``dedup:flushed:v2`` to avoid re-flushing on
     subsequent restarts.
     """
-    marker = "dedup:flushed:v8"
+    marker = "dedup:flushed:v9"
     try:
         r = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
         if await r.exists(marker):
@@ -1017,6 +1059,7 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     await _migrate_sources_v3()
     await _migrate_sources_v4()
     await _migrate_sources_v5()
+    await _migrate_sources_v6()
     await _create_sentiment_scores_table()
     await _flush_dedup_keys()
     await _snapshot_rules()
