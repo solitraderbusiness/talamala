@@ -23,8 +23,8 @@ const PRICE_KEYS = ["gold_global", "gold_18k", "usd", "emami_coin"] as const;
 
 /** How often to poll for new data (ms) */
 const REFRESH_INTERVAL_MS = 60_000;
-/** How often to refresh sentiment (ms) — less frequent since it uses LLM */
-const SENTIMENT_INTERVAL_MS = 300_000;
+/** Fallback sentiment refresh if no new alerts arrive (ms) */
+const SENTIMENT_FALLBACK_MS = 120_000;
 
 const PRICE_FALLBACK: Record<string, { label: string; unit: string; icon: string }> = {
   gold_global: { label: "طلای جهانی", unit: "USD/oz", icon: "🌍" },
@@ -74,6 +74,8 @@ export default function DashboardPage() {
   const [autoRefresh, setAutoRefresh] = useState(true);
   const refreshTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const sentimentTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  /** Track previous alert total to detect new arrivals */
+  const prevAlertTotal = useRef<number>(-1);
 
   // Filters
   const [severity, setSeverity] = useState("medium+");
@@ -122,7 +124,8 @@ export default function DashboardPage() {
     }
   }, []);
 
-  /** Silently refresh all dashboard data (no loading spinner). */
+  /** Silently refresh all dashboard data (no loading spinner).
+   *  Also detects new alerts and triggers sentiment refresh. */
   const refreshAll = useCallback(async () => {
     try {
       const [statsData, , pricesData] = await Promise.allSettled([
@@ -130,13 +133,26 @@ export default function DashboardPage() {
         fetchAlerts(),
         getPrices(),
       ]);
-      if (statsData.status === "fulfilled") setStats(statsData.value);
+      if (statsData.status === "fulfilled") {
+        const newStats = statsData.value;
+        const newTotal =
+          (newStats?.counts?.high ?? 0) +
+          (newStats?.counts?.medium ?? 0) +
+          (newStats?.counts?.low ?? 0);
+
+        // If new alerts arrived, refresh sentiment immediately
+        if (prevAlertTotal.current >= 0 && newTotal > prevAlertTotal.current) {
+          fetchSentiment();
+        }
+        prevAlertTotal.current = newTotal;
+        setStats(newStats);
+      }
       if (pricesData.status === "fulfilled") setPrices(pricesData.value);
       setLastUpdated(new Date());
     } catch {
       // Silent — don't overwrite the page with an error on a background poll
     }
-  }, [fetchAlerts]);
+  }, [fetchAlerts, fetchSentiment]);
 
   // Initial load (with spinner) — sentiment loads separately to avoid blocking
   useEffect(() => {
@@ -176,7 +192,7 @@ export default function DashboardPage() {
     }
     if (autoRefresh) {
       refreshTimer.current = setInterval(refreshAll, REFRESH_INTERVAL_MS);
-      sentimentTimer.current = setInterval(fetchSentiment, SENTIMENT_INTERVAL_MS);
+      sentimentTimer.current = setInterval(fetchSentiment, SENTIMENT_FALLBACK_MS);
     }
     return () => {
       if (refreshTimer.current) clearInterval(refreshTimer.current);
@@ -281,13 +297,13 @@ export default function DashboardPage() {
         ) : activeSentiment ? (
           <div className="space-y-3">
             {/* Sentiment badge + summary */}
-            <div className={`flex items-start gap-4 rounded-lg border p-3 ${SENTIMENT_BG[activeSentiment.sentiment] || SENTIMENT_BG.neutral}`}>
+            <div className={`flex items-start gap-4 rounded-lg border p-3 transition-colors duration-500 ${SENTIMENT_BG[activeSentiment.sentiment] || SENTIMENT_BG.neutral}`}>
               <div className="text-center">
-                <div className={`text-2xl font-bold ${SENTIMENT_COLORS[activeSentiment.sentiment] || ""}`}>
+                <div className={`text-2xl font-bold transition-colors duration-500 ${SENTIMENT_COLORS[activeSentiment.sentiment] || ""}`}>
                   {activeSentiment.sentiment_label}
                 </div>
                 {activeSentiment.score !== undefined && (
-                  <div className={`mt-0.5 text-lg font-bold ${SENTIMENT_COLORS[activeSentiment.sentiment] || ""}`}>
+                  <div className={`mt-0.5 text-lg font-bold transition-colors duration-500 ${SENTIMENT_COLORS[activeSentiment.sentiment] || ""}`}>
                     {activeSentiment.score}
                   </div>
                 )}

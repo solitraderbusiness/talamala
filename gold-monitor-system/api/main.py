@@ -999,6 +999,55 @@ async def _migrate_sources_v6() -> None:
         logger.info("Migration v6: disabled %d broken Persian feeds.", disabled)
 
 
+async def _migrate_sources_v7() -> None:
+    """Speed up source polling — max 300s, gold-focused sources at 120s.
+
+    Users expect all sources to be checked within 2-5 minutes.
+    Previous setup had 7 sources at 600s (10 min) which is too slow.
+
+    Runs once (tracked via settings marker).
+    """
+    marker_key = "migration:sources_v7"
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            text("SELECT key FROM settings WHERE key = :k"),
+            {"k": marker_key},
+        )
+        if result.scalar_one_or_none() is not None:
+            return
+
+        # Speed up all enabled sources
+        fixed = 0
+        all_sources = await session.execute(
+            select(Source).where(Source.enabled == True)  # noqa: E712
+        )
+        for source in all_sources.scalars().all():
+            old_interval = source.poll_interval_seconds or 600
+            categories = list(source.categories or [])
+
+            # Gold-focused sources: 120s (2 min)
+            # Other financial sources: 180s (3 min)
+            # Max for any source: 300s (5 min)
+            if "global_gold" in categories:
+                new_interval = 120
+            elif any(c in categories for c in ("iran_gold", "coin", "gold_funds")):
+                new_interval = 180
+            else:
+                new_interval = min(old_interval, 300)
+
+            if new_interval != old_interval:
+                source.poll_interval_seconds = new_interval
+                fixed += 1
+
+        await session.execute(
+            text("INSERT INTO settings (key, value, updated_at) "
+                 "VALUES (:k, '\"done\"', NOW())"),
+            {"k": marker_key},
+        )
+        await session.commit()
+        logger.info("Migration v7: updated %d source poll intervals.", fixed)
+
+
 async def _create_sentiment_scores_table() -> None:
     """Create the sentiment_scores table if it doesn't exist.
 
@@ -1060,6 +1109,7 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     await _migrate_sources_v4()
     await _migrate_sources_v5()
     await _migrate_sources_v6()
+    await _migrate_sources_v7()
     await _create_sentiment_scores_table()
     await _flush_dedup_keys()
     await _snapshot_rules()
