@@ -1326,6 +1326,55 @@ async def _migrate_sources_v10() -> None:
         logger.info("Migration v10: disabled %d broken sources.", disabled)
 
 
+async def _migrate_sources_v11() -> None:
+    """Shorten Google News time window from 7d to 1d for fresher results.
+
+    Old feeds use when:7d which returns articles up to a week old.
+    Changing to when:1d ensures we get much fresher news.
+    Runs once (tracked via settings marker).
+    """
+    marker_key = "migration:sources_v11"
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            text("SELECT key FROM settings WHERE key = :k"),
+            {"k": marker_key},
+        )
+        if result.scalar_one_or_none() is not None:
+            return
+
+        # Find all Google News sources and update when:7d → when:1d
+        updated = 0
+        all_sources = await session.execute(
+            select(Source).where(Source.name.like("Google News%"))
+        )
+        for source in all_sources.scalars().all():
+            endpoints = list(source.endpoints or [])
+            new_endpoints = []
+            changed = False
+            for ep in endpoints:
+                if "when%3A7d" in ep:
+                    new_ep = ep.replace("when%3A7d", "when%3A1d")
+                    new_endpoints.append(new_ep)
+                    changed = True
+                elif "when:7d" in ep:
+                    new_ep = ep.replace("when:7d", "when:1d")
+                    new_endpoints.append(new_ep)
+                    changed = True
+                else:
+                    new_endpoints.append(ep)
+            if changed:
+                source.endpoints = new_endpoints
+                updated += 1
+
+        await session.execute(
+            text("INSERT INTO settings (key, value, updated_at) "
+                 "VALUES (:k, '\"done\"', NOW())"),
+            {"k": marker_key},
+        )
+        await session.commit()
+        logger.info("Migration v11: updated %d Google News feeds to when:1d.", updated)
+
+
 async def _create_sentiment_scores_table() -> None:
     """Create the sentiment_scores table if it doesn't exist.
 
@@ -1345,7 +1394,7 @@ async def _flush_dedup_keys() -> None:
     Uses a marker key ``dedup:flushed:v2`` to avoid re-flushing on
     subsequent restarts.
     """
-    marker = "dedup:flushed:v14"
+    marker = "dedup:flushed:v15"
     try:
         r = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
         if await r.exists(marker):
@@ -1391,6 +1440,7 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     await _migrate_sources_v8()
     await _migrate_sources_v9()
     await _migrate_sources_v10()
+    await _migrate_sources_v11()
     await _create_sentiment_scores_table()
     await _flush_dedup_keys()
     await _snapshot_rules()

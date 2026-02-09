@@ -70,7 +70,7 @@ FETCH_TIMEOUT = 30  # per-request HTTP timeout (seconds)
 MAX_ALERTS_PER_SOURCE = 10  # prevent any single source from flooding
 MIN_MATCH_SCORE = 0.10  # lowered from 0.18 to capture English title-only content
 HIGH_CONFIDENCE_SCORE = 0.30  # above this, skip LLM relevance check
-MAX_ARTICLE_AGE_HOURS = 48  # skip RSS items older than this
+MAX_ARTICLE_AGE_HOURS = 6  # skip RSS items older than 6 hours for freshness
 
 logger = logging.getLogger("worker")
 
