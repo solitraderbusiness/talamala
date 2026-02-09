@@ -1,0 +1,80 @@
+# Talamala (طلاملا) — Implementation Progress
+
+> Safe checkpoint tag: `safe-checkpoint-2026-02-09`
+> To restore: `git checkout safe-checkpoint-2026-02-09`
+
+---
+
+## Phase 1 — Fix What's Broken (اول درست کن)
+
+These are features that already exist in the design/prototype but are broken or dropped in the production system. No new architecture needed.
+
+| # | Feature | Description | Status | Notes |
+|---|---------|-------------|--------|-------|
+| 1 | **Fix News Source Reliability** | Get stable Persian + English gold news feeds that don't break. This is the heart of the system — everything depends on it. | ⬜ Not Started | Multiple feeds disabled/broken. Google News switched between EN/FA. Kitco disabled. Many fix commits around failing sources. |
+| 2 | **Impact Matrix per Alert** | Each alert should show its effect on all 4 assets (global gold, iran gold, coin, gold funds). Data exists in YAML `impact_hypothesis`, just not displayed. | ⬜ Not Started | Was fully built in `gold-monitor/` prototype as `ImpactMatrix.tsx`. Dropped in `gold-monitor-system/`. |
+| 3 | **Glossary Tooltips** | Restore the 18-term glossary (FOMC, CPI, QE, NAV, ETF, RSI, etc.) with hover tooltips so users understand financial terms. | ⬜ Not Started | Was in prototype as `Tooltip.tsx` + `GlossaryText`. 18 terms defined in `constants.ts`. |
+| 4 | **Cause-Effect Maps** | Restore visual diagrams: محرک→مکانیزم→اثر (Driver→Mechanism→Effect). Shows users WHY an event matters for gold. | ⬜ Not Started | Was in prototype as `CauseEffect.tsx`. 3 hardcoded examples existed. |
+| 5 | **Mode Switch (کوتاه/حرفه‌ای)** | Toggle between beginner and professional view. Beginners get simpler cards, professionals see rule IDs, confidence, match evidence. | ⬜ Not Started | Was in prototype as `ModeSwitch.tsx` + `AppContext.tsx`. |
+| 6 | **Event Calendar Page** | Show upcoming scheduled macro events (FOMC, CPI, NFP, ECB, etc.). Data already defined in YAML `scheduled_events`. | ⬜ Not Started | YAML has full list: CPI, Core CPI, PCE, Core PCE, PPI, NFP, GDP, PMI, ISM, Retail Sales + 4 central bank meetings. |
+
+---
+
+## Phase 2 — Complete the Core (تکمیل هسته)
+
+Features that need some new code but complete the existing product.
+
+| # | Feature | Description | Status | Notes |
+|---|---------|-------------|--------|-------|
+| 7 | **Per-Market Pages** | Bring back `/market/[marketId]` for each of the 4 assets. Price header, top alerts, tabs for news/technical/fundamental. | ⬜ Not Started | Was fully built in `gold-monitor/` prototype. Dropped in production. |
+| 8 | **Coin — Bubble (حباب) Calculation** | Compute سکه intrinsic value vs market price to show حباب percentage. Formula: `حباب = (قیمت بازار - ارزش ذاتی) / ارزش ذاتی × 100`. | ⬜ Not Started | Price data exists (emami_coin from TGJU/BrsAPI). Need intrinsic value formula: `ارزش ذاتی = (وزن طلا × قیمت طلای ۱۸ عیار) + حق ضرب`. |
+| 9 | **Coin — Auction (حراج) Tracking** | Monitor and alert on central bank coin auction announcements (بانک کارگشایی, مرکز مبادله). | ⬜ Not Started | Rule `COIN_CB_AUCTIONS` exists in YAML but no data source feeds it. |
+| 10 | **Watchlist / Saved Filters** | Let users save custom filter presets and asset watchlists. | ⬜ Not Started | Was in prototype `AppContext.tsx` with 2 default watchlists. |
+
+---
+
+## Phase 3 — Gold Funds (صندوق‌های طلا)
+
+Entirely new vertical. Needs new data sources, new APIs, new UI.
+
+| # | Feature | Description | Status | Notes |
+|---|---------|-------------|--------|-------|
+| 11 | **Gold Funds — Data Pipeline** | Integrate TSETMC/Codal APIs for real fund data (NAV, price, volume, premium/discount). | ⬜ Not Started | TSETMC source exists in seed but is **disabled** with note "غیرفعال تا تنظیم endpoint". |
+| 12 | **Gold Funds — Dashboard Price Card** | Add gold fund prices to the dashboard alongside the existing 4 cards. | ⬜ Not Started | Dashboard only shows: طلای جهانی, طلای ۱۸ عیار, دلار, سکه امامی. No fund prices. |
+| 13 | **Gold Funds — Enable FUNDS_* Rules** | Wire up the 4 gold fund alert rules (NAV_PREMIUM, FLOW_VOLUME, CAPITAL_MARKET_NEWS, CODAL_NOTICES) to real data. | ⬜ Not Started | Rules defined in YAML but can never trigger — no data flows into them. |
+| 14 | **Codal Integration** | Connect to Codal for gold fund announcements: unit creation/redemption, symbol halt/resume, prospectus changes. | ⬜ Not Started | No Codal connector exists at all. |
+
+---
+
+## Phase 4 — Polish & Growth (توسعه)
+
+Nice-to-have features for future development.
+
+| # | Feature | Description | Status | Notes |
+|---|---------|-------------|--------|-------|
+| 15 | **Technical Analysis — Basic** | Price history storage + basic indicators (support/resistance, volatility shock). | ⬜ Not Started | 5 technical signals defined in YAML but zero implementation. |
+| 16 | **Technical Analysis — Full** | RSI, MACD, MA200 computation and alerts. | ⬜ Not Started | Depends on #15. |
+| 17 | **Push/Desktop Notifications** | Browser notifications for high-severity alerts. | ⬜ Not Started | |
+| 18 | **Telegram/Email Alerts** | External notification channels. | ⬜ Not Started | |
+| 19 | **CLAUDE.md + README** | Proper project documentation on main branch. | ⬜ Not Started | README is empty. CLAUDE.md only on feature branch. |
+| 20 | **PWA Support** | Installable on mobile as Progressive Web App. | ⬜ Not Started | |
+
+---
+
+## Asset Coverage Summary
+
+| Asset | Price Data | Alerts | Dedicated Page | Special Features | Overall |
+|-------|-----------|--------|---------------|-----------------|---------|
+| طلای جهانی (XAUUSD) | ✅ BrsAPI/TGJU | ⚠️ Unreliable feeds | ⬜ No | ⬜ No technical signals | ⚠️ Partial |
+| طلای ایران (18k) | ✅ BrsAPI/TGJU | ⚠️ Unreliable feeds | ⬜ No | — | ⚠️ Partial |
+| دلار (USD/USDT) | ✅ BrsAPI/TGJU | ⚠️ Unreliable feeds | ⬜ No | — | ⚠️ Partial |
+| سکه امامی | ✅ BrsAPI/TGJU | ⚠️ Unreliable feeds | ⬜ No | ⬜ No حباب calc | ⚠️ Partial |
+| صندوق‌های طلا | ❌ None | ❌ None | ⬜ No | ⬜ No NAV/premium | ❌ Missing |
+
+---
+
+## Changelog
+
+| Date | What Changed |
+|------|-------------|
+| 2026-02-09 | Created this progress tracker. Tagged `safe-checkpoint-2026-02-09`. |
