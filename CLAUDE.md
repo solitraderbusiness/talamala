@@ -498,7 +498,8 @@ Indexed on `(timeframe, created_at)` for efficient history queries.
 - The LLM (OpenRouter) ONLY generates Persian text: `summary_fa`, `why_important_fa`, `follow_up_questions`.
 - Rules are defined in `gold_monitor_rules_fa.yaml` with 4 sections: `global_gold`, `iran_gold`, `coin`, `gold_funds`.
 - Matching uses Persian-normalized substring matching (`matcher.py:normalize_text`): NFC normalization, diacritic stripping, Arabic→Persian character mapping (yaa, kaf), ZWNJ→space, lowercase.
-- Match score: 60% keyword ratio + 40% signal ratio.
+- **Compound keywords**: Catch-all rules use multi-word keywords like "gold price", "قیمت طلا" instead of bare "gold", "طلا" to prevent false positives from non-market articles (sports medals, land supply, etc.).
+- Match score: 60% keyword ratio + 40% signal ratio (when rule has both; pure ratio when only one type).
 - Severity: checked in priority order `high_if → medium_if → low_if`, defaults to `medium`.
 - Confidence: linear map from match_score to [0.3, 0.95].
 
@@ -535,7 +536,7 @@ Indexed on `(timeframe, created_at)` for efficient history queries.
 - Database schema with Alembic migration + startup table creation
 - Worker pipeline: fetch → dedup → match → alert (60s cycle)
 - Three fetcher types (RSS, HTML, JSON)
-- Deterministic rule engine with 32+ rules (catch-all rules limited to 3 keywords for match score threshold)
+- Deterministic rule engine with 32+ rules (compound keywords + signals to prevent false positives)
 - Persian text normalization for matching
 - JWT authentication for admin endpoints
 - Web dashboard with:
@@ -733,10 +734,14 @@ docker volume ls                 # List volumes
 
 ### Match Score Tuning
 - `MIN_MATCH_SCORE = 0.18` in `worker/main.py` — controls minimum threshold for alerts
-- Match score = 60% keyword ratio + 40% signal ratio
-- Example: 1 keyword match on 3-keyword rule = 0.333 (passes); 1 keyword on 6-keyword rule = 0.1 (rejected)
-- **Critical**: Keep catch-all rules to ≤3 keywords so 1 match = 0.333, well above threshold
-- Lowering this too much → spam alerts; raising too high → missed alerts
+- Match score = 60% keyword ratio + 40% signal ratio (when both present)
+- If rule has only keywords (no signals): score = keyword_matches / total_keywords
+- If rule has only signals (no keywords): score = signal_matches / total_signals
+- **Compound keyword strategy**: Use multi-word keywords ("gold price", "قیمت طلا") instead of single words ("gold", "طلا") to prevent false positives from non-market articles (sports medals, land supply, etc.)
+- Example with 5 keywords + 10 signals: 1 kw match alone = 0.6 × 0.2 = 0.12 → FAILS; 1 kw + 2 signals = 0.20 → PASSES; 2 kw = 0.24 → PASSES
+- **GLOB_GOLD_PRICE** and **IR_GOLD_COIN_PRICE** are the broadest catch-all rules — they use 5 compound keywords + 8-10 signals each
+- Other specialized rules have 4-9 keywords making single-match false positives impossible (1/9 = 0.067 → FAILS)
+- Lowering MIN_MATCH_SCORE → spam alerts; raising too high → missed alerts
 
 ### Sentiment Score Tuning
 - Formula parameters in `api/routers/sentiment.py`
