@@ -448,15 +448,14 @@ class Worker:
             )
             return 0
 
-        # Filter out low-quality matches:
-        # 1) Minimum score threshold
-        # 2) Require at least 2 evidence points (keywords + signals)
-        #    to prevent single-keyword false positives
+        # Filter out low-quality matches by minimum score threshold.
+        # Score of 0.18 means at least ~1 keyword on a 3-keyword rule (0.2)
+        # or 1 keyword on a 5-keyword rule with 1 signal (0.24).
+        # Single keywords on rules with many keywords (score <0.18) are filtered.
         top = match_results[0]
         match_results = [
             mr for mr in match_results
             if mr.match_score >= MIN_MATCH_SCORE
-            and (len(mr.matched_keywords) + len(mr.matched_signals)) >= 2
         ]
         if not match_results:
             logger.info(

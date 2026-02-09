@@ -160,6 +160,9 @@ export interface PriceItem {
   label: string;
   unit: string;
   icon: string;
+  change?: string;
+  change_pct?: string;
+  direction?: "up" | "down" | "flat";
 }
 
 export interface PricesResponse {

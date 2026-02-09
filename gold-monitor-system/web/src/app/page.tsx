@@ -335,6 +335,11 @@ export default function DashboardPage() {
         {PRICE_KEYS.map((key) => {
           const priceItem: PriceItem | undefined = prices?.prices?.[key];
           const fallback = PRICE_FALLBACK[key];
+          const changeColor = priceItem?.direction === "up"
+            ? "text-green-500"
+            : priceItem?.direction === "down"
+              ? "text-red-500"
+              : "text-gray-400";
           return (
             <div key={key} className="card text-center">
               <span className="text-2xl">{priceItem?.icon || fallback.icon}</span>
@@ -344,7 +349,13 @@ export default function DashboardPage() {
               <p className="mt-1 text-lg font-bold text-gray-900 dark:text-gray-100" dir="ltr">
                 {priceItem?.formatted || "---"}
               </p>
-              <p className="text-xs text-gray-400">{priceItem?.unit || fallback.unit}</p>
+              {priceItem?.change_pct ? (
+                <p className={`text-xs font-medium ${changeColor}`} dir="ltr">
+                  {priceItem.change_pct}
+                </p>
+              ) : (
+                <p className="text-xs text-gray-400">{priceItem?.unit || fallback.unit}</p>
+              )}
             </div>
           );
         })}
