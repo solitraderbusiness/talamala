@@ -34,7 +34,7 @@ from sqlalchemy import select, text
 from api.auth import get_password_hash
 from api.config import settings
 from api.database import AsyncSessionLocal, sync_engine
-from api.models import AdminUser, Base, RulesSnapshot, Source
+from api.models import AdminUser, Base, RulesSnapshot, SentimentScore, Source
 
 logger = logging.getLogger("gold_monitor")
 
@@ -838,6 +838,18 @@ async def _migrate_sources_v4() -> None:
         logger.info("Migration v4: added %d new gold source(s).", added)
 
 
+async def _create_sentiment_scores_table() -> None:
+    """Create the sentiment_scores table if it doesn't exist.
+
+    Uses the sync engine to run DDL — safe to call on every startup.
+    """
+    try:
+        SentimentScore.__table__.create(bind=sync_engine, checkfirst=True)
+        logger.info("sentiment_scores table ensured.")
+    except Exception:
+        logger.warning("Could not create sentiment_scores table", exc_info=True)
+
+
 async def _flush_dedup_keys() -> None:
     """One-time flush of Redis dedup keys so previously-failed items
     get re-processed with the now-working rule engine.
@@ -885,6 +897,7 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     await _migrate_sources_v2()
     await _migrate_sources_v3()
     await _migrate_sources_v4()
+    await _create_sentiment_scores_table()
     await _flush_dedup_keys()
     await _snapshot_rules()
     logger.info("Startup complete.")

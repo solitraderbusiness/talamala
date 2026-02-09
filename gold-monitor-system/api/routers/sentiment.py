@@ -12,17 +12,16 @@ from __future__ import annotations
 import datetime
 import json
 import logging
-import os
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.config import settings
 from api.database import get_db
-from api.models import Alert
+from api.models import Alert, SentimentScore
 
 logger = logging.getLogger(__name__)
 
@@ -194,6 +193,11 @@ async def get_sentiment(
 
         sentiment_data["alert_count"] = len(unique_alerts)
         sentiment_data["label"] = tf["label"]
+
+        # Compute and persist numeric score
+        score = await _persist_sentiment_score(db, key, sentiment_data)
+        sentiment_data["score"] = score
+
         results["timeframes"][key] = sentiment_data
 
     return results
@@ -312,4 +316,85 @@ def _fallback_sentiment(alerts: list[dict]) -> dict[str, Any]:
         "summary": f"{total} هشدار در این بازه ({high} بالا، {med} متوسط). تحلیل LLM غیرفعال است.",
         "key_drivers": [],
         "outlook": "برای تحلیل دقیق‌تر، LLM را فعال کنید.",
+    }
+
+
+# ── Numeric score mapping ──────────────────────────────────────────────
+
+_SENTIMENT_SCORE_MAP: dict[str, int] = {
+    "very_bullish": 90,
+    "bullish": 70,
+    "neutral": 50,
+    "bearish": 30,
+    "very_bearish": 10,
+}
+
+
+def sentiment_to_score(sentiment: str) -> int:
+    """Convert a sentiment label to a numeric 0-100 score."""
+    return _SENTIMENT_SCORE_MAP.get(sentiment, 50)
+
+
+async def _persist_sentiment_score(
+    db: AsyncSession,
+    timeframe: str,
+    sentiment_data: dict[str, Any],
+) -> int:
+    """Persist a sentiment score to the DB and return the numeric score."""
+    sentiment = sentiment_data.get("sentiment", "neutral")
+    score = sentiment_to_score(sentiment)
+
+    record = SentimentScore(
+        timeframe=timeframe,
+        score=score,
+        sentiment=sentiment,
+        sentiment_label=sentiment_data.get("sentiment_label", "خنثی"),
+        alert_count=sentiment_data.get("alert_count", 0),
+    )
+    db.add(record)
+    await db.commit()
+    return score
+
+
+# ── History endpoint ───────────────────────────────────────────────────
+
+
+@router.get("/history", response_model=None)
+async def get_sentiment_history(
+    db: AsyncSession = Depends(get_db),
+    timeframe: str = Query("4h", pattern="^(1h|4h|24h)$"),
+    hours: int = Query(48, ge=1, le=720),
+) -> dict[str, Any]:
+    """Return historical sentiment scores for charting.
+
+    Parameters
+    ----------
+    timeframe:
+        Which timeframe to get history for (1h, 4h, 24h).
+    hours:
+        How many hours of history to return (default 48, max 720 = 30 days).
+    """
+    cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=hours)
+
+    result = await db.execute(
+        select(SentimentScore)
+        .where(SentimentScore.timeframe == timeframe)
+        .where(SentimentScore.created_at >= cutoff)
+        .order_by(SentimentScore.created_at)
+    )
+    scores = result.scalars().all()
+
+    return {
+        "timeframe": timeframe,
+        "hours": hours,
+        "data": [
+            {
+                "score": s.score,
+                "sentiment": s.sentiment,
+                "sentiment_label": s.sentiment_label,
+                "alert_count": s.alert_count,
+                "timestamp": s.created_at.isoformat(),
+            }
+            for s in scores
+        ],
     }

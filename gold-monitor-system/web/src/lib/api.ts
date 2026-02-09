@@ -125,6 +125,21 @@ export interface TimeframeSentiment {
   outlook: string;
   alert_count: number;
   label: string;
+  score?: number; // 0-100 numeric sentiment score
+}
+
+export interface SentimentHistoryPoint {
+  score: number;
+  sentiment: string;
+  sentiment_label: string;
+  alert_count: number;
+  timestamp: string;
+}
+
+export interface SentimentHistoryResponse {
+  timeframe: string;
+  hours: number;
+  data: SentimentHistoryPoint[];
 }
 
 export interface SentimentResponse {
@@ -260,6 +275,15 @@ export function getRuleById(ruleId: string): Promise<Rule> {
 
 export function getSentiment(): Promise<SentimentResponse> {
   return request<SentimentResponse>("/api/sentiment");
+}
+
+export function getSentimentHistory(
+  timeframe: string = "4h",
+  hours: number = 48,
+): Promise<SentimentHistoryResponse> {
+  return request<SentimentHistoryResponse>(
+    `/api/sentiment/history?timeframe=${timeframe}&hours=${hours}`,
+  );
 }
 
 export function getHealth(): Promise<{ status: string }> {

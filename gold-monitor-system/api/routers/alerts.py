@@ -15,7 +15,7 @@ from sqlalchemy import Select, cast, desc, func, or_, select, String
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.database import get_db
-from api.models import Alert
+from api.models import Alert, SentimentScore
 
 router = APIRouter(tags=["alerts"])
 
@@ -229,8 +229,15 @@ async def alerts_stats_today(
     for a in all_alerts:
         counts[a.severity] = counts.get(a.severity, 0) + 1
 
-    # Activity score (decay-weighted)
-    risk_score = _compute_activity_score(all_alerts)
+    # Sentiment score: fetch latest from sentiment_scores table (4h timeframe)
+    latest_sentiment = await db.execute(
+        select(SentimentScore)
+        .where(SentimentScore.timeframe == "4h")
+        .order_by(desc(SentimentScore.created_at))
+        .limit(1)
+    )
+    sentiment_row = latest_sentiment.scalar_one_or_none()
+    risk_score = sentiment_row.score if sentiment_row else _compute_activity_score(all_alerts)
 
     # Top alerts: prioritize by severity, then recency (most recent first)
     severity_order = {"high": 0, "medium": 1, "low": 2}

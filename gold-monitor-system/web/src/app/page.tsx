@@ -284,6 +284,11 @@ export default function DashboardPage() {
                 <div className={`text-2xl font-bold ${SENTIMENT_COLORS[activeSentiment.sentiment] || ""}`}>
                   {activeSentiment.sentiment_label}
                 </div>
+                {activeSentiment.score !== undefined && (
+                  <div className={`mt-0.5 text-lg font-bold ${SENTIMENT_COLORS[activeSentiment.sentiment] || ""}`}>
+                    {activeSentiment.score}
+                  </div>
+                )}
                 <div className="mt-0.5 text-xs text-gray-500">
                   {activeSentiment.alert_count} هشدار
                 </div>
@@ -345,14 +350,14 @@ export default function DashboardPage() {
         })}
       </div>
 
-      {/* ─── Activity + Stats Row ─── */}
+      {/* ─── Sentiment Score + Stats Row ─── */}
       <div className="grid gap-4 md:grid-cols-3">
-        {/* Activity gauge */}
+        {/* Sentiment score gauge */}
         <div className="card flex flex-col items-center justify-center">
           <h3 className="mb-3 text-sm font-medium text-gray-600 dark:text-gray-400">
-            فعالیت بازار
+            شاخص احساسات
           </h3>
-          <RiskGauge score={stats?.risk_score ?? 0} />
+          <RiskGauge score={stats?.risk_score ?? 50} />
         </div>
 
         {/* Alert counts */}

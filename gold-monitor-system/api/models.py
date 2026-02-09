@@ -304,6 +304,39 @@ class AdminUser(Base):
 
 # ── Rules Snapshot ──────────────────────────────────────────────────────
 
+class SentimentScore(Base):
+    """Persisted sentiment scores for historical tracking and charting."""
+    __tablename__ = "sentiment_scores"
+    __table_args__ = (
+        Index("ix_sentiment_scores_timeframe_created", "timeframe", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=_new_uuid,
+    )
+    timeframe: Mapped[str] = mapped_column(
+        String(10), nullable=False,  # "1h", "4h", "24h"
+    )
+    score: Mapped[int] = mapped_column(
+        Integer, nullable=False,  # 0-100
+    )
+    sentiment: Mapped[str] = mapped_column(
+        String(20), nullable=False,  # very_bullish, bullish, neutral, bearish, very_bearish
+    )
+    sentiment_label: Mapped[str] = mapped_column(
+        String(50), nullable=False,  # Persian label
+    )
+    alert_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default="now()",
+    )
+
+    def __repr__(self) -> str:
+        return f"<SentimentScore {self.timeframe} score={self.score} {self.sentiment}>"
+
+
 class RulesSnapshot(Base):
     __tablename__ = "rules_snapshot"
 

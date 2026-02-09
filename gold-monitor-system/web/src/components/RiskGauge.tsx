@@ -1,7 +1,7 @@
 "use client";
 
 interface RiskGaugeProps {
-  score: number; // 0-100
+  score: number; // 0-100 (sentiment: 0=very bearish, 100=very bullish)
   size?: number;
 }
 
@@ -11,13 +11,14 @@ export default function RiskGauge({ score, size = 160 }: RiskGaugeProps) {
   const circumference = Math.PI * radius; // half circle
   const offset = circumference - (clampedScore / 100) * circumference;
 
-  let color = "#22c55e"; // green
-  if (clampedScore > 70) color = "#ef4444"; // red
-  else if (clampedScore > 40) color = "#f59e0b"; // amber
+  // Sentiment colors: green=bullish (high), amber=neutral, red=bearish (low)
+  let color = "#ef4444"; // red (bearish)
+  if (clampedScore > 60) color = "#22c55e"; // green (bullish)
+  else if (clampedScore > 40) color = "#f59e0b"; // amber (neutral)
 
-  let label = "آرام";
-  if (clampedScore > 70) label = "پرتحرک";
-  else if (clampedScore > 40) label = "فعال";
+  let label = "نزولی";
+  if (clampedScore > 70) label = "صعودی";
+  else if (clampedScore > 40) label = "خنثی";
 
   return (
     <div className="flex flex-col items-center">
