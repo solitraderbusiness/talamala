@@ -1291,6 +1291,41 @@ async def _migrate_sources_v9() -> None:
         )
 
 
+async def _migrate_sources_v10() -> None:
+    """Disable DailyFX Gold (403) and DailyForex News (malformed XML).
+
+    Both sources return errors on every fetch cycle.
+    Runs once (tracked via settings marker).
+    """
+    marker_key = "migration:sources_v10"
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            text("SELECT key FROM settings WHERE key = :k"),
+            {"k": marker_key},
+        )
+        if result.scalar_one_or_none() is not None:
+            return
+
+        disabled = 0
+        for name in ("DailyFX Gold", "DailyForex News"):
+            result = await session.execute(
+                select(Source).where(Source.name == name)
+            )
+            src = result.scalar_one_or_none()
+            if src is not None and src.enabled:
+                src.enabled = False
+                src.notes = (src.notes or "") + " [disabled v10: broken feed]"
+                disabled += 1
+
+        await session.execute(
+            text("INSERT INTO settings (key, value, updated_at) "
+                 "VALUES (:k, '\"done\"', NOW())"),
+            {"k": marker_key},
+        )
+        await session.commit()
+        logger.info("Migration v10: disabled %d broken sources.", disabled)
+
+
 async def _create_sentiment_scores_table() -> None:
     """Create the sentiment_scores table if it doesn't exist.
 
@@ -1310,7 +1345,7 @@ async def _flush_dedup_keys() -> None:
     Uses a marker key ``dedup:flushed:v2`` to avoid re-flushing on
     subsequent restarts.
     """
-    marker = "dedup:flushed:v13"
+    marker = "dedup:flushed:v14"
     try:
         r = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
         if await r.exists(marker):
@@ -1355,6 +1390,7 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     await _migrate_sources_v7()
     await _migrate_sources_v8()
     await _migrate_sources_v9()
+    await _migrate_sources_v10()
     await _create_sentiment_scores_table()
     await _flush_dedup_keys()
     await _snapshot_rules()

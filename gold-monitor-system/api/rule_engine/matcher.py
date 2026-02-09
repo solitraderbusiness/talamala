@@ -291,22 +291,34 @@ def _compute_score(
     signal-match ratio.  Keywords are weighted 0.6, signals 0.4 — reflecting
     the fact that keywords tend to be more specific and reliable.
 
+    Denominators are capped so that adding more keywords/signals to a rule
+    does not dilute individual match scores.  Without the cap, a rule with
+    18 keywords would score a single match at 0.033 (useless), while a rule
+    with 5 keywords scores the same match at 0.12 (useful).  The cap ensures
+    that a single compound-keyword match always has a meaningful score.
+
     If a rule has no keywords at all, the signal ratio alone is used and
     vice-versa.
     """
     kw_weight = 0.6
     sig_weight = 0.4
 
+    # Cap denominators to prevent score dilution on rules with many terms.
+    # With KW_CAP=5:  1 keyword match → 0.6 × (1/5) = 0.12 (always passes 0.10)
+    # With SIG_CAP=10: 1 signal match → 0.4 × (1/10) = 0.04 (need 3 for 0.12)
+    KW_CAP = 5
+    SIG_CAP = 10
+
     if total_keywords == 0 and total_signals == 0:
         return 0.0
 
     if total_keywords == 0:
-        return len(sig_matches) / total_signals
+        return len(sig_matches) / min(total_signals, SIG_CAP)
 
     if total_signals == 0:
-        return len(kw_matches) / total_keywords
+        return len(kw_matches) / min(total_keywords, KW_CAP)
 
-    kw_ratio = len(kw_matches) / total_keywords
-    sig_ratio = len(sig_matches) / total_signals
+    kw_ratio = len(kw_matches) / min(total_keywords, KW_CAP)
+    sig_ratio = len(sig_matches) / min(total_signals, SIG_CAP)
 
     return kw_weight * kw_ratio + sig_weight * sig_ratio
