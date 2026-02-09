@@ -838,6 +838,125 @@ async def _migrate_sources_v4() -> None:
         logger.info("Migration v4: added %d new gold source(s).", added)
 
 
+async def _migrate_sources_v5() -> None:
+    """Add broad gold rule bindings + gold-focused Persian Google News feeds.
+
+    The existing rules were too specific (rate hike, CPI, etc.) and lacked
+    generic gold keywords.  Two new rules GLOB_GOLD_PRICE and IR_GOLD_COIN_PRICE
+    were added to the YAML.  This migration:
+    1. Adds GLOB_GOLD_PRICE to all global_gold source rule_bindings
+    2. Adds IR_GOLD_COIN_PRICE to all iran_gold/coin source rule_bindings
+    3. Adds gold-focused Persian Google News feeds (قیمت طلا, سکه, دلار)
+
+    Runs once (tracked via settings marker).
+    """
+    marker_key = "migration:sources_v5"
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            text("SELECT key FROM settings WHERE key = :k"),
+            {"k": marker_key},
+        )
+        if result.scalar_one_or_none() is not None:
+            return
+
+        fixed = 0
+
+        # --- 1. Add GLOB_GOLD_PRICE to global_gold sources ---
+        all_sources = await session.execute(select(Source))
+        for source in all_sources.scalars().all():
+            bindings = list(source.rule_bindings or [])
+            categories = list(source.categories or [])
+            changed = False
+
+            if "global_gold" in categories and "GLOB_GOLD_PRICE" not in bindings:
+                bindings.append("GLOB_GOLD_PRICE")
+                changed = True
+
+            if any(c in categories for c in ("iran_gold", "coin")) and "IR_GOLD_COIN_PRICE" not in bindings:
+                bindings.append("IR_GOLD_COIN_PRICE")
+                changed = True
+
+            if changed:
+                source.rule_bindings = bindings
+                fixed += 1
+
+        # --- 2. Add gold-focused Persian Google News feeds ---
+        persian_feeds = [
+            Source(
+                name="Google News — قیمت طلا و سکه",
+                type="rss",
+                base_url="https://news.google.com",
+                endpoints=[
+                    "https://news.google.com/rss/search?q=%D9%82%DB%8C%D9%85%D8%AA+%D8%B7%D9%84%D8%A7+%D8%B3%DA%A9%D9%87+%D8%A7%D9%88%D9%86%D8%B3+when%3A7d&hl=fa&gl=IR&ceid=IR:fa",
+                ],
+                enabled=True,
+                poll_interval_seconds=180,
+                categories=["iran_gold", "coin", "global_gold"],
+                rule_bindings=[
+                    "GLOB_GOLD_PRICE", "IR_GOLD_COIN_PRICE",
+                    "IR_FX_USD", "COIN_PREMIUM_BUBBLE",
+                ],
+                reliability_score=0.8,
+                notes="Google News FA — قیمت طلا سکه اونس",
+            ),
+            Source(
+                name="Google News — دلار و ارز",
+                type="rss",
+                base_url="https://news.google.com",
+                endpoints=[
+                    "https://news.google.com/rss/search?q=%D9%82%DB%8C%D9%85%D8%AA+%D8%AF%D9%84%D8%A7%D8%B1+%D8%A7%D8%B1%D8%B2+%D8%A8%D8%A7%D8%B2%D8%A7%D8%B1+when%3A7d&hl=fa&gl=IR&ceid=IR:fa",
+                ],
+                enabled=True,
+                poll_interval_seconds=180,
+                categories=["iran_gold", "coin"],
+                rule_bindings=[
+                    "IR_FX_USD", "IR_GOV_FX_POLICY",
+                    "IR_GOLD_COIN_PRICE",
+                ],
+                reliability_score=0.8,
+                notes="Google News FA — قیمت دلار ارز بازار",
+            ),
+            Source(
+                name="Google News — بازار طلا و جواهر ایران",
+                type="rss",
+                base_url="https://news.google.com",
+                endpoints=[
+                    "https://news.google.com/rss/search?q=%D8%A8%D8%A7%D8%B2%D8%A7%D8%B1+%D8%B7%D9%84%D8%A7+%D8%AC%D9%88%D8%A7%D9%87%D8%B1+%D8%B3%DA%A9%D9%87+%D8%A7%D9%85%D8%A7%D9%85%DB%8C+when%3A7d&hl=fa&gl=IR&ceid=IR:fa",
+                ],
+                enabled=True,
+                poll_interval_seconds=300,
+                categories=["iran_gold", "coin"],
+                rule_bindings=[
+                    "IR_GOLD_COIN_PRICE", "COIN_PREMIUM_BUBBLE",
+                    "COIN_CB_AUCTIONS", "IR_PHYSICAL_SUPPLY_DEMAND",
+                ],
+                reliability_score=0.75,
+                notes="Google News FA — بازار طلا جواهر سکه امامی",
+            ),
+        ]
+
+        added = 0
+        for src in persian_feeds:
+            existing = await session.execute(
+                select(Source).where(Source.name == src.name)
+            )
+            if existing.scalar_one_or_none() is None:
+                session.add(src)
+                added += 1
+
+        # --- Mark as done ---
+        await session.execute(
+            text("INSERT INTO settings (key, value, updated_at) "
+                 "VALUES (:k, '\"done\"', NOW())"),
+            {"k": marker_key},
+        )
+        await session.commit()
+        logger.info(
+            "Migration v5: updated %d source bindings, added %d Persian feeds.",
+            fixed, added,
+        )
+
+
 async def _create_sentiment_scores_table() -> None:
     """Create the sentiment_scores table if it doesn't exist.
 
@@ -857,7 +976,7 @@ async def _flush_dedup_keys() -> None:
     Uses a marker key ``dedup:flushed:v2`` to avoid re-flushing on
     subsequent restarts.
     """
-    marker = "dedup:flushed:v7"
+    marker = "dedup:flushed:v8"
     try:
         r = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
         if await r.exists(marker):
@@ -897,6 +1016,7 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     await _migrate_sources_v2()
     await _migrate_sources_v3()
     await _migrate_sources_v4()
+    await _migrate_sources_v5()
     await _create_sentiment_scores_table()
     await _flush_dedup_keys()
     await _snapshot_rules()
