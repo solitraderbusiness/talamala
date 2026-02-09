@@ -45,8 +45,8 @@ TGJU_REALTIME_URL = "https://call4.tgju.org/ajax.json"
 PRICE_META = {
     "gold_global": {"label": "طلای جهانی", "unit": "USD/oz", "icon": "🌍"},
     "gold_18k": {"label": "طلای ۱۸ عیار", "unit": "تومان/گرم", "icon": "💛"},
-    "usd": {"label": "دلار", "unit": "تومان", "icon": "💵"},
-    "emami_coin": {"label": "سکه امامی", "unit": "تومان", "icon": "🪙"},
+    "usd": {"label": "دلار تتر", "unit": "تومان", "icon": "💵"},
+    "emami_coin": {"label": "سکه بهار آزادی", "unit": "تومان", "icon": "🪙"},
 }
 
 # Map BrsAPI symbols to our price keys
