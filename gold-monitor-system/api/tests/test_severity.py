@@ -133,12 +133,42 @@ class TestDetermineSeverity:
             low_if=["qrs_never_matches"],
         )
         content = "some unrelated content"
-        assert determine_severity(content, rule) == SEVERITY_MEDIUM
+        # With a typical match_score (0.20), falls to score-based medium
+        assert determine_severity(content, rule, match_score=0.20) == SEVERITY_MEDIUM
 
     def test_defaults_to_medium_when_criteria_are_empty(self):
         rule = _make_rule()
         content = "any content"
-        assert determine_severity(content, rule) == SEVERITY_MEDIUM
+        assert determine_severity(content, rule, match_score=0.20) == SEVERITY_MEDIUM
+
+    # --- Score-based fallback tests ---
+
+    def test_score_fallback_high_when_score_above_threshold(self):
+        rule = _make_rule(horizon="short")
+        content = "unmatched content"
+        assert determine_severity(content, rule, match_score=0.40) == SEVERITY_HIGH
+
+    def test_score_fallback_high_immediate_horizon_lower_threshold(self):
+        rule = _make_rule(horizon="immediate")
+        content = "unmatched content"
+        # 0.30 is above immediate threshold (0.25) but below general (0.35)
+        assert determine_severity(content, rule, match_score=0.30) == SEVERITY_HIGH
+
+    def test_score_fallback_medium_for_moderate_score(self):
+        rule = _make_rule(horizon="short")
+        content = "unmatched content"
+        assert determine_severity(content, rule, match_score=0.20) == SEVERITY_MEDIUM
+
+    def test_score_fallback_low_when_score_below_threshold(self):
+        rule = _make_rule(horizon="short")
+        content = "unmatched content"
+        assert determine_severity(content, rule, match_score=0.12) == SEVERITY_LOW
+
+    def test_condition_match_takes_priority_over_score(self):
+        # Condition says medium, but score would say high — condition wins
+        rule = _make_rule(medium_if=["بازار"])
+        content = "وضعیت بازار امروز"
+        assert determine_severity(content, rule, match_score=0.50) == SEVERITY_MEDIUM
 
     def test_condition_matching_is_case_insensitive(self):
         rule = _make_rule(high_if=["Surprise"])

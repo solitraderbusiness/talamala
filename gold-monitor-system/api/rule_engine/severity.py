@@ -1,9 +1,10 @@
 """
 Deterministic severity assessment — checks news content against the
-``importance_criteria`` conditions defined in each rule.
+``importance_criteria`` conditions defined in each rule, with a
+match-score-based fallback for meaningful severity distribution.
 
-**No LLM is involved.**  Severity is decided by simple substring matching of
-the condition phrases from the YAML against the normalised content.
+**No LLM is involved.**  Severity is decided by condition matching first,
+then by match_score thresholds when conditions don't match.
 """
 
 from __future__ import annotations
@@ -25,24 +26,38 @@ _VALID_SEVERITIES = frozenset({SEVERITY_HIGH, SEVERITY_MEDIUM, SEVERITY_LOW})
 _MIN_CONFIDENCE = 0.3
 _MAX_CONFIDENCE = 0.95
 
+# Match-score thresholds for severity fallback.
+# These kick in when the YAML importance_criteria conditions don't match.
+_HIGH_SCORE_THRESHOLD = 0.35       # 3+ keywords or 2 kw + signals → high
+_HIGH_IMMEDIATE_THRESHOLD = 0.25   # immediate-horizon rules: lower bar for high
+_LOW_SCORE_THRESHOLD = 0.15        # borderline single-keyword match → low
+
 
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
 
-def determine_severity(content: str, rule: Rule) -> str:
+def determine_severity(
+    content: str,
+    rule: Rule,
+    match_score: float = 0.0,
+) -> str:
     """Determine the severity level for *content* using the rule's criteria.
 
-    The function walks the rule's ``importance_criteria`` dict in priority
-    order:
+    The function first tries condition-based matching from the YAML
+    ``importance_criteria``, then falls back to match-score thresholds
+    for a meaningful severity distribution.
 
-    1. **high_if** — if *any* condition string is a substring of the
-       normalised content, return ``"high"``.
-    2. **medium_if** — likewise, return ``"medium"``.
-    3. **low_if** — likewise, return ``"low"``.
-    4. If none of the above match but the rule *did* match (i.e. we are
-       calling this function at all), default to ``"medium"``.
+    **Priority order:**
+
+    1. **Condition matching** — if any ``high_if`` / ``medium_if`` /
+       ``low_if`` condition string is found in the normalised content,
+       return that severity immediately.
+    2. **Score-based fallback** — when no condition matches:
+       - ``"high"`` if score >= 0.35 (or >= 0.25 for immediate-horizon rules)
+       - ``"low"`` if score < 0.15
+       - ``"medium"`` otherwise
 
     Parameters
     ----------
@@ -50,6 +65,9 @@ def determine_severity(content: str, rule: Rule) -> str:
         The raw (un-normalised) news body text.
     rule:
         The matched :class:`Rule` whose criteria to evaluate.
+    match_score:
+        The match score from the matcher (0.0 – 1.0).  Higher scores mean
+        more keywords/signals matched.
 
     Returns
     -------
@@ -59,7 +77,7 @@ def determine_severity(content: str, rule: Rule) -> str:
     norm_content = normalize_text(content)
     criteria = rule.importance_criteria
 
-    # Check in priority order
+    # 1. Condition-based matching (original YAML logic)
     if _any_condition_matches(norm_content, criteria.get("high_if", [])):
         return SEVERITY_HIGH
 
@@ -69,7 +87,19 @@ def determine_severity(content: str, rule: Rule) -> str:
     if _any_condition_matches(norm_content, criteria.get("low_if", [])):
         return SEVERITY_LOW
 
-    # Default when the rule matched but no specific criterion was triggered
+    # 2. Score-based fallback for meaningful severity distribution
+    # Immediate-horizon rules (breaking events) have a lower threshold for high
+    high_threshold = (
+        _HIGH_IMMEDIATE_THRESHOLD
+        if rule.horizon == "immediate"
+        else _HIGH_SCORE_THRESHOLD
+    )
+    if match_score >= high_threshold:
+        return SEVERITY_HIGH
+
+    if match_score < _LOW_SCORE_THRESHOLD:
+        return SEVERITY_LOW
+
     return SEVERITY_MEDIUM
 
 

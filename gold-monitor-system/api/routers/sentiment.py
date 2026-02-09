@@ -14,6 +14,7 @@ computed by the deterministic formula.
 
 from __future__ import annotations
 
+import asyncio
 import datetime
 import json
 import logging
@@ -21,6 +22,7 @@ import math
 from typing import Any
 
 import httpx
+import redis.asyncio as aioredis
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -32,6 +34,12 @@ from api.models import Alert, SentimentScore
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["sentiment"])
+
+# Max alerts to send to LLM per timeframe (prevents token overflows)
+_MAX_LLM_ALERTS = 20
+
+# Redis cache TTL for LLM text output (seconds)
+_LLM_CACHE_TTL = 300  # 5 minutes
 
 # ── Timeframes ──────────────────────────────────────────────────────────
 
@@ -249,8 +257,28 @@ Respond with ONLY the JSON object.
 """
 
 
+def _select_top_alerts(alerts: list[dict], max_count: int) -> list[dict]:
+    """Select the most important alerts for LLM analysis.
+
+    Sorts by severity (high first), then recency (newest first).
+    Returns at most *max_count* alerts.
+    """
+    severity_order = {"high": 0, "medium": 1, "low": 2}
+
+    def sort_key(a: dict) -> tuple:
+        sev = severity_order.get(a.get("severity", "medium"), 1)
+        ts = a.get("timestamp_utc", "")
+        return (sev, ts)  # lower severity number = higher priority
+
+    sorted_alerts = sorted(alerts, key=sort_key)
+    return sorted_alerts[:max_count]
+
+
 def _format_alerts_for_llm(alerts: list[dict], window_hours: int) -> str:
-    """Format alerts into text for the LLM prompt."""
+    """Format alerts into text for the LLM prompt.
+
+    Keeps summaries short (100 chars) to stay within token limits.
+    """
     now = datetime.datetime.now(datetime.timezone.utc)
     lines = []
     for i, a in enumerate(alerts, 1):
@@ -269,33 +297,60 @@ def _format_alerts_for_llm(alerts: list[dict], window_hours: int) -> str:
 
         still_relevant = ""
         if hours_ago > window_hours and severity == "high":
-            still_relevant = " [STILL RELEVANT — high impact event]"
+            still_relevant = " [STILL RELEVANT]"
 
-        sev_label = {"high": "🔴 HIGH", "medium": "🟡 MED", "low": "⚪ LOW"}.get(severity, severity)
+        sev_label = {"high": "HIGH", "medium": "MED", "low": "LOW"}.get(severity, severity)
 
         line = f"{i}. [{sev_label}] {title}{still_relevant}"
         if summary:
-            line += f"\n   {summary[:200]}"
-        line += f"\n   Source: {source} | {hours_ago:.1f}h ago"
+            line += f" — {summary[:100]}"
+        line += f" ({source}, {hours_ago:.1f}h ago)"
         lines.append(line)
 
-    return "\n\n".join(lines) if lines else "(No alerts in this period)"
+    return "\n".join(lines) if lines else "(No alerts in this period)"
+
+
+async def _get_redis() -> aioredis.Redis | None:
+    """Get a Redis connection for caching."""
+    try:
+        return aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+    except Exception:
+        return None
 
 
 async def _call_sentiment_llm(
     alerts: list[dict],
     window_hours: int,
+    timeframe_key: str,
     timeframe_label: str,
     api_key: str,
     score: int,
     sentiment_label: str,
+    alert_count: int,
 ) -> dict[str, Any]:
     """Call OpenRouter for sentiment TEXT generation only.
 
     The numeric score is NOT derived from the LLM — it was already computed
     deterministically.  The LLM generates summary, key_drivers, and outlook.
+
+    Results are cached in Redis for 5 minutes keyed by timeframe + score + count.
     """
-    alerts_text = _format_alerts_for_llm(alerts, window_hours)
+    # Check Redis cache first
+    cache_key = f"sentiment:llm:{timeframe_key}:{score}:{alert_count}"
+    redis_conn = await _get_redis()
+    if redis_conn:
+        try:
+            cached = await redis_conn.get(cache_key)
+            if cached:
+                logger.debug("Sentiment LLM cache hit for %s", timeframe_key)
+                await redis_conn.aclose()
+                return json.loads(cached)
+        except Exception:
+            pass
+
+    # Select top alerts and format for LLM
+    top_alerts = _select_top_alerts(alerts, _MAX_LLM_ALERTS)
+    alerts_text = _format_alerts_for_llm(top_alerts, window_hours)
 
     user_prompt = _SENTIMENT_USER.format(
         count=len(alerts),
@@ -312,7 +367,7 @@ async def _call_sentiment_llm(
             {"role": "user", "content": user_prompt},
         ],
         "temperature": 0.3,
-        "max_tokens": 800,
+        "max_tokens": 600,
     }
 
     headers = {
@@ -323,7 +378,7 @@ async def _call_sentiment_llm(
     }
 
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(20.0)) as client:
             resp = await client.post(
                 "https://openrouter.ai/api/v1/chat/completions",
                 headers=headers,
@@ -345,15 +400,30 @@ async def _call_sentiment_llm(
             content = content.strip()
 
         parsed = json.loads(content)
-        return {
+        result = {
             "summary": parsed.get("summary", ""),
             "key_drivers": parsed.get("key_drivers", []),
             "outlook": parsed.get("outlook", ""),
         }
 
+        # Cache in Redis
+        if redis_conn:
+            try:
+                await redis_conn.set(cache_key, json.dumps(result, ensure_ascii=False), ex=_LLM_CACHE_TTL)
+            except Exception:
+                pass
+
+        return result
+
     except Exception:
-        logger.exception("Sentiment LLM call failed")
+        logger.exception("Sentiment LLM call failed for %s", timeframe_key)
         return {}
+    finally:
+        if redis_conn:
+            try:
+                await redis_conn.aclose()
+            except Exception:
+                pass
 
 
 def _fallback_text(alerts: list[dict], score: int) -> dict[str, Any]:
@@ -367,10 +437,20 @@ def _fallback_text(alerts: list[dict], score: int) -> dict[str, Any]:
 
     high = sum(1 for a in alerts if a["severity"] == "high")
     med = sum(1 for a in alerts if a["severity"] == "medium")
+    low = sum(1 for a in alerts if a["severity"] == "low")
     total = len(alerts)
 
+    parts = []
+    if high:
+        parts.append(f"{high} بالا")
+    if med:
+        parts.append(f"{med} متوسط")
+    if low:
+        parts.append(f"{low} پایین")
+    severity_str = "، ".join(parts) if parts else ""
+
     return {
-        "summary": f"{total} هشدار در این بازه ({high} بالا، {med} متوسط). امتیاز: {score}",
+        "summary": f"{total} هشدار در این بازه ({severity_str}). امتیاز: {score}",
         "key_drivers": [],
         "outlook": "برای تحلیل متنی دقیق‌تر، LLM را فعال کنید.",
     }
@@ -427,6 +507,13 @@ async def get_sentiment(
     api_key = settings.OPENROUTER_API_KEY
     use_llm = bool(api_key)
 
+    # Pre-parse timestamps once (avoid re-parsing per timeframe)
+    alert_timestamps: dict[str, datetime.datetime | None] = {}
+    for a in all_alerts:
+        alert_timestamps[a["title"]] = _parse_ts(a["timestamp_utc"])
+
+    # Gather unique alerts per timeframe + compute deterministic scores
+    tf_data: list[dict[str, Any]] = []
     for tf in _TIMEFRAMES:
         key = tf["key"]
         hours = tf["hours"]
@@ -435,13 +522,13 @@ async def get_sentiment(
         # Alerts in this window
         window_alerts = [
             a for a in all_alerts
-            if _parse_ts(a["timestamp_utc"]) and _parse_ts(a["timestamp_utc"]) >= cutoff
+            if alert_timestamps.get(a["title"]) and alert_timestamps[a["title"]] >= cutoff  # type: ignore[operator]
         ]
 
         # Add high-severity alerts from outside window (still relevant)
         if hours < 24:
             for ha in high_severity:
-                ts = _parse_ts(ha["timestamp_utc"])
+                ts = alert_timestamps.get(ha["title"])
                 if ts and ts < cutoff:
                     window_alerts.append(ha)
 
@@ -458,28 +545,61 @@ async def get_sentiment(
             unique_alerts, key, hours,
         )
 
-        # ── LLM text (optional — for summary, key_drivers, outlook) ──
-        if use_llm and unique_alerts:
-            llm_text = await _call_sentiment_llm(
-                unique_alerts, hours, tf["label"], api_key,
-                score, sentiment_label,
+        tf_data.append({
+            "tf": tf,
+            "unique_alerts": unique_alerts,
+            "score": score,
+            "sentiment_key": sentiment_key,
+            "sentiment_label": sentiment_label,
+        })
+
+    # ── LLM text generation — run all timeframes IN PARALLEL ──
+    async def _get_llm_text(td: dict) -> dict[str, Any]:
+        tf = td["tf"]
+        if use_llm and td["unique_alerts"]:
+            result = await _call_sentiment_llm(
+                td["unique_alerts"],
+                tf["hours"],
+                tf["key"],
+                tf["label"],
+                api_key,
+                td["score"],
+                td["sentiment_label"],
+                len(td["unique_alerts"]),
             )
-        else:
-            llm_text = _fallback_text(unique_alerts, score)
+            return result if result else _fallback_text(td["unique_alerts"], td["score"])
+        return _fallback_text(td["unique_alerts"], td["score"])
+
+    llm_results = await asyncio.gather(
+        *[_get_llm_text(td) for td in tf_data],
+        return_exceptions=True,
+    )
+
+    # Assemble final results
+    for td, llm_text in zip(tf_data, llm_results):
+        tf = td["tf"]
+        key = tf["key"]
+
+        if isinstance(llm_text, Exception):
+            logger.error("LLM call failed for %s: %s", key, llm_text)
+            llm_text = _fallback_text(td["unique_alerts"], td["score"])
 
         sentiment_data: dict[str, Any] = {
-            "sentiment": sentiment_key,
-            "sentiment_label": sentiment_label,
+            "sentiment": td["sentiment_key"],
+            "sentiment_label": td["sentiment_label"],
             "summary": llm_text.get("summary", ""),
             "key_drivers": llm_text.get("key_drivers", []),
             "outlook": llm_text.get("outlook", ""),
-            "alert_count": len(unique_alerts),
+            "alert_count": len(td["unique_alerts"]),
             "label": tf["label"],
         }
 
         # Persist score to DB
-        await _persist_sentiment_score(db, key, score, sentiment_key, sentiment_label, len(unique_alerts))
-        sentiment_data["score"] = score
+        await _persist_sentiment_score(
+            db, key, td["score"], td["sentiment_key"],
+            td["sentiment_label"], len(td["unique_alerts"]),
+        )
+        sentiment_data["score"] = td["score"]
 
         results["timeframes"][key] = sentiment_data
 

@@ -137,10 +137,14 @@ def build_alert(
     # --- severity per rule ------------------------------------------------ #
     severity_map: dict[str, str] = {}
     for mr in match_results:
-        sev = determine_severity(item_content, mr.rule)
+        sev = determine_severity(item_content, mr.rule, mr.match_score)
         severity_map[mr.rule.id] = sev
 
     highest_severity = _pick_highest_severity(list(severity_map.values()))
+
+    # Multi-rule boost: if 2+ rules matched, upgrade medium → high
+    if len(match_results) >= 2 and highest_severity == SEVERITY_MEDIUM:
+        highest_severity = SEVERITY_HIGH
 
     # --- time horizon (from the highest-severity rule) -------------------- #
     time_horizon = _pick_horizon(match_results, severity_map)
