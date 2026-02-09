@@ -36,7 +36,7 @@ router = APIRouter(tags=["prices"])
 # ── Configuration ─────────────────────────────────────────────────────
 
 CACHE_KEY = "prices:latest"
-CACHE_TTL_SECONDS = 120  # 2 minutes
+CACHE_TTL_SECONDS = 45  # refresh more often than the 60s dashboard poll
 
 # TGJU individual indicator endpoint (DataTables format)
 TGJU_API_BASE = "https://api.tgju.org/v1/market/indicator/summary-table-data"

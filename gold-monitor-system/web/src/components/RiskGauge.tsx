@@ -15,9 +15,9 @@ export default function RiskGauge({ score, size = 160 }: RiskGaugeProps) {
   if (clampedScore > 70) color = "#ef4444"; // red
   else if (clampedScore > 40) color = "#f59e0b"; // amber
 
-  let label = "کم";
-  if (clampedScore > 70) label = "بالا";
-  else if (clampedScore > 40) label = "متوسط";
+  let label = "آرام";
+  if (clampedScore > 70) label = "پرتحرک";
+  else if (clampedScore > 40) label = "فعال";
 
   return (
     <div className="flex flex-col items-center">
@@ -60,7 +60,7 @@ export default function RiskGauge({ score, size = 160 }: RiskGaugeProps) {
         </text>
       </svg>
       <span className="mt-1 text-sm font-medium text-gray-600 dark:text-gray-400">
-        ریسک: {label}
+        {label}
       </span>
     </div>
   );

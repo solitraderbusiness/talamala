@@ -704,6 +704,155 @@ async def _migrate_sources_v3() -> None:
         logger.info("Migration v3: switched %d source(s) to English Google News, cleared data.", fixed)
 
 
+async def _migrate_sources_v4() -> None:
+    """Add gold-specific international RSS sources and clear bad alerts.
+
+    - Add direct gold news RSS feeds (GoldSeek, Mining.com, BullionVault)
+    - Clean up false-positive alerts from overly loose matching
+    - Flush dedup keys for fresh re-processing with stricter matching
+
+    Runs once (tracked via settings marker).
+    """
+    marker_key = "migration:sources_v4"
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            text("SELECT key FROM settings WHERE key = :k"),
+            {"k": marker_key},
+        )
+        if result.scalar_one_or_none() is not None:
+            return
+
+        # --- Add new gold-specific sources ---
+        new_sources = [
+            Source(
+                name="GoldSeek News",
+                type="rss",
+                base_url="https://goldseek.com",
+                endpoints=["https://goldseek.com/rss/news"],
+                method="GET",
+                headers={},
+                auth_config={},
+                parser="rss",
+                enabled=True,
+                poll_interval_seconds=600,
+                categories=["global_gold"],
+                rule_bindings=[
+                    "GLOB_RATE_DECISION", "GLOB_CB_GOLD_RESERVES",
+                    "GLOB_MINING_SUPPLY", "GLOB_DOLLAR_DXY",
+                    "GLOB_US_MACRO_DATA", "GLOB_ASIA_PHYSICAL_DEMAND",
+                ],
+                reliability_score=0.8,
+                notes="GoldSeek — dedicated gold market news and analysis",
+            ),
+            Source(
+                name="Mining.com Gold",
+                type="rss",
+                base_url="https://www.mining.com",
+                endpoints=["https://www.mining.com/tag/gold/feed/"],
+                method="GET",
+                headers={},
+                auth_config={},
+                parser="rss",
+                enabled=True,
+                poll_interval_seconds=600,
+                categories=["global_gold"],
+                rule_bindings=[
+                    "GLOB_MINING_SUPPLY", "GLOB_CB_GOLD_RESERVES",
+                    "GLOB_RATE_DECISION", "GLOB_ASIA_PHYSICAL_DEMAND",
+                ],
+                reliability_score=0.85,
+                notes="Mining.com — gold mining and production news",
+            ),
+            Source(
+                name="BullionVault Gold News",
+                type="rss",
+                base_url="https://www.bullionvault.com",
+                endpoints=["https://www.bullionvault.com/gold-news/rss"],
+                method="GET",
+                headers={},
+                auth_config={},
+                parser="rss",
+                enabled=True,
+                poll_interval_seconds=600,
+                categories=["global_gold"],
+                rule_bindings=[
+                    "GLOB_RATE_DECISION", "GLOB_CB_GOLD_RESERVES",
+                    "GLOB_DOLLAR_DXY", "GLOB_US_MACRO_DATA",
+                    "GLOB_ASIA_PHYSICAL_DEMAND", "GLOB_GEOPOL_RISK",
+                ],
+                reliability_score=0.85,
+                notes="BullionVault — gold bullion market news",
+            ),
+            Source(
+                name="MarketWatch Gold & Silver",
+                type="rss",
+                base_url="https://www.marketwatch.com",
+                endpoints=[
+                    "https://www.marketwatch.com/rss/topstories",
+                ],
+                method="GET",
+                headers={},
+                auth_config={},
+                parser="rss",
+                enabled=True,
+                poll_interval_seconds=600,
+                categories=["global_gold"],
+                rule_bindings=[
+                    "GLOB_RATE_DECISION", "GLOB_DOLLAR_DXY",
+                    "GLOB_US_MACRO_DATA", "GLOB_US_YIELDS",
+                    "GLOB_EQUITY_RISK_OFF", "GLOB_FED_COMM",
+                ],
+                reliability_score=0.85,
+                notes="MarketWatch — financial markets top stories",
+            ),
+            Source(
+                name="Reuters Commodities",
+                type="rss",
+                base_url="https://www.reuters.com",
+                endpoints=[
+                    "https://news.google.com/rss/search?q=site%3Areuters.com+gold+OR+%22precious+metals%22+OR+%22gold+price%22+when%3A3d&hl=en-US&gl=US&ceid=US:en",
+                ],
+                method="GET",
+                headers={},
+                auth_config={},
+                parser="rss",
+                enabled=True,
+                poll_interval_seconds=600,
+                categories=["global_gold"],
+                rule_bindings=[
+                    "GLOB_RATE_DECISION", "GLOB_CB_GOLD_RESERVES",
+                    "GLOB_DOLLAR_DXY", "GLOB_US_MACRO_DATA",
+                    "GLOB_GEOPOL_RISK", "GLOB_MINING_SUPPLY",
+                ],
+                reliability_score=0.9,
+                notes="Reuters gold/commodities via Google News site: filter",
+            ),
+        ]
+
+        added = 0
+        for src in new_sources:
+            # Check if already exists
+            existing = await session.execute(
+                select(Source).where(Source.name == src.name)
+            )
+            if existing.scalar_one_or_none() is None:
+                session.add(src)
+                added += 1
+
+        # --- Clear all alerts for fresh start with stricter matching ---
+        await session.execute(text("DELETE FROM alerts"))
+        await session.execute(text("DELETE FROM raw_items"))
+
+        # --- Mark as done ---
+        await session.execute(
+            text("INSERT INTO settings (key, value, updated_at) "
+                 "VALUES (:k, '\"done\"', NOW())"),
+            {"k": marker_key},
+        )
+        await session.commit()
+        logger.info("Migration v4: added %d new gold sources, cleared data for re-matching.", added)
+
+
 async def _flush_dedup_keys() -> None:
     """One-time flush of Redis dedup keys so previously-failed items
     get re-processed with the now-working rule engine.
@@ -711,7 +860,7 @@ async def _flush_dedup_keys() -> None:
     Uses a marker key ``dedup:flushed:v2`` to avoid re-flushing on
     subsequent restarts.
     """
-    marker = "dedup:flushed:v5"
+    marker = "dedup:flushed:v6"
     try:
         r = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
         if await r.exists(marker):
@@ -750,6 +899,7 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     await _migrate_sources_to_persian()
     await _migrate_sources_v2()
     await _migrate_sources_v3()
+    await _migrate_sources_v4()
     await _flush_dedup_keys()
     await _snapshot_rules()
     logger.info("Startup complete.")

@@ -68,7 +68,7 @@ LOCK_KEY = "worker:lock"
 LOCK_TTL = 55  # seconds — slightly less than CYCLE_INTERVAL
 FETCH_TIMEOUT = 30  # per-request HTTP timeout (seconds)
 MAX_ALERTS_PER_SOURCE = 10  # prevent any single source from flooding
-MIN_MATCH_SCORE = 0.08  # require at least ~1 keyword match
+MIN_MATCH_SCORE = 0.18  # require meaningful match (~2 keywords or 1 kw + 1 signal)
 MAX_ARTICLE_AGE_HOURS = 48  # skip RSS items older than this
 
 logger = logging.getLogger("worker")
@@ -448,15 +448,22 @@ class Worker:
             )
             return 0
 
-        # Filter out low-quality matches (require minimum score)
+        # Filter out low-quality matches:
+        # 1) Minimum score threshold
+        # 2) Require at least 2 evidence points (keywords + signals)
+        #    to prevent single-keyword false positives
         top = match_results[0]
         match_results = [
-            mr for mr in match_results if mr.match_score >= MIN_MATCH_SCORE
+            mr for mr in match_results
+            if mr.match_score >= MIN_MATCH_SCORE
+            and (len(mr.matched_keywords) + len(mr.matched_signals)) >= 2
         ]
         if not match_results:
             logger.info(
-                "  Best score %.3f < %.2f for: %s (rule=%s, kw=%s)",
-                top.match_score, MIN_MATCH_SCORE,
+                "  Best score %.3f (kw=%d sig=%d) < threshold for: %s (rule=%s, kw=%s)",
+                top.match_score,
+                len(top.matched_keywords),
+                len(top.matched_signals),
                 (item.title or "")[:60],
                 top.rule.id,
                 top.matched_keywords[:3],
@@ -493,8 +500,10 @@ class Worker:
         if llm_enabled and settings.OPENROUTER_API_KEY:
             try:
                 llm_result = await self._call_llm(
-                    item.title, item.content_text,
+                    item.title, item.content_text, db=db,
                 )
+                if llm_result.get("title_fa"):
+                    alert["title"] = llm_result["title_fa"]
                 if llm_result.get("summary_fa"):
                     alert["summary_fa"] = llm_result["summary_fa"]
                 if llm_result.get("why_important_fa"):
@@ -547,12 +556,14 @@ class Worker:
             if llm_enabled and settings.OPENROUTER_API_KEY:
                 try:
                     llm_result = await self._call_llm(
-                        item.title, item.content_text,
+                        item.title, item.content_text, db=db,
                     )
-                    alert["summary_fa"] = llm_result.get("summary_fa")
-                    alert["why_important_fa"] = llm_result.get(
-                        "why_important_fa",
-                    )
+                    if llm_result.get("title_fa"):
+                        alert["title"] = llm_result["title_fa"]
+                    if llm_result.get("summary_fa"):
+                        alert["summary_fa"] = llm_result["summary_fa"]
+                    if llm_result.get("why_important_fa"):
+                        alert["why_important_fa"] = llm_result["why_important_fa"]
                 except Exception:
                     logger.warning(
                         "LLM enrichment failed for item %s",
@@ -626,23 +637,41 @@ class Worker:
             )
         return False
 
+    async def _get_llm_model(self, db) -> str:
+        """Read the configured LLM model from settings, with fallback."""
+        try:
+            result = await db.execute(
+                text("SELECT value FROM settings WHERE key = 'openrouter_model' LIMIT 1")
+            )
+            row = result.scalar_one_or_none()
+            if row and isinstance(row, str):
+                cleaned = row.strip().strip('"')
+                if cleaned:
+                    return cleaned
+        except Exception:
+            pass
+        return "anthropic/claude-sonnet-4"
+
     async def _call_llm(
-        self, title: str, content: str
+        self, title: str, content: str, db=None,
     ) -> dict[str, str | None]:
-        """Call OpenRouter to generate Farsi summary and importance note."""
+        """Call OpenRouter to generate Persian title, summary, and importance note."""
+        model = await self._get_llm_model(db) if db else "anthropic/claude-sonnet-4"
+
         prompt = (
-            "You are a gold-market analyst assistant. Given the following news "
-            "item, provide:\n"
-            "1. A concise summary in Farsi (summary_fa)\n"
-            "2. A brief explanation of why this is important for gold market "
-            "participants in Farsi (why_important_fa)\n\n"
+            "You are a Persian-language gold-market analyst. Given the following news "
+            "item, generate text in Persian (فارسی). Respond ONLY with a valid JSON object.\n\n"
+            "Required JSON keys:\n"
+            '- "title_fa": A short Persian headline (max 80 chars) capturing the main point\n'
+            '- "summary_fa": A concise summary in Persian (2-3 sentences)\n'
+            '- "why_important_fa": Why this matters for the gold market in Persian (2-3 bullet points with "- " prefix)\n\n'
             f"Title: {title}\n\n"
             f"Content: {content[:3000]}\n\n"
-            "Respond in JSON with keys: summary_fa, why_important_fa"
+            "Respond with ONLY the JSON object. No extra text."
         )
 
         payload = {
-            "model": "openai/gpt-4o-mini",
+            "model": model,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.3,
             "max_tokens": 1024,
@@ -667,15 +696,26 @@ class Worker:
             .get("content", "")
         )
 
+        # Strip markdown fences if present
+        text_content = reply.strip()
+        if text_content.startswith("```"):
+            first_nl = text_content.find("\n")
+            if first_nl != -1:
+                text_content = text_content[first_nl + 1:]
+            if text_content.endswith("```"):
+                text_content = text_content[:-3]
+            text_content = text_content.strip()
+
         # Try to parse as JSON; fall back to raw text.
         try:
-            parsed = json.loads(reply)
+            parsed = json.loads(text_content)
             return {
+                "title_fa": parsed.get("title_fa"),
                 "summary_fa": parsed.get("summary_fa"),
                 "why_important_fa": parsed.get("why_important_fa"),
             }
         except (json.JSONDecodeError, TypeError):
-            return {"summary_fa": reply, "why_important_fa": None}
+            return {"title_fa": None, "summary_fa": reply, "why_important_fa": None}
 
     # ------------------------------------------------------------------
     # Source status updates

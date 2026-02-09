@@ -171,26 +171,29 @@ async def list_alerts(
 # -- GET /alerts/stats/today  (registered BEFORE the {alert_id} catch-all) -
 
 
-def _compute_risk_score(alerts: list[Alert]) -> int:
-    """Compute a decay-weighted risk score (0-100).
+def _compute_activity_score(alerts: list[Alert]) -> int:
+    """Compute a decay-weighted market activity score (0-100).
+
+    Measures how much gold-relevant activity is happening — NOT risk direction.
+    Sentiment analysis handles bullish/bearish direction separately.
 
     Each alert contributes based on:
-    - severity weight: high=10, medium=4, low=1
-    - recency decay: exponential decay with 6h half-life
+    - severity weight: high=8, medium=2, low=0.5
+    - recency decay: exponential decay with 4h half-life
     - confidence: the match confidence (0-1)
 
     The raw sum is mapped to 0-100 via a logarithmic scale so that:
-    - 1 high alert in last hour  ≈ 25
-    - 3 high alerts in last 2h   ≈ 55
-    - 5+ high alerts in last 4h  ≈ 75-90
-    - Only extreme volume maxes out at 100
+    - 1-2 high alerts in last hour   ≈ 30-40
+    - 5+ high alerts in last 4h      ≈ 60-75
+    - Only extreme, sustained volume  → 80+
+    - Medium-only noise stays below 50
     """
     if not alerts:
         return 0
 
     now = datetime.datetime.now(datetime.timezone.utc)
-    severity_w = {"high": 10.0, "medium": 4.0, "low": 1.0}
-    half_life_hours = 6.0
+    severity_w = {"high": 8.0, "medium": 2.0, "low": 0.5}
+    half_life_hours = 4.0
     decay_constant = math.log(2) / half_life_hours
 
     raw = 0.0
@@ -198,12 +201,12 @@ def _compute_risk_score(alerts: list[Alert]) -> int:
         ts = a.timestamp_utc or a.created_at or now
         hours_ago = max((now - ts).total_seconds() / 3600.0, 0.0)
         recency = math.exp(-decay_constant * hours_ago)
-        sw = severity_w.get(a.severity, 2.0)
+        sw = severity_w.get(a.severity, 1.0)
         conf = max(a.confidence or 0.3, 0.3)
         raw += sw * recency * conf
 
-    # Logarithmic scaling: score = 25 * ln(1 + raw)
-    score = 25.0 * math.log(1.0 + raw)
+    # Logarithmic scaling: score = 20 * ln(1 + raw)
+    score = 20.0 * math.log(1.0 + raw)
     return min(100, max(0, round(score)))
 
 
@@ -226,14 +229,18 @@ async def alerts_stats_today(
     for a in all_alerts:
         counts[a.severity] = counts.get(a.severity, 0) + 1
 
-    # Risk score (decay-weighted)
-    risk_score = _compute_risk_score(all_alerts)
+    # Activity score (decay-weighted)
+    risk_score = _compute_activity_score(all_alerts)
 
-    # Top alerts: prioritize by severity then recency
+    # Top alerts: prioritize by severity, then recency (most recent first)
     severity_order = {"high": 0, "medium": 1, "low": 2}
+    now = datetime.datetime.now(datetime.timezone.utc)
     sorted_by_importance = sorted(
         all_alerts,
-        key=lambda a: (severity_order.get(a.severity, 9), -(a.confidence or 0)),
+        key=lambda a: (
+            severity_order.get(a.severity, 9),
+            -(a.timestamp_utc or a.created_at or now).timestamp(),
+        ),
     )
     top_alerts = sorted_by_importance[:3]
 

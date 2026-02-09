@@ -345,12 +345,12 @@ export default function DashboardPage() {
         })}
       </div>
 
-      {/* ─── Risk + Stats Row ─── */}
+      {/* ─── Activity + Stats Row ─── */}
       <div className="grid gap-4 md:grid-cols-3">
-        {/* Risk gauge */}
+        {/* Activity gauge */}
         <div className="card flex flex-col items-center justify-center">
           <h3 className="mb-3 text-sm font-medium text-gray-600 dark:text-gray-400">
-            شاخص ریسک
+            فعالیت بازار
           </h3>
           <RiskGauge score={stats?.risk_score ?? 0} />
         </div>
