@@ -62,6 +62,23 @@ function getAlertDirection(alert: Alert): Direction {
   return "neutral";
 }
 
+/** Compute a 0-100 per-alert sentiment score.
+ *  50 = neutral, >50 = bullish for gold, <50 = bearish for gold. */
+function getAlertScore(direction: Direction, severity: string): number {
+  const directionBase: Record<Direction, number> = {
+    bullish: 25,
+    bearish: -25,
+    neutral: 0,
+  };
+  const severityMult: Record<string, number> = {
+    high: 1.5,
+    medium: 1.0,
+    low: 0.5,
+  };
+  const score = 50 + directionBase[direction] * (severityMult[severity] || 1.0);
+  return Math.round(Math.max(0, Math.min(100, score)));
+}
+
 const DIR_CONFIG: Record<Direction, { icon: string; label: string; color: string }> = {
   bullish: { icon: "▲", label: "صعودی", color: "text-emerald-500" },
   bearish: { icon: "▼", label: "نزولی", color: "text-red-500" },
@@ -74,6 +91,22 @@ const SEVERITY_BORDER: Record<string, string> = {
   low: "",
 };
 
+function scoreColor(score: number): string {
+  if (score >= 65) return "text-emerald-500";
+  if (score >= 55) return "text-emerald-400";
+  if (score <= 35) return "text-red-500";
+  if (score <= 45) return "text-red-400";
+  return "text-gray-400";
+}
+
+function scoreBg(score: number): string {
+  if (score >= 65) return "bg-emerald-500/10";
+  if (score >= 55) return "bg-emerald-500/5";
+  if (score <= 35) return "bg-red-500/10";
+  if (score <= 45) return "bg-red-500/5";
+  return "bg-gray-500/5";
+}
+
 interface AlertCardProps {
   alert: Alert;
   compact?: boolean;
@@ -84,6 +117,7 @@ export default function AlertCard({ alert, compact = false }: AlertCardProps) {
   const hasEnglishTitle = isLikelyEnglish(alert.title) && displayTitle !== alert.title;
   const direction = getAlertDirection(alert);
   const dir = DIR_CONFIG[direction];
+  const score = getAlertScore(direction, alert.severity);
 
   return (
     <Link href={`/alert/${alert.id}`}>
@@ -117,26 +151,29 @@ export default function AlertCard({ alert, compact = false }: AlertCardProps) {
             </span>
           </div>
         </div>
-        <div className="mt-2 flex items-center gap-3 text-xs text-gray-500 dark:text-gray-500">
-          {alert.section && !compact && (
-            <>
-              <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium dark:bg-gray-800">
-                {sectionLabel(alert.section)}
-              </span>
-              <span className="text-gray-300 dark:text-gray-700">|</span>
-            </>
-          )}
-          <span>{alert.source_name}</span>
-          <span className="text-gray-300 dark:text-gray-700">|</span>
-          <span>{timeAgo(alert.timestamp_utc)}</span>
-          {!compact && (
-            <>
-              <span className="text-gray-300 dark:text-gray-700">|</span>
-              <span className={`font-medium ${dir.color}`}>
-                {dir.icon} {dir.label}
-              </span>
-            </>
-          )}
+        <div className="mt-2 flex items-center justify-between">
+          <div className="flex items-center gap-3 text-xs text-gray-500 dark:text-gray-500">
+            {alert.section && !compact && (
+              <>
+                <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium dark:bg-gray-800">
+                  {sectionLabel(alert.section)}
+                </span>
+                <span className="text-gray-300 dark:text-gray-700">|</span>
+              </>
+            )}
+            <span>{alert.source_name}</span>
+            <span className="text-gray-300 dark:text-gray-700">|</span>
+            <span>{timeAgo(alert.timestamp_utc)}</span>
+          </div>
+          {/* Per-alert sentiment score + direction */}
+          <div className={`flex items-center gap-1.5 rounded-full px-2 py-0.5 ${scoreBg(score)}`}>
+            <span className={`text-xs font-medium ${dir.color}`}>
+              {dir.icon} {dir.label}
+            </span>
+            <span className={`text-xs font-bold ${scoreColor(score)}`}>
+              {score}
+            </span>
+          </div>
         </div>
       </div>
     </Link>
