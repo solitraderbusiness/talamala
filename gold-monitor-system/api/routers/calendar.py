@@ -268,5 +268,5 @@ async def get_sync_status(
 async def trigger_sync() -> dict[str, Any]:
     """Manually trigger a calendar sync (admin use)."""
     from api.worker.calendar_sync import sync_calendar
-    result = await sync_calendar()
+    result = await sync_calendar(force=True)
     return {"status": "ok", "result": result}

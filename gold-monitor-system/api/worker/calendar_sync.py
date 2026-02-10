@@ -18,8 +18,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import aiohttp
-from bs4 import BeautifulSoup
-from sqlalchemy import select, and_, update
+from sqlalchemy import select, and_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from api.calendar_config import (
@@ -31,6 +30,10 @@ from api.database import AsyncSessionLocal
 from api.models import EconomicEvent
 
 logger = logging.getLogger("gold_monitor.calendar_sync")
+
+# Cooldown to prevent ForexFactory rate limiting (2 requests per 5 min)
+_last_sync_utc: datetime | None = None
+_SYNC_COOLDOWN_SECONDS = 300  # 5 minutes
 
 # Rate limit: 1 request per second for JBlanked
 _RATE_LIMIT_DELAY = 1.1
@@ -395,178 +398,139 @@ async def _upsert_events(events: list[dict[str, Any]]) -> int:
     return count
 
 
-async def _fetch_investingcom_actuals(
+async def _fetch_tradingeconomics_actuals(
     session: aiohttp.ClientSession,
-    date_str: str,
 ) -> dict[str, str]:
-    """Fetch actual values from Investing.com calendar for a specific date.
+    """Fetch actual values from TradingEconomics free guest API.
 
     Returns a dict mapping lowercase event_name -> actual_value.
-    Uses the sslecal2 embed endpoint which returns server-rendered HTML.
+    Uses the guest:guest credentials (free, no signup needed).
     """
-    url = "https://sslecal2.investing.com/"
-    params = {
-        "columns": "exc_flags,exc_currency,exc_importance,exc_actual,exc_forecast,exc_previous",
-        "importance": "1,2,3",
-        "timeZone": "0",
-        "timeFilter": "timeOnly",
-        "startDate": date_str,
-        "endDate": date_str,
-        "limit_from": "0",
-    }
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        ),
-        "X-Requested-With": "XMLHttpRequest",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Referer": "https://sslecal2.investing.com/",
-    }
+    url = "https://api.tradingeconomics.com/calendar"
+    params = {"c": "guest:guest", "f": "json"}
     try:
         async with session.get(
-            url, params=params, headers=headers,
+            url, params=params,
             timeout=aiohttp.ClientTimeout(total=30),
-            ssl=False,
         ) as resp:
             if resp.status != 200:
-                logger.warning(
-                    "Investing.com returned %d, skipping actuals.",
-                    resp.status,
-                )
+                logger.warning("TradingEconomics returned %d, skipping actuals.", resp.status)
                 return {}
 
-            html = await resp.text()
-            logger.warning(
-                "Investing.com response: %d chars, first 300: %s",
-                len(html), html[:300].replace("\n", " "),
-            )
-            soup = BeautifulSoup(html, "html.parser")
+            data = await resp.json()
+            if not isinstance(data, list):
+                logger.warning("TradingEconomics unexpected format: %s", type(data).__name__)
+                return {}
 
             actuals: dict[str, str] = {}
-            # Try multiple selector strategies
-            rows = soup.select("tr.js-event-item")
-            if not rows:
-                rows = soup.select("tr[data-event-datetime]")
-            if not rows:
-                rows = soup.select("tr[event_attr_id]")
-
-            logger.warning("Investing.com: found %d event rows.", len(rows))
-
-            for row in rows:
-                # Event name — try multiple selectors
-                name_el = (
-                    row.select_one("td.event a")
-                    or row.select_one("td.left.event a")
-                    or row.select_one("td a[href*='economic-calendar']")
-                )
-                if not name_el:
+            for event in data:
+                name = event.get("Event") or ""
+                actual = event.get("Actual")
+                if not name or not actual:
                     continue
-                event_name = name_el.get_text(strip=True)
-                if not event_name:
-                    continue
+                actual_str = str(actual).strip()
+                if actual_str and actual_str != "None":
+                    actuals[name.lower().strip()] = actual_str
 
-                # Actual value — try multiple selectors
-                actual_el = (
-                    row.select_one("td.bold.act")
-                    or row.select_one("td.bold")
-                    or row.select_one("td.act")
-                )
-                if not actual_el:
-                    continue
-                actual_text = actual_el.get_text(strip=True)
-                if not actual_text or actual_text == "\xa0" or actual_text == "":
-                    continue
-
-                actuals[event_name.lower()] = actual_text
-
-            logger.warning(
-                "Investing.com enrichment: found %d actuals for %s.",
-                len(actuals), date_str,
-            )
+            logger.warning("TradingEconomics: fetched %d events with actuals.", len(actuals))
             return actuals
     except Exception as exc:
-        logger.warning(
-            "Investing.com actuals fetch failed: %s", str(exc)[:200],
-        )
+        logger.warning("TradingEconomics actuals fetch failed: %s", str(exc)[:200])
         return {}
 
 
 async def _enrich_past_events_actuals(http_session: aiohttp.ClientSession) -> int:
-    """Enrich past events that have no actual value using Investing.com data.
+    """Enrich past events that have no actual value using TradingEconomics data.
 
-    Only processes events from today and yesterday that have actual=NULL.
-    Returns the number of events updated.
+    Fetches from the free guest API and matches against events in DB
+    that have actual=NULL. Returns the number of events updated.
     """
     now = datetime.now(timezone.utc)
-    today = now.strftime("%Y-%m-%d")
-    yesterday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+
+    actuals_map = await _fetch_tradingeconomics_actuals(http_session)
+    if not actuals_map:
+        logger.warning("No actuals data available for enrichment.")
+        return 0
 
     total_updated = 0
-    for date_str in [today, yesterday]:
-        actuals_map = await _fetch_investingcom_actuals(http_session, date_str)
-        if not actuals_map:
-            continue
-
-        # Update events in DB that match and have no actual value
-        async with AsyncSessionLocal() as db_session:
-            # Find past events without actual values for this date
-            date_start = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-            date_end = date_start + timedelta(days=1)
-            stmt = select(EconomicEvent).where(
-                and_(
-                    EconomicEvent.datetime_utc >= date_start,
-                    EconomicEvent.datetime_utc < date_end,
-                    EconomicEvent.datetime_utc < now,
-                    EconomicEvent.actual.is_(None),
-                )
+    async with AsyncSessionLocal() as db_session:
+        # Find past events from last 2 days without actual values
+        two_days_ago = now - timedelta(days=2)
+        stmt = select(EconomicEvent).where(
+            and_(
+                EconomicEvent.datetime_utc >= two_days_ago,
+                EconomicEvent.datetime_utc < now,
+                EconomicEvent.actual.is_(None),
             )
-            result = await db_session.execute(stmt)
-            events = result.scalars().all()
+        )
+        result = await db_session.execute(stmt)
+        events = result.scalars().all()
 
-            for event in events:
-                # Try exact match first, then fuzzy
-                key = event.event_name.lower()
-                actual = actuals_map.get(key)
-                if not actual:
-                    # Try partial match — FF uses "m/m" while IC might use "(MoM)"
-                    for ic_name, ic_actual in actuals_map.items():
-                        # Match if core event name is contained
-                        core = key.split("(")[0].split("m/m")[0].split("q/q")[0].split("y/y")[0].strip()
-                        ic_core = ic_name.split("(")[0].strip()
-                        if core and ic_core and (core in ic_name or ic_core in key):
-                            actual = ic_actual
-                            break
+        for event in events:
+            key = event.event_name.lower().strip()
+            actual = actuals_map.get(key)
+            if not actual:
+                # Fuzzy match: strip suffixes like "m/m", "q/q", "y/y"
+                # FF: "Business Inventories m/m" vs TE: "Business Inventories MoM"
+                for te_name, te_actual in actuals_map.items():
+                    core = key.replace(" m/m", "").replace(" q/q", "").replace(" y/y", "").strip()
+                    te_core = (te_name.replace(" mom", "").replace(" qoq", "")
+                               .replace(" yoy", "").strip())
+                    if core and te_core and (core in te_name or te_core in key):
+                        actual = te_actual
+                        break
 
-                if actual:
-                    event.actual = actual
-                    total_updated += 1
+            if actual:
+                event.actual = actual
+                total_updated += 1
 
-            if total_updated:
-                await db_session.commit()
-
-        await asyncio.sleep(_RATE_LIMIT_DELAY)  # Rate limit between date fetches
+        if total_updated:
+            await db_session.commit()
 
     logger.warning("Actuals enrichment done: %d events updated.", total_updated)
     return total_updated
 
 
-async def sync_calendar() -> dict[str, Any]:
+async def sync_calendar(force: bool = False) -> dict[str, Any]:
     """Main sync function — fetch events from APIs and upsert into DB.
 
     Returns a summary dict with counts.
+    Uses a 5-minute cooldown to prevent ForexFactory rate limiting.
+    Pass force=True to bypass cooldown (used by manual sync endpoint).
     """
+    global _last_sync_utc
+
     now = datetime.now(timezone.utc)
+
+    # Cooldown check — ForexFactory only allows 2 requests per 5 minutes
+    if not force and _last_sync_utc:
+        elapsed = (now - _last_sync_utc).total_seconds()
+        if elapsed < _SYNC_COOLDOWN_SECONDS:
+            # Still run enrichment even during cooldown
+            enriched = 0
+            try:
+                async with aiohttp.ClientSession() as s:
+                    enriched = await _enrich_past_events_actuals(s)
+            except Exception:
+                pass
+            return {
+                "source": "cooldown",
+                "fetched": 0,
+                "upserted": 0,
+                "enriched_actuals": enriched,
+                "note": f"Cooldown active, {int(_SYNC_COOLDOWN_SECONDS - elapsed)}s remaining",
+            }
+
     # Fetch this week + next week
     week_start = now - timedelta(days=now.weekday())  # Monday
     from_date = week_start.strftime("%Y-%m-%d")
     to_date = (week_start + timedelta(days=13)).strftime("%Y-%m-%d")
 
-    logger.info(
-        "Calendar sync: range=%s..%s, JBlanked key=%s, Finnhub key=%s",
+    logger.warning(
+        "Calendar sync: range=%s..%s, JBlanked=%s, Finnhub=%s",
         from_date, to_date,
-        "SET" if settings.JBLANKED_API_KEY else "NOT SET",
-        "SET" if settings.FINNHUB_API_KEY else "NOT SET",
+        "SET" if settings.JBLANKED_API_KEY else "no",
+        "SET" if settings.FINNHUB_API_KEY else "no",
     )
 
     all_events: list[dict[str, Any]] = []
@@ -635,16 +599,26 @@ async def sync_calendar() -> dict[str, Any]:
                 source_used = "forexfactory"
                 logger.info("ForexFactory parsed %d events.", len(all_events))
 
+    # Mark sync time AFTER fetching to prevent rate limiting on next call
+    _last_sync_utc = datetime.now(timezone.utc)
+
     if not all_events:
         logger.warning("No calendar events fetched from any source.")
-        return {"source": source_used, "fetched": 0, "upserted": 0}
+        # Still try enrichment even if no new events
+        enriched = 0
+        try:
+            async with aiohttp.ClientSession() as s:
+                enriched = await _enrich_past_events_actuals(s)
+        except Exception:
+            pass
+        return {"source": source_used, "fetched": 0, "upserted": 0, "enriched_actuals": enriched}
 
     # Upsert into database
     upserted = await _upsert_events(all_events)
-    logger.info("Calendar sync complete: %d fetched, %d upserted from %s.",
+    logger.warning("Calendar sync complete: %d fetched, %d upserted from %s.",
                 len(all_events), upserted, source_used)
 
-    # Enrich past events with actual values from Investing.com
+    # Enrich past events with actual values from TradingEconomics
     enriched = 0
     try:
         async with aiohttp.ClientSession() as enrich_session:
