@@ -386,7 +386,7 @@ export default function DashboardPage() {
         })}
         <Link
           href="/prices"
-          className="card flex flex-col items-center justify-center text-center transition-colors hover:border-gold-500 hover:bg-gold-50 dark:hover:border-gold-600 dark:hover:bg-gold-900/20"
+          className="card flex flex-col items-center justify-center border-dashed border-gray-300 text-center transition-colors hover:border-gold-500 hover:bg-gold-50/50 dark:border-gray-700 dark:hover:border-gold-500 dark:hover:bg-gold-900/20"
         >
           <span className="text-2xl">📊</span>
           <span className="mt-2 text-sm font-medium text-gold-600 dark:text-gold-400">
@@ -407,40 +407,47 @@ export default function DashboardPage() {
             </h2>
             <Link
               href="/calendar"
-              className="text-xs text-gold-600 hover:text-gold-700 dark:text-gold-400 dark:hover:text-gold-300"
+              className="inline-flex items-center gap-1 rounded-lg border border-gold-500/30 bg-gold-50/50 px-3 py-1.5 text-xs font-medium text-gold-700 transition-colors hover:bg-gold-100 dark:border-gold-500/20 dark:bg-gold-900/10 dark:text-gold-400 dark:hover:bg-gold-900/30"
             >
-              مشاهده تقویم کامل &#8592;
+              تقویم کامل &#8592;
             </Link>
           </div>
-          <div className="space-y-2">
-            {upcomingEvents.slice(0, 5).map((event) => {
-              const impactColor = event.impact === "high"
-                ? "bg-red-500"
+          <div className="space-y-1.5">
+            {upcomingEvents.slice(0, 5).map((event, idx) => {
+              const impactBorder = event.impact === "high"
+                ? "border-r-red-500"
                 : event.impact === "medium"
-                  ? "bg-orange-500"
-                  : "bg-green-500";
+                  ? "border-r-amber-500"
+                  : "border-r-emerald-500";
+              const impactBg = event.impact === "high"
+                ? "bg-red-500/[0.03] dark:bg-red-500/10"
+                : event.impact === "medium"
+                  ? "bg-amber-500/[0.03] dark:bg-amber-500/10"
+                  : "";
               const flagMap: Record<string, string> = {
                 US: "\u{1F1FA}\u{1F1F8}", EU: "\u{1F1EA}\u{1F1FA}",
                 GB: "\u{1F1EC}\u{1F1E7}", JP: "\u{1F1EF}\u{1F1F5}",
                 CN: "\u{1F1E8}\u{1F1F3}", AU: "\u{1F1E6}\u{1F1FA}",
+                CA: "\u{1F1E8}\u{1F1E6}", CH: "\u{1F1E8}\u{1F1ED}",
+                NZ: "\u{1F1F3}\u{1F1FF}", DE: "\u{1F1E9}\u{1F1EA}",
                 IR: "\u{1F1EE}\u{1F1F7}",
               };
+              const eventName = event.event_name_fa !== event.event_name
+                ? event.event_name_fa
+                : event.event_name;
               return (
                 <div
                   key={event.id}
-                  className="flex items-center gap-3 rounded-lg px-2 py-1.5 hover:bg-gray-50 dark:hover:bg-gray-800/50"
+                  className={`flex items-center gap-3 rounded-lg border-r-[3px] px-3 py-2.5 transition-colors ${impactBorder} ${impactBg} ${idx === 0 ? "ring-1 ring-gold-500/20" : ""}`}
                 >
-                  <div className={`h-2.5 w-2.5 shrink-0 rounded-full ${impactColor}`} />
-                  <span className="text-xs text-gold-600 dark:text-gold-400 w-20 shrink-0">
-                    {event.time_until}
-                  </span>
-                  <span className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
-                    {event.event_name_fa !== event.event_name
-                      ? event.event_name_fa
-                      : event.event_name}
-                  </span>
-                  <span className="text-base shrink-0">
+                  <span className="shrink-0 text-base">
                     {flagMap[event.country] || event.country}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-sm font-medium text-gray-900 dark:text-gray-100">
+                    {eventName}
+                  </span>
+                  <span className="shrink-0 whitespace-nowrap rounded-md bg-gray-100 px-2 py-0.5 text-[11px] font-medium tabular-nums text-gray-600 dark:bg-gray-800 dark:text-gray-400">
+                    {event.time_until}
                   </span>
                 </div>
               );
@@ -507,27 +514,72 @@ export default function DashboardPage() {
 
         {/* Alert counts */}
         <div className="card">
-          <h3 className="mb-3 text-sm font-medium text-gray-600 dark:text-gray-400">
-            هشدارهای امروز
-          </h3>
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <SeverityBadge severity="high" />
-              <span className="text-xl font-bold text-red-600">
-                {stats?.counts?.high ?? 0}
-              </span>
+          <div className="mb-4 flex items-center justify-between">
+            <h3 className="text-sm font-medium text-gray-600 dark:text-gray-400">
+              هشدارهای امروز
+            </h3>
+            <span className="text-2xl font-bold text-gray-900 dark:text-gray-100">
+              {(stats?.counts?.critical ?? 0) + (stats?.counts?.high ?? 0) + (stats?.counts?.medium ?? 0) + (stats?.counts?.low ?? 0)}
+            </span>
+          </div>
+          <div className="space-y-2.5">
+            {(stats?.counts?.critical ?? 0) > 0 && (
+              <div className="space-y-1">
+                <div className="flex items-center justify-between">
+                  <SeverityBadge severity="critical" />
+                  <span className="text-sm font-bold text-purple-600">
+                    {stats?.counts?.critical ?? 0}
+                  </span>
+                </div>
+                <div className="h-1.5 rounded-full bg-gray-100 dark:bg-gray-800">
+                  <div
+                    className="h-full rounded-full bg-purple-500 transition-all duration-500"
+                    style={{ width: `${Math.max(((stats?.counts?.critical ?? 0) / Math.max((stats?.counts?.critical ?? 0) + (stats?.counts?.high ?? 0) + (stats?.counts?.medium ?? 0) + (stats?.counts?.low ?? 0), 1)) * 100, 5)}%` }}
+                  />
+                </div>
+              </div>
+            )}
+            <div className="space-y-1">
+              <div className="flex items-center justify-between">
+                <SeverityBadge severity="high" />
+                <span className="text-sm font-bold text-red-600">
+                  {stats?.counts?.high ?? 0}
+                </span>
+              </div>
+              <div className="h-1.5 rounded-full bg-gray-100 dark:bg-gray-800">
+                <div
+                  className="h-full rounded-full bg-red-500 transition-all duration-500"
+                  style={{ width: `${Math.max(((stats?.counts?.high ?? 0) / Math.max((stats?.counts?.critical ?? 0) + (stats?.counts?.high ?? 0) + (stats?.counts?.medium ?? 0) + (stats?.counts?.low ?? 0), 1)) * 100, (stats?.counts?.high ?? 0) > 0 ? 5 : 0)}%` }}
+                />
+              </div>
             </div>
-            <div className="flex items-center justify-between">
-              <SeverityBadge severity="medium" />
-              <span className="text-xl font-bold text-amber-600">
-                {stats?.counts?.medium ?? 0}
-              </span>
+            <div className="space-y-1">
+              <div className="flex items-center justify-between">
+                <SeverityBadge severity="medium" />
+                <span className="text-sm font-bold text-amber-600">
+                  {stats?.counts?.medium ?? 0}
+                </span>
+              </div>
+              <div className="h-1.5 rounded-full bg-gray-100 dark:bg-gray-800">
+                <div
+                  className="h-full rounded-full bg-amber-500 transition-all duration-500"
+                  style={{ width: `${Math.max(((stats?.counts?.medium ?? 0) / Math.max((stats?.counts?.critical ?? 0) + (stats?.counts?.high ?? 0) + (stats?.counts?.medium ?? 0) + (stats?.counts?.low ?? 0), 1)) * 100, (stats?.counts?.medium ?? 0) > 0 ? 5 : 0)}%` }}
+                />
+              </div>
             </div>
-            <div className="flex items-center justify-between">
-              <SeverityBadge severity="low" />
-              <span className="text-xl font-bold text-gray-600 dark:text-gray-400">
-                {stats?.counts?.low ?? 0}
-              </span>
+            <div className="space-y-1">
+              <div className="flex items-center justify-between">
+                <SeverityBadge severity="low" />
+                <span className="text-sm font-bold text-gray-600 dark:text-gray-400">
+                  {stats?.counts?.low ?? 0}
+                </span>
+              </div>
+              <div className="h-1.5 rounded-full bg-gray-100 dark:bg-gray-800">
+                <div
+                  className="h-full rounded-full bg-gray-400 transition-all duration-500"
+                  style={{ width: `${Math.max(((stats?.counts?.low ?? 0) / Math.max((stats?.counts?.critical ?? 0) + (stats?.counts?.high ?? 0) + (stats?.counts?.medium ?? 0) + (stats?.counts?.low ?? 0), 1)) * 100, (stats?.counts?.low ?? 0) > 0 ? 5 : 0)}%` }}
+                />
+              </div>
             </div>
           </div>
         </div>
