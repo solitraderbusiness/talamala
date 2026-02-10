@@ -5,9 +5,15 @@ Runs every 6 hours (configurable via CALENDAR_SYNC_INTERVAL).
 Fetches this week's and next week's events, upserts into database.
 
 Data sources (in priority order):
-1. JBlanked Calendar API (MQL5 aggregation) — requires JBLANKED_API_KEY
-2. Finnhub Economic Calendar API — requires FINNHUB_API_KEY (paid plan)
-3. Forex Factory Calendar (free, no API key) — fallback
+1. JBlanked Calendar API (FxStreet — includes actuals) — requires JBLANKED_API_KEY
+2. Finnhub Economic Calendar API — requires FINNHUB_API_KEY (paid plan $50/mo)
+3. Forex Factory Calendar (free, no API key) — schedule only, NO actual values
+
+Actuals enrichment:
+- ForexFactory JSON does NOT include actual values (confirmed: the field is absent)
+- JBlanked FxStreet endpoint includes actuals for released events
+- When ForexFactory is the primary source, JBlanked is used to enrich actuals
+  (if JBLANKED_API_KEY is set, limited to 1 request/day on free tier)
 """
 
 from __future__ import annotations
@@ -18,7 +24,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import aiohttp
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from api.calendar_config import (
@@ -34,6 +40,10 @@ logger = logging.getLogger("gold_monitor.calendar_sync")
 # Cooldown to prevent ForexFactory rate limiting (2 requests per 5 min)
 _last_sync_utc: datetime | None = None
 _SYNC_COOLDOWN_SECONDS = 300  # 5 minutes
+
+# JBlanked enrichment: track last request to stay within free-tier limit (1/day)
+_last_jblanked_enrich_utc: datetime | None = None
+_JBLANKED_ENRICH_COOLDOWN = 86400  # 24 hours
 
 # Rate limit: 1 request per second for JBlanked
 _RATE_LIMIT_DELAY = 1.1
@@ -109,6 +119,67 @@ def _extract_country_from_currency(currency: str) -> str:
     return mapping.get(currency.upper(), "")
 
 
+# ── Name normalization for matching events across sources ──────────────
+
+_SUFFIX_VARIANTS = {
+    " m/m": " mom",
+    " q/q": " qoq",
+    " y/y": " yoy",
+    " (mom)": " mom",
+    " (qoq)": " qoq",
+    " (yoy)": " yoy",
+    " month-over-month": " mom",
+    " quarter-over-quarter": " qoq",
+    " year-over-year": " yoy",
+}
+
+_STRIP_WORDS = {
+    "preliminary", "prelim", "revised", "final", "flash",
+    "advanced", "adv", "initial", "prel",
+}
+
+
+def _normalize_event_name(name: str) -> str:
+    """Normalize event name for cross-source matching."""
+    n = name.lower().strip()
+    for old, new in _SUFFIX_VARIANTS.items():
+        n = n.replace(old, new)
+    return n
+
+
+def _fuzzy_event_match(name_a: str, name_b: str) -> bool:
+    """Check if two event names refer to the same event (cross-source matching).
+
+    Handles differences like:
+    - "CPI m/m" vs "CPI MoM"
+    - "GDP q/q" vs "GDP QoQ (Preliminary)"
+    """
+    a = _normalize_event_name(name_a)
+    b = _normalize_event_name(name_b)
+
+    if a == b:
+        return True
+
+    # Strip qualifiers and try again
+    a_core = a
+    b_core = b
+    for word in _STRIP_WORDS:
+        a_core = a_core.replace(word, "").strip()
+        b_core = b_core.replace(word, "").strip()
+    a_core = " ".join(a_core.split())
+    b_core = " ".join(b_core.split())
+
+    if a_core == b_core:
+        return True
+
+    # Substring match (one contained in the other)
+    if len(a_core) > 4 and len(b_core) > 4:
+        if a_core in b_core or b_core in a_core:
+            return True
+
+    return False
+
+
 async def _fetch_jblanked_week(
     session: aiohttp.ClientSession,
     endpoint: str,
@@ -165,6 +236,12 @@ async def _fetch_finnhub_calendar(
                         # Some Finnhub responses nest events under "result"
                         return cal.get("result", [])
                 return []
+            elif resp.status == 403:
+                logger.warning(
+                    "Finnhub API returned 403 — economic calendar requires "
+                    "paid plan ($50/mo). See https://finnhub.io/pricing"
+                )
+                return []
             else:
                 text = await resp.text()
                 logger.warning("Finnhub API returned %d: %s", resp.status, text[:300])
@@ -209,6 +286,7 @@ def _parse_forexfactory_event(raw: dict[str, Any]) -> dict[str, Any] | None:
 
     FF fields: title, country (currency code like USD), date (ISO 8601),
     impact (High/Medium/Low/Holiday), forecast, previous.
+    NOTE: "actual" field does not exist in FF JSON exports.
     """
     name = raw.get("title") or ""
     if not name:
@@ -224,12 +302,9 @@ def _parse_forexfactory_event(raw: dict[str, Any]) -> dict[str, Any] | None:
     country = _extract_country_from_currency(currency)
     impact_raw = raw.get("impact") or "Low"
 
-    actual = raw.get("actual")
     forecast = raw.get("forecast")
     previous = raw.get("previous")
 
-    if actual is not None:
-        actual = str(actual).strip() if str(actual).strip() else None
     if forecast is not None:
         forecast = str(forecast).strip() if str(forecast).strip() else None
     if previous is not None:
@@ -243,7 +318,7 @@ def _parse_forexfactory_event(raw: dict[str, Any]) -> dict[str, Any] | None:
         "category": "",
         "datetime_utc": dt,
         "impact": _normalize_impact(impact_raw),
-        "actual": actual,
+        "actual": None,  # FF never provides actuals
         "forecast": forecast,
         "previous": previous,
         "source": "forexfactory",
@@ -291,7 +366,7 @@ def _parse_jblanked_event(raw: dict[str, Any]) -> dict[str, Any] | None:
         "actual": actual,
         "forecast": forecast,
         "previous": previous,
-        "source": "mql5",
+        "source": "fxstreet",
         "affected_assets": get_affected_assets(name.strip(), currency),
     }
 
@@ -398,67 +473,76 @@ async def _upsert_events(events: list[dict[str, Any]]) -> int:
     return count
 
 
-async def _fetch_tradingeconomics_actuals(
-    session: aiohttp.ClientSession,
-) -> dict[str, str]:
-    """Fetch actual values from TradingEconomics free guest API.
+async def _enrich_actuals_from_jblanked(http_session: aiohttp.ClientSession) -> int:
+    """Enrich past events with actual values from JBlanked FxStreet API.
 
-    Returns a dict mapping lowercase event_name -> actual_value.
-    Uses the guest:guest credentials (free, no signup needed).
+    JBlanked FxStreet endpoint includes actual values for released events.
+    Free tier allows 1 request/day, so we rate-limit accordingly.
+    Uses fuzzy name matching to handle naming differences between FF and FxStreet.
+
+    Returns the number of events updated.
     """
-    url = "https://api.tradingeconomics.com/calendar"
-    params = {"c": "guest:guest", "f": "json"}
-    try:
-        async with session.get(
-            url, params=params,
-            timeout=aiohttp.ClientTimeout(total=30),
-        ) as resp:
-            if resp.status != 200:
-                logger.warning("TradingEconomics returned %d, skipping actuals.", resp.status)
-                return {}
+    global _last_jblanked_enrich_utc
 
-            data = await resp.json()
-            if not isinstance(data, list):
-                logger.warning("TradingEconomics unexpected format: %s", type(data).__name__)
-                return {}
-
-            actuals: dict[str, str] = {}
-            for event in data:
-                name = event.get("Event") or ""
-                actual = event.get("Actual")
-                if not name or not actual:
-                    continue
-                actual_str = str(actual).strip()
-                if actual_str and actual_str != "None":
-                    actuals[name.lower().strip()] = actual_str
-
-            logger.warning("TradingEconomics: fetched %d events with actuals.", len(actuals))
-            return actuals
-    except Exception as exc:
-        logger.warning("TradingEconomics actuals fetch failed: %s", str(exc)[:200])
-        return {}
-
-
-async def _enrich_past_events_actuals(http_session: aiohttp.ClientSession) -> int:
-    """Enrich past events that have no actual value using TradingEconomics data.
-
-    Fetches from the free guest API and matches against events in DB
-    that have actual=NULL. Returns the number of events updated.
-    """
-    now = datetime.now(timezone.utc)
-
-    actuals_map = await _fetch_tradingeconomics_actuals(http_session)
-    if not actuals_map:
-        logger.warning("No actuals data available for enrichment.")
+    if not settings.JBLANKED_API_KEY:
         return 0
 
+    now = datetime.now(timezone.utc)
+
+    # Rate limit: 1 request per day for free tier
+    if _last_jblanked_enrich_utc:
+        elapsed = (now - _last_jblanked_enrich_utc).total_seconds()
+        if elapsed < _JBLANKED_ENRICH_COOLDOWN:
+            remaining_h = (_JBLANKED_ENRICH_COOLDOWN - elapsed) / 3600
+            logger.info(
+                "JBlanked enrichment cooldown: %.1fh remaining (free tier: 1 req/day).",
+                remaining_h,
+            )
+            return 0
+
+    # Fetch this week's events from FxStreet (includes actuals)
+    logger.info("Fetching actuals from JBlanked FxStreet endpoint...")
+    fxstreet_events = await _fetch_jblanked_week(
+        http_session,
+        "https://www.jblanked.com/news/api/fxstreet/calendar/week/",
+    )
+    _last_jblanked_enrich_utc = datetime.now(timezone.utc)
+
+    if not fxstreet_events:
+        logger.warning("JBlanked FxStreet returned no events for actuals enrichment.")
+        return 0
+
+    # Parse events and collect those with actuals
+    actuals_map: list[tuple[str, str, datetime | None, str]] = []
+    for raw in fxstreet_events:
+        parsed = _parse_jblanked_event(raw)
+        if parsed and parsed["actual"]:
+            actuals_map.append((
+                parsed["event_name"],
+                parsed["currency"],
+                parsed["datetime_utc"],
+                parsed["actual"],
+            ))
+
+    if not actuals_map:
+        logger.info(
+            "JBlanked FxStreet returned %d events but none have actuals yet.",
+            len(fxstreet_events),
+        )
+        return 0
+
+    logger.info(
+        "JBlanked FxStreet: %d events with actuals (from %d total).",
+        len(actuals_map), len(fxstreet_events),
+    )
+
+    # Find DB events without actuals from the past week
     total_updated = 0
     async with AsyncSessionLocal() as db_session:
-        # Find past events from last 2 days without actual values
-        two_days_ago = now - timedelta(days=2)
+        week_ago = now - timedelta(days=7)
         stmt = select(EconomicEvent).where(
             and_(
-                EconomicEvent.datetime_utc >= two_days_ago,
+                EconomicEvent.datetime_utc >= week_ago,
                 EconomicEvent.datetime_utc < now,
                 EconomicEvent.actual.is_(None),
             )
@@ -466,28 +550,36 @@ async def _enrich_past_events_actuals(http_session: aiohttp.ClientSession) -> in
         result = await db_session.execute(stmt)
         events = result.scalars().all()
 
-        for event in events:
-            key = event.event_name.lower().strip()
-            actual = actuals_map.get(key)
-            if not actual:
-                # Fuzzy match: strip suffixes like "m/m", "q/q", "y/y"
-                # FF: "Business Inventories m/m" vs TE: "Business Inventories MoM"
-                for te_name, te_actual in actuals_map.items():
-                    core = key.replace(" m/m", "").replace(" q/q", "").replace(" y/y", "").strip()
-                    te_core = (te_name.replace(" mom", "").replace(" qoq", "")
-                               .replace(" yoy", "").strip())
-                    if core and te_core and (core in te_name or te_core in key):
-                        actual = te_actual
-                        break
+        if not events:
+            logger.info("No past events without actuals to enrich.")
+            return 0
 
-            if actual:
-                event.actual = actual
+        logger.info("Found %d past events without actuals to enrich.", len(events))
+
+        for event in events:
+            for fx_name, fx_currency, fx_dt, fx_actual in actuals_map:
+                # Currency must match
+                if event.currency and fx_currency and event.currency != fx_currency:
+                    continue
+
+                # Names must match (fuzzy)
+                if not _fuzzy_event_match(event.event_name, fx_name):
+                    continue
+
+                # Datetime should be within 2 hours (same event, different timezone offsets)
+                if fx_dt and event.datetime_utc:
+                    dt_diff = abs((event.datetime_utc - fx_dt).total_seconds())
+                    if dt_diff > 7200:
+                        continue
+
+                event.actual = fx_actual
                 total_updated += 1
+                break
 
         if total_updated:
             await db_session.commit()
 
-    logger.warning("Actuals enrichment done: %d events updated.", total_updated)
+    logger.warning("Actuals enrichment done: %d events updated from JBlanked FxStreet.", total_updated)
     return total_updated
 
 
@@ -506,11 +598,11 @@ async def sync_calendar(force: bool = False) -> dict[str, Any]:
     if not force and _last_sync_utc:
         elapsed = (now - _last_sync_utc).total_seconds()
         if elapsed < _SYNC_COOLDOWN_SECONDS:
-            # Still run enrichment even during cooldown
+            # Still try actuals enrichment during cooldown
             enriched = 0
             try:
                 async with aiohttp.ClientSession() as s:
-                    enriched = await _enrich_past_events_actuals(s)
+                    enriched = await _enrich_actuals_from_jblanked(s)
             except Exception:
                 pass
             return {
@@ -537,13 +629,13 @@ async def sync_calendar(force: bool = False) -> dict[str, Any]:
     source_used = "none"
 
     async with aiohttp.ClientSession() as http_session:
-        # Try JBlanked first
+        # Try JBlanked first (FxStreet endpoint — includes actuals)
         if settings.JBLANKED_API_KEY:
-            logger.info("Fetching calendar from JBlanked API...")
-            # This week
+            logger.info("Fetching calendar from JBlanked FxStreet API...")
+            # This week (FxStreet — includes actuals for released events)
             this_week = await _fetch_jblanked_week(
                 http_session,
-                "https://www.jblanked.com/news/api/mql5/calendar/week/",
+                "https://www.jblanked.com/news/api/fxstreet/calendar/week/",
             )
             for raw in this_week:
                 parsed = _parse_jblanked_event(raw)
@@ -552,7 +644,7 @@ async def sync_calendar(force: bool = False) -> dict[str, Any]:
 
             await asyncio.sleep(_RATE_LIMIT_DELAY)
 
-            # Next week via date range
+            # Next week via date range (MQL5 range endpoint as fallback)
             next_week_start = week_start + timedelta(days=7)
             next_week_end = next_week_start + timedelta(days=6)
             next_week = await _fetch_jblanked_week(
@@ -565,10 +657,14 @@ async def sync_calendar(force: bool = False) -> dict[str, Any]:
                     all_events.append(parsed)
 
             if all_events:
-                source_used = "jblanked"
-                logger.info("JBlanked returned %d events.", len(all_events))
+                actuals_count = sum(1 for e in all_events if e.get("actual"))
+                source_used = "jblanked_fxstreet"
+                logger.info(
+                    "JBlanked returned %d events (%d with actuals).",
+                    len(all_events), actuals_count,
+                )
 
-        # Fallback to Finnhub
+        # Fallback to Finnhub (requires paid plan for economic calendar)
         if not all_events and settings.FINNHUB_API_KEY:
             logger.info("Falling back to Finnhub API...")
             finnhub_events = await _fetch_finnhub_calendar(
@@ -587,7 +683,14 @@ async def sync_calendar(force: bool = False) -> dict[str, Any]:
                 source_used = "finnhub"
 
         # Fallback to Forex Factory (free, no API key needed)
+        # NOTE: FF provides schedule/dates/impact/forecast/previous but NEVER actuals
         if not all_events:
+            if not settings.JBLANKED_API_KEY:
+                logger.warning(
+                    "Using ForexFactory (no actuals). "
+                    "Set JBLANKED_API_KEY for actual values — "
+                    "free key at https://www.jblanked.com/news/api/docs/calendar/"
+                )
             logger.info("Falling back to ForexFactory (free)...")
             ff_events = await _fetch_forexfactory_calendar(http_session)
             for raw in ff_events:
@@ -597,7 +700,7 @@ async def sync_calendar(force: bool = False) -> dict[str, Any]:
 
             if all_events:
                 source_used = "forexfactory"
-                logger.info("ForexFactory parsed %d events.", len(all_events))
+                logger.info("ForexFactory parsed %d events (no actuals available).", len(all_events))
 
     # Mark sync time AFTER fetching to prevent rate limiting on next call
     _last_sync_utc = datetime.now(timezone.utc)
@@ -608,7 +711,7 @@ async def sync_calendar(force: bool = False) -> dict[str, Any]:
         enriched = 0
         try:
             async with aiohttp.ClientSession() as s:
-                enriched = await _enrich_past_events_actuals(s)
+                enriched = await _enrich_actuals_from_jblanked(s)
         except Exception:
             pass
         return {"source": source_used, "fetched": 0, "upserted": 0, "enriched_actuals": enriched}
@@ -618,13 +721,39 @@ async def sync_calendar(force: bool = False) -> dict[str, Any]:
     logger.warning("Calendar sync complete: %d fetched, %d upserted from %s.",
                 len(all_events), upserted, source_used)
 
-    # Enrich past events with actual values from TradingEconomics
+    # Enrich past events with actuals from JBlanked FxStreet
+    # (only when FF is the primary source — JBlanked primary already has actuals)
     enriched = 0
-    try:
-        async with aiohttp.ClientSession() as enrich_session:
-            enriched = await _enrich_past_events_actuals(enrich_session)
-    except Exception as exc:
-        logger.warning("Actuals enrichment failed: %s", str(exc)[:200])
+    if source_used == "forexfactory" and settings.JBLANKED_API_KEY:
+        try:
+            async with aiohttp.ClientSession() as enrich_session:
+                enriched = await _enrich_actuals_from_jblanked(enrich_session)
+        except Exception as exc:
+            logger.warning("Actuals enrichment failed: %s", str(exc)[:200])
+    elif source_used == "forexfactory" and not settings.JBLANKED_API_KEY:
+        # Log how many past events lack actuals
+        try:
+            async with AsyncSessionLocal() as db_session:
+                week_ago = now - timedelta(days=7)
+                stmt = select(func.count()).select_from(EconomicEvent).where(
+                    and_(
+                        EconomicEvent.datetime_utc >= week_ago,
+                        EconomicEvent.datetime_utc < now,
+                        EconomicEvent.actual.is_(None),
+                    )
+                )
+                result = await db_session.execute(stmt)
+                missing_count = result.scalar() or 0
+                if missing_count > 0:
+                    logger.warning(
+                        "%d past events have no actual values. "
+                        "ForexFactory does not provide actuals. "
+                        "Set JBLANKED_API_KEY for actuals enrichment — "
+                        "free key at https://www.jblanked.com/news/api/docs/calendar/",
+                        missing_count,
+                    )
+        except Exception:
+            pass
 
     return {
         "source": source_used,
