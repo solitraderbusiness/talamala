@@ -2,8 +2,7 @@
 
 import Link from "next/link";
 import type { Alert } from "@/lib/api";
-import { timeAgo, timeHorizonLabel, sectionLabel } from "@/lib/utils";
-import SeverityBadge from "./SeverityBadge";
+import { timeAgo } from "@/lib/utils";
 
 /** Check if a string is mostly Latin/English characters. */
 function isLikelyEnglish(text: string): boolean {
@@ -34,15 +33,7 @@ const DIR_CONFIG: Record<Direction, { icon: string; label: string; color: string
   neutral: { icon: "◆", label: "خنثی", color: "text-gray-400 dark:text-gray-500" },
 };
 
-const SEVERITY_BORDER: Record<string, string> = {
-  critical: "border-r-4 border-r-purple-600",
-  high: "border-r-4 border-r-red-500",
-  medium: "border-r-4 border-r-amber-500/40",
-  low: "",
-};
-
-function scoreColor(score: number, isPriceReport: boolean): string {
-  if (isPriceReport) return "text-gray-400 dark:text-gray-500";
+function scoreColor(score: number): string {
   if (score >= 70) return "text-emerald-500";
   if (score >= 58) return "text-emerald-400";
   if (score <= 30) return "text-red-500";
@@ -50,8 +41,7 @@ function scoreColor(score: number, isPriceReport: boolean): string {
   return "text-gray-400 dark:text-gray-500";
 }
 
-function scoreBg(score: number, isPriceReport: boolean): string {
-  if (isPriceReport) return "bg-gray-500/8";
+function scoreBg(score: number): string {
   if (score >= 70) return "bg-emerald-500/15";
   if (score >= 58) return "bg-emerald-500/10";
   if (score <= 30) return "bg-red-500/15";
@@ -66,57 +56,35 @@ interface AlertCardProps {
 
 export default function AlertCard({ alert, compact = false }: AlertCardProps) {
   const displayTitle = getDisplayTitle(alert);
-  const hasEnglishTitle = isLikelyEnglish(alert.title) && displayTitle !== alert.title;
 
-  // Use server-provided direction and score (computed by direction.py)
   const direction: Direction =
     (alert.direction as Direction) || "neutral";
   const dir = DIR_CONFIG[direction];
   const score = alert.alert_score ?? 50;
-  const isPriceReport = alert.news_type === "price_report";
-  const isBackground = alert.news_type === "background_context";
-  const isNonCausal = isPriceReport || isBackground;
-  const nonCausalBadge = isPriceReport ? "گزارش قیمت" : "تحلیل/زمینه";
 
   if (compact) {
     return (
       <Link href={`/alert/${alert.id}`}>
-        <div className={`group flex cursor-pointer items-center gap-3 px-4 py-2.5 transition-colors hover:bg-gray-50 dark:hover:bg-gray-800/50 ${isNonCausal ? "opacity-60" : ""} ${SEVERITY_BORDER[alert.severity] || ""}`}>
+        <div className="group flex cursor-pointer items-center gap-3 px-4 py-2.5 transition-colors hover:bg-gray-50 dark:hover:bg-gray-800/50">
           {/* Score circle */}
-          <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${scoreBg(score, isNonCausal)}`}>
-            <span className={`text-xs font-bold ${scoreColor(score, isNonCausal)}`}>{score}</span>
+          <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${scoreBg(score)}`}>
+            <span className={`text-xs font-bold ${scoreColor(score)}`}>{score}</span>
           </div>
-          {/* Title + meta */}
+          {/* Title + source/time */}
           <div className="min-w-0 flex-1">
             <h3 className="truncate text-sm font-medium text-gray-900 group-hover:text-gold-600 dark:text-gray-100 dark:group-hover:text-gold-400">
               {displayTitle}
             </h3>
             <div className="mt-0.5 flex items-center gap-2 text-[10px] text-gray-400 dark:text-gray-500">
-              {isNonCausal && (
-                <span className="inline-flex items-center rounded-full bg-slate-100 px-1.5 py-0 text-[9px] font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400">
-                  {nonCausalBadge}
-                </span>
-              )}
               <span>{alert.source_name}</span>
               <span>·</span>
               <span>{timeAgo(alert.timestamp_utc)}</span>
             </div>
           </div>
-          {/* Direction + severity */}
-          <div className="flex shrink-0 flex-col items-end gap-0.5">
-            {isNonCausal ? (
-              <span className="inline-flex items-center rounded-full bg-slate-100 px-1.5 py-0 text-[10px] font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400">
-                {nonCausalBadge}
-              </span>
-            ) : (
-              <SeverityBadge severity={alert.severity} className="!text-[10px] !px-1.5 !py-0" />
-            )}
-            {!isNonCausal && (
-              <span className={`text-[10px] font-medium ${dir.color}`}>
-                {dir.icon} {dir.label}
-              </span>
-            )}
-          </div>
+          {/* Direction */}
+          <span className={`shrink-0 text-[11px] font-medium ${dir.color}`}>
+            {dir.icon} {dir.label}
+          </span>
         </div>
       </Link>
     );
@@ -124,65 +92,27 @@ export default function AlertCard({ alert, compact = false }: AlertCardProps) {
 
   return (
     <Link href={`/alert/${alert.id}`}>
-      <div
-        className={`card group cursor-pointer transition-all hover:shadow-md ${isNonCausal ? "opacity-60" : ""} ${SEVERITY_BORDER[alert.severity] || ""}`}
-      >
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
-              <h3 className="text-base font-semibold text-gray-900 group-hover:text-gold-600 dark:text-gray-100 dark:group-hover:text-gold-400">
-                {displayTitle}
-              </h3>
-              {isNonCausal && (
-                <span className="inline-flex shrink-0 items-center rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400">
-                  {nonCausalBadge}
-                </span>
-              )}
-            </div>
-            {hasEnglishTitle && (
-              <p className="mt-0.5 text-xs text-gray-400 dark:text-gray-500" dir="ltr">
-                {alert.title}
-              </p>
-            )}
-            {!hasEnglishTitle && (
-              <p className="mt-1 line-clamp-2 text-sm text-gray-600 dark:text-gray-400">
-                {alert.summary_fa}
-              </p>
-            )}
-          </div>
+      <div className="card group cursor-pointer transition-all hover:shadow-md">
+        <div className="flex items-center gap-3">
           {/* Score circle */}
-          <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full ${scoreBg(score, isNonCausal)}`}>
-            <span className={`text-sm font-bold ${scoreColor(score, isNonCausal)}`}>{score}</span>
+          <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full ${scoreBg(score)}`}>
+            <span className={`text-sm font-bold ${scoreColor(score)}`}>{score}</span>
           </div>
-        </div>
-        <div className="mt-2 flex items-center justify-between">
-          <div className="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-500">
-            {isNonCausal ? (
-              <span className="inline-flex items-center rounded-full bg-slate-100 px-1.5 py-0 text-[10px] font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400">
-                {nonCausalBadge}
-              </span>
-            ) : (
-              <SeverityBadge severity={alert.severity} className="!text-[10px] !px-1.5 !py-0" />
-            )}
-            {alert.section && (
-              <>
-                <span className="text-gray-300 dark:text-gray-700">|</span>
-                <span className="text-[10px]">
-                  {sectionLabel(alert.section)}
-                </span>
-              </>
-            )}
-            <span className="text-gray-300 dark:text-gray-700">|</span>
-            <span>{alert.source_name}</span>
-            <span className="text-gray-300 dark:text-gray-700">|</span>
-            <span>{timeAgo(alert.timestamp_utc)}</span>
+          {/* Title + source/time */}
+          <div className="min-w-0 flex-1">
+            <h3 className="text-base font-semibold text-gray-900 group-hover:text-gold-600 dark:text-gray-100 dark:group-hover:text-gold-400">
+              {displayTitle}
+            </h3>
+            <div className="mt-1 flex items-center gap-2 text-xs text-gray-500 dark:text-gray-500">
+              <span>{alert.source_name}</span>
+              <span className="text-gray-300 dark:text-gray-700">·</span>
+              <span>{timeAgo(alert.timestamp_utc)}</span>
+            </div>
           </div>
           {/* Direction label */}
-          {!isNonCausal && (
-            <span className={`text-xs font-medium ${dir.color}`}>
-              {dir.icon} {dir.label}
-            </span>
-          )}
+          <span className={`shrink-0 text-xs font-medium ${dir.color}`}>
+            {dir.icon} {dir.label}
+          </span>
         </div>
       </div>
     </Link>

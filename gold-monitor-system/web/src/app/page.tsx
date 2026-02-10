@@ -18,7 +18,6 @@ import {
 import AlertCard from "@/components/AlertCard";
 import RiskGauge from "@/components/RiskGauge";
 import SentimentChart from "@/components/SentimentChart";
-import SeverityBadge from "@/components/SeverityBadge";
 
 const PRICE_KEYS = ["gold_global", "gold_18k", "usd", "emami_coin"] as const;
 
@@ -79,7 +78,7 @@ export default function DashboardPage() {
   const prevAlertTotal = useRef<number>(-1);
 
   // Filters
-  const [severity, setSeverity] = useState("medium+");
+  const [directionFilter, setDirectionFilter] = useState("");
   const [timeHorizon, setTimeHorizon] = useState("");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
@@ -96,25 +95,18 @@ export default function DashboardPage() {
         limit,
         offset: page * limit,
       };
-      // "medium+" means medium and high only
-      if (severity === "medium+") {
-        // We filter client-side from the full response — or use severity=high,medium
-        // For now just don't filter by severity on the API
-      } else if (severity) {
-        params.severity = severity;
-      }
       const data = await getAlerts(params);
       let items = data.items || [];
-      // Client-side filter for medium+
-      if (severity === "medium+") {
-        items = items.filter((a) => a.severity === "high" || a.severity === "medium");
+      // Client-side direction filter
+      if (directionFilter) {
+        items = items.filter((a) => (a.direction || "neutral") === directionFilter);
       }
       setAlerts(items);
-      setTotalAlerts(severity === "medium+" ? items.length : data.total || 0);
+      setTotalAlerts(directionFilter ? items.length : data.total || 0);
     } catch {
       // Alert list may fail independently
     }
-  }, [severity, timeHorizon, search, page]);
+  }, [directionFilter, timeHorizon, search, page]);
 
   const fetchSentiment = useCallback(async () => {
     try {
@@ -309,7 +301,7 @@ export default function DashboardPage() {
                   </div>
                 )}
                 <div className="mt-0.5 text-xs text-gray-500">
-                  {activeSentiment.alert_count} هشدار
+                  {activeSentiment.alert_count} خبر
                 </div>
               </div>
               <div className="flex-1 text-sm text-gray-700 dark:text-gray-300">
@@ -448,37 +440,23 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* Alert counts */}
+        {/* News counts */}
         <div className="card">
           <h3 className="mb-3 text-sm font-medium text-gray-600 dark:text-gray-400">
-            هشدارهای امروز
+            خبرهای امروز
           </h3>
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <SeverityBadge severity="high" />
-              <span className="text-xl font-bold text-red-600">
-                {stats?.counts?.high ?? 0}
-              </span>
-            </div>
-            <div className="flex items-center justify-between">
-              <SeverityBadge severity="medium" />
-              <span className="text-xl font-bold text-amber-600">
-                {stats?.counts?.medium ?? 0}
-              </span>
-            </div>
-            <div className="flex items-center justify-between">
-              <SeverityBadge severity="low" />
-              <span className="text-xl font-bold text-gray-600 dark:text-gray-400">
-                {stats?.counts?.low ?? 0}
-              </span>
-            </div>
+          <div className="flex flex-col items-center justify-center gap-2">
+            <span className="text-4xl font-bold text-gray-900 dark:text-gray-100">
+              {(stats?.counts?.high ?? 0) + (stats?.counts?.medium ?? 0) + (stats?.counts?.low ?? 0)}
+            </span>
+            <span className="text-sm text-gray-500 dark:text-gray-400">خبر</span>
           </div>
         </div>
 
         {/* Top alerts (most important) */}
         <div className="card">
           <h3 className="mb-3 text-sm font-medium text-gray-600 dark:text-gray-400">
-            مهم‌ترین هشدارها
+            مهم‌ترین خبرها
           </h3>
           <div className="space-y-2">
             {stats?.top_alerts && stats.top_alerts.length > 0 ? (
@@ -487,7 +465,7 @@ export default function DashboardPage() {
               ))
             ) : (
               <p className="py-4 text-center text-sm text-gray-400">
-                هشداری موجود نیست
+                خبری موجود نیست
               </p>
             )}
           </div>
@@ -498,7 +476,7 @@ export default function DashboardPage() {
       {sections.length > 0 && (
         <div>
           <h2 className="mb-3 text-lg font-bold text-gray-900 dark:text-gray-100">
-            دسته‌بندی هشدارها
+            دسته‌بندی خبرها
           </h2>
           {/* Section filter tabs */}
           <div className="mb-4 flex flex-wrap gap-2">
@@ -534,9 +512,7 @@ export default function DashboardPage() {
           {/* Section grid — 2 columns on desktop */}
           <div className="grid gap-4 md:grid-cols-2">
             {displayedSections.map((sec) => {
-              const visibleAlerts = sec.alerts
-                .filter((a) => a.severity !== "low")
-                .slice(0, 4);
+              const visibleAlerts = sec.alerts.slice(0, 4);
               return (
                 <div
                   key={sec.id}
@@ -548,16 +524,9 @@ export default function DashboardPage() {
                       <span>{sec.icon}</span>
                       {sec.label}
                     </h3>
-                    <div className="flex items-center gap-2">
-                      {sec.high > 0 && (
-                        <span className="rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-bold text-red-700 dark:bg-red-900/30 dark:text-red-400">
-                          {sec.high} مهم
-                        </span>
-                      )}
-                      <span className="text-[10px] text-gray-400">
-                        {sec.total} هشدار
-                      </span>
-                    </div>
+                    <span className="text-[10px] text-gray-400">
+                      {sec.total} خبر
+                    </span>
                   </div>
                   {/* Alert rows */}
                   <div className="divide-y divide-gray-50 dark:divide-gray-800/50">
@@ -567,7 +536,7 @@ export default function DashboardPage() {
                       ))
                     ) : (
                       <p className="py-6 text-center text-xs text-gray-400">
-                        هشدار مهمی در این دسته نیست
+                        خبری در این دسته نیست
                       </p>
                     )}
                   </div>
@@ -577,14 +546,14 @@ export default function DashboardPage() {
                       <button
                         onClick={() => {
                           setActiveSection(sec.id);
-                          setSeverity("");
+                          setDirectionFilter("");
                           setPage(0);
                           // Scroll to the feed section
                           document.getElementById("alert-feed")?.scrollIntoView({ behavior: "smooth" });
                         }}
                         className="text-xs font-medium text-gold-600 hover:text-gold-700 dark:text-gold-400"
                       >
-                        مشاهده همه {sec.total} هشدار ←
+                        مشاهده همه {sec.total} خبر ←
                       </button>
                     </div>
                   )}
@@ -598,7 +567,7 @@ export default function DashboardPage() {
       {/* ─── Full Alert Feed ─── */}
       <div id="alert-feed">
         <h2 className="mb-4 text-lg font-bold text-gray-900 dark:text-gray-100">
-          فید هشدارها
+          فید خبرها
         </h2>
 
         {/* Filters */}
@@ -614,18 +583,17 @@ export default function DashboardPage() {
             className="input-field max-w-xs"
           />
           <select
-            value={severity}
+            value={directionFilter}
             onChange={(e) => {
-              setSeverity(e.target.value);
+              setDirectionFilter(e.target.value);
               setPage(0);
             }}
             className="select-field w-auto"
           >
-            <option value="medium+">متوسط و بالا</option>
-            <option value="">همه شدت‌ها</option>
-            <option value="high">بالا</option>
-            <option value="medium">متوسط</option>
-            <option value="low">پایین</option>
+            <option value="">همه جهت‌ها</option>
+            <option value="bullish">صعودی</option>
+            <option value="bearish">نزولی</option>
+            <option value="neutral">خنثی</option>
           </select>
           <select
             value={timeHorizon}
@@ -649,7 +617,7 @@ export default function DashboardPage() {
             alerts.map((alert) => <AlertCard key={alert.id} alert={alert} />)
           ) : (
             <div className="card py-12 text-center">
-              <p className="text-gray-400">هشداری یافت نشد</p>
+              <p className="text-gray-400">خبری یافت نشد</p>
             </div>
           )}
         </div>

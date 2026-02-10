@@ -4,10 +4,8 @@ import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { getAlertById, type Alert, type ImpactItem } from "@/lib/api";
-import SeverityBadge from "@/components/SeverityBadge";
 import {
   formatDate,
-  timeHorizonLabel,
   directionLabel,
 } from "@/lib/utils";
 
@@ -75,7 +73,7 @@ export default function AlertDetailPage() {
         const data = await getAlertById(id);
         setAlert(data);
       } catch (err) {
-        setError(err instanceof Error ? err.message : "خطا در بارگذاری هشدار");
+        setError(err instanceof Error ? err.message : "خطا در بارگذاری خبر");
       } finally {
         setLoading(false);
       }
@@ -95,22 +93,13 @@ export default function AlertDetailPage() {
     return (
       <div className="mx-auto max-w-2xl py-12 text-center">
         <h2 className="text-xl font-bold text-red-600">خطا</h2>
-        <p className="mt-2 text-gray-500">{error || "هشدار یافت نشد"}</p>
+        <p className="mt-2 text-gray-500">{error || "خبر یافت نشد"}</p>
         <button onClick={() => router.back()} className="btn-primary mt-4">
           بازگشت
         </button>
       </div>
     );
   }
-
-  const horizonColorMap: Record<string, string> = {
-    immediate: "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400",
-    short:
-      "bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400",
-    medium:
-      "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400",
-    long: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-400",
-  };
 
   // Use server-provided direction (from direction.py pipeline)
   const direction: Direction = (alert.direction as Direction) || "neutral";
@@ -129,7 +118,7 @@ export default function AlertDetailPage() {
           داشبورد
         </Link>
         <span>/</span>
-        <span className="text-gray-700 dark:text-gray-300">جزئیات هشدار</span>
+        <span className="text-gray-700 dark:text-gray-300">جزئیات خبر</span>
       </nav>
 
       {/* Header */}
@@ -146,23 +135,10 @@ export default function AlertDetailPage() {
                 {alert.title}
               </p>
             )}
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-              {isNonCausal ? (
-                <span className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400">
-                  {isPriceReport ? "گزارش قیمت" : "تحلیل/زمینه"}
-                </span>
-              ) : (
-                <SeverityBadge severity={alert.severity} />
-              )}
-              {!isNonCausal && (
-                <span
-                  className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                    horizonColorMap[alert.time_horizon] || horizonColorMap.long
-                  }`}
-                >
-                  {timeHorizonLabel(alert.time_horizon)}
-                </span>
-              )}
+            <div className="mt-2">
+              <span className={`inline-flex items-center gap-1 text-sm font-medium ${dc.color}`}>
+                {dc.icon} {dc.label}
+              </span>
             </div>
           </div>
           <div className="text-left text-sm text-gray-500 dark:text-gray-400">

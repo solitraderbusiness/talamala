@@ -159,7 +159,7 @@ export default function AdminSettingsPage() {
             </span>
           </label>
           <p className="mr-6 mt-1 text-xs text-gray-400">
-            در صورت غیرفعال بودن، هشدارها بدون تحلیل LLM ایجاد می‌شوند
+            در صورت غیرفعال بودن، خبرها بدون تحلیل LLM ایجاد می‌شوند
           </p>
         </div>
 
