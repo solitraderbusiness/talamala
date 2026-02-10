@@ -149,11 +149,19 @@ async def _fetch_finnhub_calendar(
         async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
             if resp.status == 200:
                 data = await resp.json()
+                logger.info("Finnhub raw response keys: %s", list(data.keys()) if isinstance(data, dict) else type(data).__name__)
                 if isinstance(data, dict) and "economicCalendar" in data:
-                    return data["economicCalendar"]
+                    cal = data["economicCalendar"]
+                    # Handle both list and nested dict formats
+                    if isinstance(cal, list):
+                        return cal
+                    elif isinstance(cal, dict):
+                        # Some Finnhub responses nest events under "result"
+                        return cal.get("result", [])
                 return []
             else:
-                logger.warning("Finnhub API returned %d", resp.status)
+                text = await resp.text()
+                logger.warning("Finnhub API returned %d: %s", resp.status, text[:300])
                 return []
     except Exception:
         logger.warning("Finnhub API request failed", exc_info=True)
@@ -314,6 +322,13 @@ async def sync_calendar() -> dict[str, Any]:
     from_date = week_start.strftime("%Y-%m-%d")
     to_date = (week_start + timedelta(days=13)).strftime("%Y-%m-%d")
 
+    logger.info(
+        "Calendar sync: range=%s..%s, JBlanked key=%s, Finnhub key=%s",
+        from_date, to_date,
+        "SET" if settings.JBLANKED_API_KEY else "NOT SET",
+        "SET" if settings.FINNHUB_API_KEY else "NOT SET",
+    )
+
     all_events: list[dict[str, Any]] = []
     source_used = "none"
 
@@ -355,14 +370,17 @@ async def sync_calendar() -> dict[str, Any]:
             finnhub_events = await _fetch_finnhub_calendar(
                 http_session, from_date, to_date,
             )
+            logger.info("Finnhub raw events: %d", len(finnhub_events))
+            if finnhub_events:
+                logger.info("Finnhub first event sample: %s", str(finnhub_events[0])[:300])
             for raw in finnhub_events:
                 parsed = _parse_finnhub_event(raw)
                 if parsed:
                     all_events.append(parsed)
 
+            logger.info("Finnhub parsed events: %d (from %d raw)", len(all_events), len(finnhub_events))
             if all_events:
                 source_used = "finnhub"
-                logger.info("Finnhub returned %d events.", len(all_events))
 
     if not all_events:
         logger.warning("No calendar events fetched from any source.")
