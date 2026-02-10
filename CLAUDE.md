@@ -87,10 +87,16 @@ The repo contains two sub-projects:
 2. Queries enabled sources whose `poll_interval_seconds` has elapsed
 3. Fetches content via appropriate fetcher (RSS/HTML/JSON)
 4. Deduplicates raw items by SHA-256 content hash (Redis 24h TTL → DB fallback)
-5. Matches items against YAML rules (keyword + signal substring matching)
-6. Determines severity deterministically from `importance_criteria`
-7. Optionally enriches with LLM-generated Persian text (OpenRouter)
-8. Persists alerts and fetch log entries
+5. Deduplicates by semantic event fingerprint (entity extraction → Redis 4h TTL)
+6. Matches items against YAML rules (keyword + signal substring matching)
+7. **Classifies news type**: price_report / background_context / causal_event / mixed
+8. **Detects direction**: 3-stage pipeline (regex → lexicon → LLM fallback)
+9. Determines severity deterministically (event-type regex → YAML criteria → score fallback)
+10. Computes per-alert score (0-100) based on direction + confidence + severity
+11. Non-causal overrides: price_report and background_context → score=50, severity=low, direction=neutral
+12. Optionally enriches with LLM-generated Persian text (OpenRouter)
+13. Deduplicates alerts by dedupe_key (cross-source: same story from multiple outlets = one alert)
+14. Persists alerts and fetch log entries
 
 ### API Proxy
 The Next.js frontend uses `next.config.js` rewrites to proxy `/api/*` requests to the FastAPI backend (`INTERNAL_API_URL`, default `http://api:8000`). The web client's `api.ts` uses relative paths (empty `API_URL`).
@@ -139,7 +145,8 @@ talamala/
 │   │   │   ├── matcher.py                       ← Persian-aware keyword/signal matching
 │   │   │   ├── severity.py                      ← Deterministic severity from criteria
 │   │   │   ├── direction.py                     ← 3-stage direction detection (regex→lexicon→LLM)
-│   │   │   └── alert_builder.py                 ← Alert dict assembly + dedupe key
+│   │   │   ├── news_type.py                     ← 4-type classifier (price_report/background/causal/mixed)
+│   │   │   └── alert_builder.py                 ← Alert dict assembly + dedupe key + news type overrides
 │   │   ├── worker/
 │   │   │   ├── __init__.py
 │   │   │   ├── main.py                          ← Worker loop (60s cycle) + pipeline
@@ -155,9 +162,9 @@ talamala/
 │   │   │   └── openrouter_client.py             ← Persian text generation (summary, why_important)
 │   │   └── tests/
 │   │       ├── __init__.py
-│   │       ├── test_matcher.py                  ← Rule matching tests
-│   │       ├── test_severity.py                 ← Severity determination tests
-│   │       └── test_alert_builder.py            ← Alert building tests
+│   │       ├── test_matcher.py                  ← Rule matching tests (48 tests)
+│   │       ├── test_severity.py                 ← Severity + direction + news_type tests (82 tests)
+│   │       └── test_alert_builder.py            ← Alert building + dedup tests (32 tests)
 │   └── web/                                     ← Next.js frontend
 │       ├── Dockerfile                           ← Multi-stage Node 22 build
 │       ├── package.json
@@ -254,7 +261,7 @@ docker compose up -d
 2. Seeds default admin user if not exists
 3. Creates `sentiment_scores` table if not exists (via `checkfirst=True`)
 4. Takes a snapshot of the YAML rules file
-5. Runs one-time dedup flush (versioned marker `v10`) to reset Redis dedup after rule changes
+5. Runs one-time dedup flush (versioned marker `v18`) to reset Redis dedup after rule changes
 6. Worker starts 60-second fetch cycle
 
 ### Running Tests
@@ -423,7 +430,7 @@ Generated alerts with severity, impact, and Persian text.
 | `follow_up_questions` | JSONB | List of Persian follow-up questions |
 | `dedupe_key` | VARCHAR(255) | Unique constraint for dedup |
 | `raw_item_id` | UUID | FK → raw_items (SET NULL) |
-| `match_evidence` | JSONB | {rule_id: {keywords: [], signals: []}, direction, direction_confidence, direction_method, alert_score} |
+| `match_evidence` | JSONB | {rule_id: {keywords: [], signals: []}, direction, direction_confidence, direction_method, alert_score, news_type} |
 
 ### fetch_logs
 Per-source fetch history with timing and error tracking.
@@ -531,6 +538,31 @@ Result is clamped to [0, 100]. Bullish critical alerts with high confidence scor
 - **Alerts**: `dedupe_key` = SHA-256 of sorted rule IDs + normalized title (source intentionally excluded for cross-source dedup — same story from IRNA/Mehr/ISNA produces same key). Redis key `alert:dedup:<key>` with configurable window (default 6h from settings table).
 - **Semantic event fingerprinting**: Extracts entities (instruments, organizations, events, numbers) from title + content to build an event fingerprint. Same underlying event with different headlines produces the same fingerprint, preventing duplicate alerts across sources. Redis key `event:fp:<fingerprint>` with 4h TTL.
 
+### News Type Classification (Critical)
+4-type classifier in `news_type.py` determines how each alert is treated:
+
+| Type | What It Is | Treatment |
+|------|-----------|-----------|
+| `price_report` | "Gold reaches $5000" — just reports price, no causal info | score=50, severity=low, direction=neutral, excluded from sentiment gauge |
+| `background_context` | Anniversaries, editorials, status-quo commentary ("sanctions continue") | score=50, severity=low, direction=neutral, excluded from sentiment gauge |
+| `causal_event` | NEW events that drive markets (Fed decision, new sanctions, war) | Full scoring pipeline (direction, severity, score) |
+| `mixed` | Price report + causal indicators ("gold rises due to Fed rate cut") | Full scoring pipeline |
+
+**Key principle: Only NEW information moves markets.** Existing conditions (ongoing sanctions, persistent tensions) are already priced in.
+
+**Classification order** (first match wins):
+1. Check for background patterns (سالگرد, سالروز, anniversary, مراسم, سرمقاله, editorial...)
+   - BUT override if new-event indicators present (جدید, اعلام شد, تصویب شد, imposed, launched...)
+2. Check for price report patterns (title: "قیمت طلا", "Gold at $X"; content: price tables, تومان/ریال amounts)
+3. If has both price patterns AND causal indicators → `mixed`
+4. Default → `causal_event`
+
+**Frontend treatment:** Non-causal alerts (price_report + background_context) get:
+- Muted appearance (opacity-60, gray score circle)
+- Badge instead of severity label ("گزارش قیمت" or "تحلیل/زمینه")
+- No direction indicator
+- Slate-colored info banner on detail page instead of market direction section
+
 ### Frontend Patterns
 - **RTL layout**: `<html lang="fa" dir="rtl">` in root layout.
 - **Vazirmatn font**: Loaded via CDN, applied globally.
@@ -558,9 +590,10 @@ Result is clamped to [0, 100]. Bullish critical alerts with high confidence scor
 - Full Docker Compose orchestration (5 services with health checks)
 - API with all endpoints (alerts, sources, admin, rules, health, prices, sentiment)
 - Database schema with Alembic migration + startup table creation
-- Worker pipeline: fetch → dedup → match → alert (60s cycle)
+- Worker pipeline: fetch → dedup → classify → direction → severity → score → alert (60s cycle)
 - Three fetcher types (RSS, HTML, JSON)
 - Deterministic rule engine with 32+ rules (compound keywords + signals to prevent false positives)
+- **4-type news classifier** (price_report / background_context / causal_event / mixed) — prevents circular logic and background noise from affecting scores
 - Event-type severity classification with 4 levels including "critical" (regex patterns for war, Fed decisions, sanctions, etc.)
 - 3-stage direction detection per alert (regex patterns → lexicon scoring → LLM fallback)
 - Per-alert direction and sentiment score (server-computed, stored in match_evidence)
@@ -574,20 +607,31 @@ Result is clamped to [0, 100]. Bullish critical alerts with high confidence scor
   - Alert feed with severity/time-horizon filters and pagination
   - Smart auto-refresh: 60s for data, sentiment refreshes on new alert detection (2min fallback)
   - Smooth CSS transitions for sentiment updates
+  - Non-causal alert treatment: muted styling, badges ("گزارش قیمت", "تحلیل/زمینه"), no direction
 - Admin panel (sources CRUD, settings, login)
 - Alert detail page with:
   - Expected impact table (handles both array and dict formats)
+  - Server-computed direction display (no client-side direction logic)
+  - Non-causal alerts: muted "توضیح" section, info banner, no severity/horizon badges
+  - Causal alerts: full amber "چرا مهم است؟" section, severity badge, market direction
   - Clean source URL display with "مشاهده منبع" button
   - Bullet-point rendering for why_important_fa
   - English title detection with Persian fallback
 - Rule library browser
 - Cross-source deduplication (same news from IRNA/Mehr/ISNA produces one alert)
 - OpenRouter LLM integration for text generation (summary, key_drivers, outlook)
+- LLM prompt instructs: only list NEW information as market-moving (existing conditions already priced in)
 - **Deterministic 3-layer weighted sentiment scoring** (polarity × confidence × importance × time decay × volume dampening × directional ratio dampening)
+- Sentiment gauge excludes price_report and background_context alerts (they don't move markets)
 - Sentiment scoring system (0-100) with historical persistence
 - 16 RSS sources (9 international, 1 Persian, 6 disabled)
 - Worker LLM type safety (_ensure_str helper prevents list-to-str crashes)
-- Rule engine unit tests (matcher, severity, alert_builder, direction) — 136 tests passing
+- Rule engine unit tests (matcher, severity, alert_builder, direction, news_type) — **162 tests passing**
+
+### Safe Checkpoints
+Git tags you can restore to if something breaks:
+- `safe-checkpoint-2026-02-09` — Before the formula rewrite
+- `safe-checkpoint-before-formula-rewrite-2026-02-10` — Just before the 7-fix rewrite
 
 ### Known Issues
 - CORS is fully permissive (`allow_origins=["*"]`) — needs restriction for production
@@ -595,6 +639,7 @@ Result is clamped to [0, 100]. Bullish critical alerts with high confidence scor
 - Web frontend's `fetchSourceNow` calls `/api/sources/{id}/fetch` but the API route is `/api/sources/{id}/fetch-now`
 - The `gold-monitor/` prototype uses mock data only; not connected to the backend
 - Older alerts lack `direction`/`alert_score` in `match_evidence` — polarity defaults to neutral for sentiment calculation
+- Older alerts lack `news_type` — classified on-the-fly by API using `classify_news_type()` on title+content
 
 ## 11. Common Tasks
 
@@ -698,7 +743,7 @@ After pushing code changes to the git branch:
 ```bash
 # SSH into server, then:
 cd ~/projects/talamala
-git pull origin claude/analyze-project-structure-m8YuH
+git pull origin claude/review-project-direction-EsijC
 cd gold-monitor-system
 docker compose up -d --build
 ```
@@ -773,6 +818,7 @@ docker volume ls                 # List volumes
 
 ### Sentiment Score Tuning
 - Formula parameters in `api/routers/sentiment.py`
+- **Non-causal alerts excluded** — price_report and background_context alerts are skipped entirely (they don't move markets)
 - **Neutral polarity = 0** — alerts without detected direction contribute nothing to directional signal
 - **Importance weights** (`_IMPORTANCE_WEIGHT`): critical=4.0, high=2.0, medium=1.0, low=0.5
 - **Decay λ** (`_DECAY_LAMBDA`): 1h=2.0, 4h=0.5, 24h=0.1

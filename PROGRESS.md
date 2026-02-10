@@ -1,7 +1,9 @@
 # Talamala (طلاملا) — Implementation Progress
 
-> Safe checkpoint tag: `safe-checkpoint-2026-02-09`
-> To restore: `git checkout safe-checkpoint-2026-02-09`
+> Safe checkpoint tags:
+> - `safe-checkpoint-2026-02-09` — Before formula rewrite
+> - `safe-checkpoint-before-formula-rewrite-2026-02-10` — Just before 7-fix rewrite
+> To restore: `git checkout <tag-name>`
 
 ---
 
@@ -11,7 +13,7 @@ These are features that already exist in the design/prototype but are broken or 
 
 | # | Feature | Description | Status | Notes |
 |---|---------|-------------|--------|-------|
-| 1 | **Fix News Source Reliability** | Get stable Persian + English gold news feeds that don't break. This is the heart of the system — everything depends on it. | 🔄 In Progress | Lowered MIN_MATCH_SCORE 0.18→0.10 for English content. Added negative keywords to prevent false positives (gold medal, etc). Added LLM relevance filter for borderline matches. Bumped dedup flush to reprocess items. |
+| 1 | **Fix News Source Reliability** | Get stable Persian + English gold news feeds that don't break. This is the heart of the system — everything depends on it. | ✅ Done | Comprehensive formula rewrite (7 fixes): direction detection, severity classification, dedup fingerprinting, per-alert scoring, sentiment formula, confidence blending, MIN_MATCH_SCORE 0.18→0.15. Added news type classification (Fix #8) + background context detection (Fix #9). 162 tests passing. |
 | 2 | **Impact Matrix per Alert** | Each alert should show its effect on all 4 assets (global gold, iran gold, coin, gold funds). Data exists in YAML `impact_hypothesis`, just not displayed. | ⬜ Not Started | Was fully built in `gold-monitor/` prototype as `ImpactMatrix.tsx`. Dropped in `gold-monitor-system/`. |
 | 3 | **Glossary Tooltips** | Restore the 18-term glossary (FOMC, CPI, QE, NAV, ETF, RSI, etc.) with hover tooltips so users understand financial terms. | ⬜ Not Started | Was in prototype as `Tooltip.tsx` + `GlossaryText`. 18 terms defined in `constants.ts`. |
 | 4 | **Cause-Effect Maps** | Restore visual diagrams: محرک→مکانیزم→اثر (Driver→Mechanism→Effect). Shows users WHY an event matters for gold. | ⬜ Not Started | Was in prototype as `CauseEffect.tsx`. 3 hardcoded examples existed. |
@@ -56,7 +58,7 @@ Nice-to-have features for future development.
 | 16 | **Technical Analysis — Full** | RSI, MACD, MA200 computation and alerts. | ⬜ Not Started | Depends on #15. |
 | 17 | **Push/Desktop Notifications** | Browser notifications for high-severity alerts. | ⬜ Not Started | |
 | 18 | **Telegram/Email Alerts** | External notification channels. | ⬜ Not Started | |
-| 19 | **CLAUDE.md + README** | Proper project documentation on main branch. | ⬜ Not Started | README is empty. CLAUDE.md only on feature branch. |
+| 19 | **CLAUDE.md + README** | Proper project documentation on main branch. | ✅ Done | CLAUDE.md (comprehensive, 800+ lines), SYSTEM_LOGIC.md (all formulas), PROGRESS.md (status tracker). On feature branch `claude/review-project-direction-EsijC`. |
 | 20 | **PWA Support** | Installable on mobile as Progressive Web App. | ⬜ Not Started | |
 
 ---
@@ -65,10 +67,10 @@ Nice-to-have features for future development.
 
 | Asset | Price Data | Alerts | Dedicated Page | Special Features | Overall |
 |-------|-----------|--------|---------------|-----------------|---------|
-| طلای جهانی (XAUUSD) | ✅ BrsAPI/TGJU | ⚠️ Unreliable feeds | ⬜ No | ⬜ No technical signals | ⚠️ Partial |
-| طلای ایران (18k) | ✅ BrsAPI/TGJU | ⚠️ Unreliable feeds | ⬜ No | — | ⚠️ Partial |
-| دلار (USD/USDT) | ✅ BrsAPI/TGJU | ⚠️ Unreliable feeds | ⬜ No | — | ⚠️ Partial |
-| سکه امامی | ✅ BrsAPI/TGJU | ⚠️ Unreliable feeds | ⬜ No | ⬜ No حباب calc | ⚠️ Partial |
+| طلای جهانی (XAUUSD) | ✅ BrsAPI/TGJU | ✅ Working (direction + severity + news type) | ⬜ No | ⬜ No technical signals | ✅ Good |
+| طلای ایران (18k) | ✅ BrsAPI/TGJU | ✅ Working | ⬜ No | — | ✅ Good |
+| دلار (USD/USDT) | ✅ BrsAPI/TGJU | ✅ Working | ⬜ No | — | ✅ Good |
+| سکه امامی | ✅ BrsAPI/TGJU | ✅ Working | ⬜ No | ⬜ No حباب calc | ⚠️ Partial |
 | صندوق‌های طلا | ❌ None | ❌ None | ⬜ No | ⬜ No NAV/premium | ❌ Missing |
 
 ---
@@ -77,4 +79,8 @@ Nice-to-have features for future development.
 
 | Date | What Changed |
 |------|-------------|
+| 2026-02-10 | **Documentation update**: CLAUDE.md, SYSTEM_LOGIC.md, PROGRESS.md fully updated to reflect all recent changes. |
+| 2026-02-10 | **Fix #9 — Background Context Detection**: Added 4th news type `background_context`. Anniversaries, editorials, status-quo commentary no longer trigger high severity or affect sentiment gauge. Smart override when genuinely new events present. 162 tests passing. |
+| 2026-02-10 | **Fix #8 — News Type Classification**: Created `news_type.py` with 3 types (price_report/causal_event/mixed). Price reports forced to score=50, severity=low, excluded from sentiment gauge. Frontend muted styling for non-causal alerts. |
+| 2026-02-10 | **7-Fix Formula Rewrite**: Comprehensive rewrite of scoring pipeline. (1) 3-stage direction detection, (2) Event-type severity with "critical" level, (3) Semantic event fingerprinting, (4) Per-alert score formula, (5) Sentiment: neutral=0, directional ratio dampening, (6) Confidence blending, (7) MIN_MATCH_SCORE raised to 0.15. Tagged `safe-checkpoint-before-formula-rewrite-2026-02-10`. |
 | 2026-02-09 | Created this progress tracker. Tagged `safe-checkpoint-2026-02-09`. |
