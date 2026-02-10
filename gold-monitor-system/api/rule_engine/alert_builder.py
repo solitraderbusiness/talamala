@@ -18,6 +18,12 @@ from api.rule_engine.direction import (
     calculate_alert_score,
     detect_direction,
 )
+from api.rule_engine.news_type import (
+    PRICE_REPORT_IMPACT,
+    PRICE_REPORT_SCORE,
+    PRICE_REPORT_SEVERITY,
+    classify_news_type,
+)
 from api.rule_engine.severity import (
     SEVERITY_CRITICAL,
     SEVERITY_HIGH,
@@ -137,6 +143,9 @@ def build_alert(
     # Use Persian title from LLM if available
     title_fa: str = llm.get("title_fa", "") if llm else ""
 
+    # --- news type classification (BEFORE direction/severity) ------------- #
+    news_type = classify_news_type(item_title, item_content)
+
     # --- matched rule ids ------------------------------------------------- #
     matched_rule_ids: list[str] = [mr.rule.id for mr in match_results]
 
@@ -186,6 +195,18 @@ def build_alert(
         direction, direction_confidence, highest_severity,
     )
 
+    # --- PRICE_REPORT overrides ------------------------------------------- #
+    # Price reports are informational only — they do NOT drive the market.
+    # Force neutral direction, low severity, score=50, and replace impact.
+    if news_type == "price_report":
+        direction = "neutral"
+        direction_confidence = 0.0
+        direction_method = "price_report"
+        highest_severity = PRICE_REPORT_SEVERITY
+        alert_score = PRICE_REPORT_SCORE
+        expected_impact = PRICE_REPORT_IMPACT
+        why_important_fa = "گزارش قیمت — صرفاً اطلاع‌رسانی قیمت فعلی بازار"
+
     # --- dedupe key ------------------------------------------------------- #
     dedupe_key = generate_dedupe_key(matched_rule_ids, item_title, source_name)
 
@@ -208,6 +229,7 @@ def build_alert(
         "direction_confidence": direction_confidence,
         "direction_method": direction_method,
         "alert_score": alert_score,
+        "news_type": news_type,
         "follow_up_questions": follow_up_questions,
         "dedupe_key": dedupe_key,
         "match_evidence": match_evidence,

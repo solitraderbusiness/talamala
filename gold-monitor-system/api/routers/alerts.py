@@ -20,6 +20,7 @@ from api.rule_engine.direction import (
     calculate_alert_score,
     detect_direction,
 )
+from api.rule_engine.news_type import classify_news_type
 
 router = APIRouter(tags=["alerts"])
 
@@ -94,6 +95,11 @@ def _alert_to_dict(alert: Alert) -> dict[str, Any]:
             direction, direction_confidence, alert.severity or "medium",
         )
 
+    # News type: use stored value or classify on-the-fly for legacy alerts
+    news_type = evidence.get("news_type")
+    if not news_type:
+        news_type = classify_news_type(alert.title or "", alert.summary_fa or "")
+
     return {
         "id": str(alert.id),
         "title": alert.title,
@@ -111,6 +117,7 @@ def _alert_to_dict(alert: Alert) -> dict[str, Any]:
         "direction_confidence": direction_confidence,
         "direction_method": direction_method,
         "alert_score": alert_score,
+        "news_type": news_type,
         "follow_up_questions": alert.follow_up_questions or [],
         "dedupe_key": alert.dedupe_key,
         "raw_item_id": str(alert.raw_item_id) if alert.raw_item_id else None,

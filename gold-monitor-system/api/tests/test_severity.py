@@ -384,3 +384,107 @@ class TestEventFingerprint:
         # Should be alphabetically sorted
         parts = fp.split("|")
         assert parts == sorted(parts)
+
+
+# =========================================================================
+# News type classification tests
+# =========================================================================
+
+
+class TestNewsTypeClassification:
+    """Tests for news type classifier (price_report / causal_event / mixed)."""
+
+    def test_persian_daily_price_listing(self):
+        from api.rule_engine.news_type import classify_news_type
+        assert classify_news_type("قیمت طلا و سکه امروز ۲۱ بهمن ۱۴۰۴") == "price_report"
+
+    def test_persian_price_reached(self):
+        from api.rule_engine.news_type import classify_news_type
+        assert classify_news_type("قیمت طلا به بالای ۵۰۰۰ دلار رسید") == "price_report"
+
+    def test_english_gold_price_today(self):
+        from api.rule_engine.news_type import classify_news_type
+        assert classify_news_type("Gold price today update") == "price_report"
+
+    def test_xau_usd_trading(self):
+        from api.rule_engine.news_type import classify_news_type
+        assert classify_news_type("XAU/USD at $2450 after steady trading") == "price_report"
+
+    def test_persian_coin_price_listing(self):
+        from api.rule_engine.news_type import classify_news_type
+        assert classify_news_type("قیمت سکه امروز ۲۱ بهمن") == "price_report"
+
+    def test_fed_rate_decision_is_causal(self):
+        from api.rule_engine.news_type import classify_news_type
+        assert classify_news_type("Fed cuts interest rates by 25 basis points") == "causal_event"
+
+    def test_sanctions_is_causal(self):
+        from api.rule_engine.news_type import classify_news_type
+        assert classify_news_type("تحریم‌های جدید آمریکا علیه ایران") == "causal_event"
+
+    def test_war_is_causal(self):
+        from api.rule_engine.news_type import classify_news_type
+        assert classify_news_type("جنگ در خاورمیانه تشدید شد") == "causal_event"
+
+    def test_cpi_data_is_causal(self):
+        from api.rule_engine.news_type import classify_news_type
+        assert classify_news_type("CPI inflation data shows 3.5% increase") == "causal_event"
+
+    def test_price_with_cause_is_mixed(self):
+        from api.rule_engine.news_type import classify_news_type
+        result = classify_news_type(
+            "قیمت طلا به بالای ۵۰۰۰ دلار رسید",
+            "طلا به دلیل تحریم‌های جدید آمریکا افزایش یافت",
+        )
+        assert result == "mixed"
+
+    def test_gold_rises_due_to_fed_is_mixed(self):
+        from api.rule_engine.news_type import classify_news_type
+        result = classify_news_type(
+            "Gold price today at $2500",
+            "Gold climbed because of the Fed rate cut decision",
+        )
+        assert result == "mixed"
+
+    def test_random_text_is_causal_default(self):
+        from api.rule_engine.news_type import classify_news_type
+        assert classify_news_type("some random news about markets") == "causal_event"
+
+    def test_geopolitical_analysis_is_causal(self):
+        from api.rule_engine.news_type import classify_news_type
+        assert classify_news_type("تحلیل تنش ایران و آمریکا و تأثیر بر بازار طلا") == "causal_event"
+
+    def test_price_report_score_override_in_builder(self):
+        """Price reports should get score=50, severity=low, neutral direction."""
+        from api.rule_engine.alert_builder import build_alert
+
+        raw_item = {
+            "title": "قیمت طلا و سکه امروز ۲۱ بهمن ۱۴۰۴",
+            "content": "طلای ۱۸ عیار: ۵,۰۰۰,۰۰۰ تومان سکه امامی: ۱۵,۰۰۰,۰۰۰ تومان",
+            "source_name": "khabarfarsi",
+            "url": "http://example.com",
+        }
+        mr = _make_match_result(match_score=0.5)
+        alert = build_alert(raw_item, [mr])
+
+        assert alert["news_type"] == "price_report"
+        assert alert["alert_score"] == 50
+        assert alert["severity"] == "low"
+        assert alert["direction"] == "neutral"
+
+    def test_causal_event_gets_full_scoring(self):
+        """Causal events should get normal direction/severity scoring."""
+        from api.rule_engine.alert_builder import build_alert
+
+        raw_item = {
+            "title": "Fed cuts interest rates by 50 basis points",
+            "content": "The Federal Reserve announced a surprise rate cut today",
+            "source_name": "reuters",
+            "url": "http://example.com",
+        }
+        mr = _make_match_result(match_score=0.5)
+        alert = build_alert(raw_item, [mr])
+
+        assert alert["news_type"] == "causal_event"
+        # Causal events should NOT be forced to score 50
+        assert alert["severity"] != "low" or alert["direction"] != "neutral"

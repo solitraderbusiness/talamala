@@ -514,12 +514,13 @@ class Worker:
         alert = _re_build_alert(raw_item_dict, match_results)
         alert["raw_item_id"] = raw_item_id
 
-        # Persist direction data in match_evidence for the API to read
+        # Persist direction data and news type in match_evidence for the API to read
         evidence = alert.get("match_evidence", {})
         evidence["direction"] = alert.get("direction", "neutral")
         evidence["direction_confidence"] = alert.get("direction_confidence", 0.0)
         evidence["direction_method"] = alert.get("direction_method", "fallback")
         evidence["alert_score"] = alert.get("alert_score", 50)
+        evidence["news_type"] = alert.get("news_type", "causal_event")
         alert["match_evidence"] = evidence
 
         dedupe_key = alert["dedupe_key"]

@@ -62,6 +62,11 @@ from api.rule_engine.direction import (
     detect_direction_regex,
 )
 
+# -- news_type -------------------------------------------------------------
+from api.rule_engine.news_type import (
+    classify_news_type,
+)
+
 # -- alert_builder ---------------------------------------------------------
 from api.rule_engine.alert_builder import (
     build_alert,
@@ -93,6 +98,8 @@ __all__ = [
     "detect_direction_regex",
     "detect_direction_lexicon",
     "calculate_alert_score",
+    # news_type
+    "classify_news_type",
     # alert_builder
     "build_alert",
     "generate_dedupe_key",

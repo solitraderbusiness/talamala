@@ -82,6 +82,7 @@ export interface Alert {
   direction_confidence?: number;
   direction_method?: string;
   alert_score?: number;
+  news_type?: "price_report" | "causal_event" | "mixed";
   follow_up_questions: string[];
   dedupe_key: string;
   match_evidence: Record<string, unknown>;

@@ -155,6 +155,12 @@ def _compute_sentiment_score(
     directional_count = 0  # alerts with non-neutral direction
 
     for alert in alerts:
+        # Skip price reports — they are informational only and should
+        # NOT influence the sentiment gauge (circular logic prevention).
+        alert_news_type = alert.get("match_evidence", {}).get("news_type", "")
+        if alert_news_type == "price_report":
+            continue
+
         # Layer 1: RSS = Polarity × Direction_Confidence
         polarity, dir_confidence = _detect_polarity(alert)
         if polarity != 0.0:
@@ -494,6 +500,7 @@ async def get_sentiment(
 
     all_alerts = []
     for a in all_alerts_orm:
+        evidence = a.match_evidence or {}
         all_alerts.append({
             "title": a.title,
             "severity": a.severity,
@@ -503,6 +510,7 @@ async def get_sentiment(
             "confidence": a.confidence or 0.5,
             "matched_rule_ids": a.matched_rule_ids or [],
             "expected_impact": a.expected_impact or [],
+            "match_evidence": evidence,
         })
 
     # High/critical-severity alerts from last 24h (always considered)
