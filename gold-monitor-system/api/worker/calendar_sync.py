@@ -364,20 +364,24 @@ async def _upsert_events(events: list[dict[str, Any]]) -> int:
                     affected_assets=event_data["affected_assets"],
                 )
                 # On conflict (same event_name + datetime), update fields
+                # Use COALESCE to preserve existing actual value if new one is NULL
+                update_set = {
+                    "event_name_fa": event_data["event_name_fa"],
+                    "country": event_data["country"],
+                    "currency": event_data["currency"],
+                    "category": event_data["category"],
+                    "impact": event_data["impact"],
+                    "forecast": event_data["forecast"],
+                    "previous": event_data["previous"],
+                    "affected_assets": event_data["affected_assets"],
+                    "updated_at": datetime.now(timezone.utc),
+                }
+                # Only overwrite actual if new value is non-null
+                if event_data["actual"] is not None:
+                    update_set["actual"] = event_data["actual"]
                 stmt = stmt.on_conflict_do_update(
                     constraint="uq_econ_events_name_datetime",
-                    set_={
-                        "event_name_fa": event_data["event_name_fa"],
-                        "country": event_data["country"],
-                        "currency": event_data["currency"],
-                        "category": event_data["category"],
-                        "impact": event_data["impact"],
-                        "actual": event_data["actual"],
-                        "forecast": event_data["forecast"],
-                        "previous": event_data["previous"],
-                        "affected_assets": event_data["affected_assets"],
-                        "updated_at": datetime.now(timezone.utc),
-                    },
+                    set_=update_set,
                 )
                 await session.execute(stmt)
                 count += 1
@@ -417,43 +421,74 @@ async def _fetch_investingcom_actuals(
         ),
         "X-Requested-With": "XMLHttpRequest",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Referer": "https://sslecal2.investing.com/",
     }
     try:
         async with session.get(
             url, params=params, headers=headers,
             timeout=aiohttp.ClientTimeout(total=30),
+            ssl=False,
         ) as resp:
             if resp.status != 200:
-                logger.info("Investing.com returned %d, skipping actuals enrichment.", resp.status)
+                logger.warning(
+                    "Investing.com returned %d, skipping actuals.",
+                    resp.status,
+                )
                 return {}
 
             html = await resp.text()
+            logger.warning(
+                "Investing.com response: %d chars, first 300: %s",
+                len(html), html[:300].replace("\n", " "),
+            )
             soup = BeautifulSoup(html, "html.parser")
 
             actuals: dict[str, str] = {}
-            for row in soup.select("tr.js-event-item"):
-                # Event name
-                name_el = row.select_one("td.event a, td.left.event a")
+            # Try multiple selector strategies
+            rows = soup.select("tr.js-event-item")
+            if not rows:
+                rows = soup.select("tr[data-event-datetime]")
+            if not rows:
+                rows = soup.select("tr[event_attr_id]")
+
+            logger.warning("Investing.com: found %d event rows.", len(rows))
+
+            for row in rows:
+                # Event name — try multiple selectors
+                name_el = (
+                    row.select_one("td.event a")
+                    or row.select_one("td.left.event a")
+                    or row.select_one("td a[href*='economic-calendar']")
+                )
                 if not name_el:
                     continue
                 event_name = name_el.get_text(strip=True)
                 if not event_name:
                     continue
 
-                # Actual value — typically in td with class 'bold' or 'act'
-                actual_el = row.select_one("td.bold, td.act")
+                # Actual value — try multiple selectors
+                actual_el = (
+                    row.select_one("td.bold.act")
+                    or row.select_one("td.bold")
+                    or row.select_one("td.act")
+                )
                 if not actual_el:
                     continue
                 actual_text = actual_el.get_text(strip=True)
-                if not actual_text or actual_text == "\xa0":
+                if not actual_text or actual_text == "\xa0" or actual_text == "":
                     continue
 
                 actuals[event_name.lower()] = actual_text
 
-            logger.info("Investing.com enrichment: found %d actuals for %s.", len(actuals), date_str)
+            logger.warning(
+                "Investing.com enrichment: found %d actuals for %s.",
+                len(actuals), date_str,
+            )
             return actuals
-    except Exception:
-        logger.info("Investing.com actuals fetch failed (non-critical), skipping.", exc_info=False)
+    except Exception as exc:
+        logger.warning(
+            "Investing.com actuals fetch failed: %s", str(exc)[:200],
+        )
         return {}
 
 
@@ -512,8 +547,7 @@ async def _enrich_past_events_actuals(http_session: aiohttp.ClientSession) -> in
 
         await asyncio.sleep(_RATE_LIMIT_DELAY)  # Rate limit between date fetches
 
-    if total_updated:
-        logger.info("Enriched %d events with actual values from Investing.com.", total_updated)
+    logger.warning("Actuals enrichment done: %d events updated.", total_updated)
     return total_updated
 
 
@@ -615,8 +649,8 @@ async def sync_calendar() -> dict[str, Any]:
     try:
         async with aiohttp.ClientSession() as enrich_session:
             enriched = await _enrich_past_events_actuals(enrich_session)
-    except Exception:
-        logger.info("Actuals enrichment failed (non-critical).", exc_info=False)
+    except Exception as exc:
+        logger.warning("Actuals enrichment failed: %s", str(exc)[:200])
 
     return {
         "source": source_used,
