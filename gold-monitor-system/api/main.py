@@ -34,7 +34,7 @@ from sqlalchemy import select, text
 from api.auth import get_password_hash
 from api.config import settings
 from api.database import AsyncSessionLocal, sync_engine
-from api.models import AdminUser, Base, RulesSnapshot, SentimentScore, Source
+from api.models import AdminUser, Base, EconomicEvent, RulesSnapshot, SentimentScore, Source
 
 logger = logging.getLogger("gold_monitor")
 
@@ -1387,6 +1387,35 @@ async def _create_sentiment_scores_table() -> None:
         logger.warning("Could not create sentiment_scores table", exc_info=True)
 
 
+async def _create_economic_events_table() -> None:
+    """Create the economic_events table if it doesn't exist."""
+    try:
+        EconomicEvent.__table__.create(bind=sync_engine, checkfirst=True)
+        logger.info("economic_events table ensured.")
+    except Exception:
+        logger.warning("Could not create economic_events table", exc_info=True)
+
+
+async def _start_calendar_sync() -> None:
+    """Start the calendar sync background task (non-blocking).
+
+    The initial sync runs as a background asyncio task so it does NOT
+    block API startup.  The API becomes responsive immediately while
+    the first calendar fetch happens in the background.
+    """
+    import asyncio as _aio
+
+    async def _do_initial_sync() -> None:
+        try:
+            from api.worker.calendar_sync import sync_calendar
+            result = await sync_calendar()
+            logger.info("Initial calendar sync: %s", result)
+        except Exception:
+            logger.warning("Initial calendar sync failed (will retry in background)", exc_info=True)
+
+    _aio.create_task(_do_initial_sync())
+
+
 async def _flush_dedup_keys() -> None:
     """One-time flush of Redis dedup keys so previously-failed items
     get re-processed with the now-working rule engine.
@@ -1445,12 +1474,25 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     await _migrate_sources_v10()
     await _migrate_sources_v11()
     await _create_sentiment_scores_table()
+    await _create_economic_events_table()
     await _flush_dedup_keys()
     await _snapshot_rules()
+    await _start_calendar_sync()
     logger.info("Startup complete.")
+
+    # Start background calendar sync loop
+    _calendar_task = None
+    try:
+        import asyncio as _asyncio
+        from api.worker.calendar_sync import calendar_sync_loop
+        _calendar_task = _asyncio.create_task(calendar_sync_loop())
+    except Exception:
+        logger.warning("Could not start calendar sync loop", exc_info=True)
 
     yield  # application is running
 
+    if _calendar_task:
+        _calendar_task.cancel()
     logger.info("Shutting down Gold Monitor API ...")
 
 
@@ -1478,6 +1520,7 @@ def create_app() -> FastAPI:
     # -- Routers ------------------------------------------------------
     from api.routers.admin import router as admin_router
     from api.routers.alerts import router as alerts_router
+    from api.routers.calendar import router as calendar_router
     from api.routers.health import router as health_router
     from api.routers.prices import router as prices_router
     from api.routers.rules import router as rules_router
@@ -1490,6 +1533,7 @@ def create_app() -> FastAPI:
     app.include_router(rules_router, prefix="/api/rules")
     app.include_router(prices_router, prefix="/api/prices")
     app.include_router(sentiment_router, prefix="/api/sentiment")
+    app.include_router(calendar_router, prefix="/api/calendar")
     app.include_router(health_router, prefix="/api/health")
 
     return app

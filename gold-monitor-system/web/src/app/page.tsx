@@ -7,6 +7,7 @@ import {
   getAlertStats,
   getPrices,
   getSentiment,
+  getUpcomingEvents,
   type Alert,
   type AlertStats,
   type PricesResponse,
@@ -14,6 +15,8 @@ import {
   type SentimentResponse,
   type TimeframeSentiment,
   type SectionSummary,
+  type UpcomingEventsResponse,
+  type CalendarEvent,
 } from "@/lib/api";
 import AlertCard from "@/components/AlertCard";
 import RiskGauge from "@/components/RiskGauge";
@@ -67,6 +70,7 @@ export default function DashboardPage() {
   const [sentiment, setSentiment] = useState<SentimentResponse | null>(null);
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [totalAlerts, setTotalAlerts] = useState(0);
+  const [upcomingEvents, setUpcomingEvents] = useState<CalendarEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -121,10 +125,11 @@ export default function DashboardPage() {
    *  Also detects new alerts and triggers sentiment refresh. */
   const refreshAll = useCallback(async () => {
     try {
-      const [statsData, , pricesData] = await Promise.allSettled([
+      const [statsData, , pricesData, upcomingData] = await Promise.allSettled([
         getAlertStats(),
         fetchAlerts(),
         getPrices(),
+        getUpcomingEvents(5, "high"),
       ]);
       if (statsData.status === "fulfilled") {
         const newStats = statsData.value;
@@ -141,6 +146,7 @@ export default function DashboardPage() {
         setStats(newStats);
       }
       if (pricesData.status === "fulfilled") setPrices(pricesData.value);
+      if (upcomingData.status === "fulfilled") setUpcomingEvents(upcomingData.value.events || []);
       setLastUpdated(new Date());
     } catch {
       // Silent — don't overwrite the page with an error on a background poll
@@ -383,6 +389,57 @@ export default function DashboardPage() {
           </span>
         </Link>
       </div>
+
+      {/* ─── Upcoming Economic Events Widget ─── */}
+      {upcomingEvents.length > 0 && (
+        <div className="card">
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="text-sm font-bold text-gray-900 dark:text-gray-100">
+              رویدادهای مهم پیش‌رو
+            </h2>
+            <Link
+              href="/calendar"
+              className="text-xs text-gold-600 hover:text-gold-700 dark:text-gold-400 dark:hover:text-gold-300"
+            >
+              مشاهده تقویم کامل &#8592;
+            </Link>
+          </div>
+          <div className="space-y-2">
+            {upcomingEvents.slice(0, 5).map((event) => {
+              const impactColor = event.impact === "high"
+                ? "bg-red-500"
+                : event.impact === "medium"
+                  ? "bg-orange-500"
+                  : "bg-green-500";
+              const flagMap: Record<string, string> = {
+                US: "\u{1F1FA}\u{1F1F8}", EU: "\u{1F1EA}\u{1F1FA}",
+                GB: "\u{1F1EC}\u{1F1E7}", JP: "\u{1F1EF}\u{1F1F5}",
+                CN: "\u{1F1E8}\u{1F1F3}", AU: "\u{1F1E6}\u{1F1FA}",
+                IR: "\u{1F1EE}\u{1F1F7}",
+              };
+              return (
+                <div
+                  key={event.id}
+                  className="flex items-center gap-3 rounded-lg px-2 py-1.5 hover:bg-gray-50 dark:hover:bg-gray-800/50"
+                >
+                  <div className={`h-2.5 w-2.5 shrink-0 rounded-full ${impactColor}`} />
+                  <span className="text-xs text-gold-600 dark:text-gold-400 w-20 shrink-0">
+                    {event.time_until}
+                  </span>
+                  <span className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
+                    {event.event_name_fa !== event.event_name
+                      ? event.event_name_fa
+                      : event.event_name}
+                  </span>
+                  <span className="text-base shrink-0">
+                    {flagMap[event.country] || event.country}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* ─── Sentiment Score + Stats Row ─── */}
       <div className="grid gap-4 md:grid-cols-3">

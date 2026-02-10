@@ -40,6 +40,15 @@ class Settings(BaseSettings):
     ADMIN_EMAIL: str = "admin@gold.local"
     ADMIN_PASSWORD: str = "changeme"
 
+    # ── Calendar API (JBlanked) ─────────────────────────────────────────
+    JBLANKED_API_KEY: str = ""
+
+    # ── Calendar API (Finnhub fallback) ──────────────────────────────
+    FINNHUB_API_KEY: str = ""
+
+    # ── Calendar sync interval (seconds, default 2 hours) ───────────
+    CALENDAR_SYNC_INTERVAL: int = 7200
+
     # ── Rule engine ─────────────────────────────────────────────────────
     YAML_PATH: str = "/app/gold_monitor_rules_fa.yaml"
 
