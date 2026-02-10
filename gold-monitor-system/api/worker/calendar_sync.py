@@ -29,6 +29,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from api.calendar_config import (
     get_affected_assets,
+    get_gold_impact_note,
     translate_event_name,
 )
 from api.config import settings
@@ -323,6 +324,7 @@ def _parse_forexfactory_event(raw: dict[str, Any]) -> dict[str, Any] | None:
         "previous": previous,
         "source": "forexfactory",
         "affected_assets": get_affected_assets(name.strip(), currency),
+        "gold_impact_note": get_gold_impact_note(name.strip()),
     }
 
 
@@ -368,6 +370,7 @@ def _parse_jblanked_event(raw: dict[str, Any]) -> dict[str, Any] | None:
         "previous": previous,
         "source": "fxstreet",
         "affected_assets": get_affected_assets(name.strip(), currency),
+        "gold_impact_note": get_gold_impact_note(name.strip()),
     }
 
 
@@ -415,6 +418,7 @@ def _parse_finnhub_event(raw: dict[str, Any]) -> dict[str, Any] | None:
         "previous": previous,
         "source": "finnhub",
         "affected_assets": get_affected_assets(name.strip(), currency),
+        "gold_impact_note": get_gold_impact_note(name.strip()),
     }
 
 
@@ -440,9 +444,9 @@ async def _upsert_events(events: list[dict[str, Any]]) -> int:
                     previous=event_data["previous"],
                     source=event_data["source"],
                     affected_assets=event_data["affected_assets"],
+                    gold_impact_note=event_data.get("gold_impact_note"),
                 )
                 # On conflict (same event_name + datetime), update fields
-                # Use COALESCE to preserve existing actual value if new one is NULL
                 update_set = {
                     "event_name_fa": event_data["event_name_fa"],
                     "country": event_data["country"],
@@ -452,6 +456,7 @@ async def _upsert_events(events: list[dict[str, Any]]) -> int:
                     "forecast": event_data["forecast"],
                     "previous": event_data["previous"],
                     "affected_assets": event_data["affected_assets"],
+                    "gold_impact_note": event_data.get("gold_impact_note"),
                     "updated_at": datetime.now(timezone.utc),
                 }
                 # Only overwrite actual if new value is non-null

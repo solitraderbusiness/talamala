@@ -46,8 +46,8 @@ class Settings(BaseSettings):
     # ── Calendar API (Finnhub fallback) ──────────────────────────────
     FINNHUB_API_KEY: str = ""
 
-    # ── Calendar sync interval (seconds, default 2 hours) ───────────
-    CALENDAR_SYNC_INTERVAL: int = 7200
+    # ── Calendar sync interval (seconds, default 6 hours) ───────────
+    CALENDAR_SYNC_INTERVAL: int = 21600
 
     # ── Rule engine ─────────────────────────────────────────────────────
     YAML_PATH: str = "/app/gold_monitor_rules_fa.yaml"

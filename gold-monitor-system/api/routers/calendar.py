@@ -17,9 +17,10 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.auth import get_current_admin
 from api.calendar_config import get_gold_impact_note, EVENT_GOLD_NOTES
 from api.database import get_db
-from api.models import EconomicEvent
+from api.models import AdminUser, EconomicEvent
 
 logger = logging.getLogger("gold_monitor.calendar")
 
@@ -95,18 +96,20 @@ def _format_event(event: EconomicEvent) -> dict[str, Any]:
         "time_until": _time_until(dt) if upcoming else None,
     }
 
-    # Add gold impact note if available
-    gold_note = get_gold_impact_note(event.event_name)
-    if gold_note:
-        result["gold_impact_note"] = gold_note
+    # Gold impact note: prefer stored value, fall back to dynamic lookup
+    if event.gold_impact_note:
+        result["gold_impact_note"] = event.gold_impact_note
     else:
-        # Try partial match
-        for note_name, notes in EVENT_GOLD_NOTES.items():
-            if note_name.lower() in event.event_name.lower():
-                first_asset = next(iter(notes), None)
-                if first_asset:
-                    result["gold_impact_note"] = notes[first_asset]
-                break
+        gold_note = get_gold_impact_note(event.event_name)
+        if gold_note:
+            result["gold_impact_note"] = gold_note
+        else:
+            for note_name, notes in EVENT_GOLD_NOTES.items():
+                if note_name.lower() in event.event_name.lower():
+                    first_asset = next(iter(notes), None)
+                    if first_asset:
+                        result["gold_impact_note"] = notes[first_asset]
+                    break
 
     return result
 
@@ -265,8 +268,10 @@ async def get_sync_status(
 
 
 @router.post("/sync")
-async def trigger_sync() -> dict[str, Any]:
-    """Manually trigger a calendar sync (admin use)."""
+async def trigger_sync(
+    _admin: AdminUser = Depends(get_current_admin),
+) -> dict[str, Any]:
+    """Manually trigger a calendar sync (admin only, requires JWT)."""
     from api.worker.calendar_sync import sync_calendar
     result = await sync_calendar(force=True)
     return {"status": "ok", "result": result}

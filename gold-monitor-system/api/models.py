@@ -372,6 +372,9 @@ class EconomicEvent(Base):
     affected_assets: Mapped[Any] = mapped_column(
         JSONB, default=list, server_default="[]",
     )
+    gold_impact_note: Mapped[Any] = mapped_column(
+        JSONB, nullable=True, default=None,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, server_default="now()",
     )
