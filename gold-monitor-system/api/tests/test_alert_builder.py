@@ -254,14 +254,14 @@ class TestBuildAlert:
         alert = build_alert({"title": "", "content": ""}, [mr])
         assert alert["severity"] == "low"
 
-    def test_multi_rule_boost_upgrades_medium_to_high(self):
-        # Two rules matching with medium score → boosted to HIGH
+    def test_multi_rule_no_boost(self):
+        # Multi-rule boost was removed — severity stays at medium
         rule1 = _make_rule(rule_id="r1", horizon="short")
         rule2 = _make_rule(rule_id="r2", horizon="short")
         mr1 = _make_match_result(rule=rule1, match_score=0.20)
         mr2 = _make_match_result(rule=rule2, match_score=0.20)
         alert = build_alert({"title": "", "content": ""}, [mr1, mr2])
-        assert alert["severity"] == "high"
+        assert alert["severity"] == "medium"
 
     def test_severity_high_when_content_matches_high_criteria(self):
         rule = _make_rule(

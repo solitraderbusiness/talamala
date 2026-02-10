@@ -67,10 +67,12 @@ docker compose up -d
 2. Queries enabled sources whose `poll_interval_seconds` has elapsed
 3. Appropriate **fetcher** (RSS/HTML/JSON) downloads content
 4. New items are **deduplicated** by SHA-256 content hash (Redis 24h TTL → DB fallback)
-5. Each item is matched against **YAML rules** (keyword + signal substring matching)
-6. **Severity** is determined deterministically from rule `importance_criteria`
-7. If LLM is enabled, **OpenRouter** generates Persian text (summary, why_important)
-8. **Alerts** are persisted to PostgreSQL with dedup key
+5. **Semantic event dedup** — entity extraction fingerprint catches same event with different headlines
+6. Each item is matched against **YAML rules** (keyword + signal substring matching)
+7. **Severity** is classified by event type (regex patterns), then YAML criteria, then score fallback
+8. **Direction** detected via 3-stage pipeline: regex patterns → lexicon scoring → LLM fallback
+9. If LLM is enabled, **OpenRouter** generates Persian text (summary, why_important)
+10. **Alerts** are persisted with severity, direction, confidence, and per-alert score
 
 ### Rule Engine (Deterministic)
 
@@ -91,7 +93,7 @@ The rule engine (`gold_monitor_rules_fa.yaml`) contains 32+ monitoring rules acr
 2. **Keyword matching**: Normalized keyword must be a **substring** of normalized title+content
 3. **Signal matching**: Same substring matching for signal phrases
 4. **Score**: `0.6 × (keyword_matches/total_keywords) + 0.4 × (signal_matches/total_signals)`
-5. **Threshold**: `MIN_MATCH_SCORE = 0.18` — items below this are rejected
+5. **Threshold**: `MIN_MATCH_SCORE = 0.15` — items below this are rejected
 
 #### Compound Keyword Strategy
 
@@ -102,18 +104,42 @@ With 5 compound keywords + 10 signals:
 - 1 keyword + 2 signals = `0.12 + 0.08 = 0.20` → **PASSES** (requires market context)
 - 2 keywords = `0.6 × 0.4 = 0.24` → **PASSES** (multiple market terms)
 
+### Direction Detection (3-Stage)
+
+Each alert gets a direction (bullish/bearish/neutral for gold):
+
+1. **Stage 1 — Regex patterns** (flexible word order with `.{0,N}` gaps) — catches ~60%
+2. **Stage 2 — Lexicon scoring** (gold-domain weighted words) — catches ~20% more
+3. **Stage 3 — LLM fallback** (queued for batch processing) — last resort
+
+Per-alert score: `50 + sign × swing × severity_multiplier`
+- sign: +1 bullish, -1 bearish; neutral always = 50
+- swing: 15 + (confidence - 0.3) × (30/0.7)
+- severity_multiplier: critical=1.0, high=0.8, medium=0.6, low=0.35
+
+### Severity Classification
+
+Event-type classification with 4 levels (critical → high → medium → low):
+
+1. **Event classification** — regex patterns on title+content (war=critical, CPI=high, analysis=medium)
+2. **YAML condition matching** — `importance_criteria` substrings from rule definitions
+3. **Score fallback** — match score thresholds (≥0.35 = high, <0.15 = low)
+
 ### Sentiment Analysis (0-100 Score)
 
 Deterministic 3-layer weighted formula (no LLM for scoring):
 
-1. **Per-alert signal**: `RSS_i = Polarity × Confidence`
-   - Polarity from `expected_impact.direction`: +1 bullish, -1 bearish, 0 neutral
-   - Falls back to severity: high=0.3, medium=0.15, low=0.05
-2. **Importance weighting**: `WS_i = RSS_i × W_imp` (critical=3.0, high=2.0, medium=1.0, low=0.5)
+1. **Per-alert signal**: `RSS_i = Polarity × Direction_Confidence`
+   - Polarity from 3-stage direction detection: +1 bullish, -1 bearish, 0 neutral
+   - **Neutral polarity = 0** (neutral alerts do not push the score in either direction)
+2. **Importance weighting**: `WS_i = RSS_i × W_imp` (critical=4.0, high=2.0, medium=1.0, low=0.5)
 3. **Exponential time decay**: `W_time = e^(-λ × hours_ago)` (λ: 1h=2.0, 4h=0.5, 24h=0.1)
 
-Aggregated with volume dampening, mapped to [0, 100]:
-- 80+ = very_bullish, 62-79 = bullish, 38-61 = neutral, 20-37 = bearish, <20 = very_bearish
+Additional dampening:
+- **Volume dampening**: `min(1.0, n / threshold)` (1h=10, 4h=20, 24h=30)
+- **Directional ratio dampening**: if most alerts are neutral, score stays closer to 50
+
+Score → category: 80+=very_bullish, 65-79=bullish, 55-64=slightly_bullish, 45-54=neutral, 35-44=slightly_bearish, 20-34=bearish, <20=very_bearish
 
 Scores persist to `sentiment_scores` table for historical charting.
 
@@ -130,6 +156,7 @@ Returns: gold_global (USD/oz), gold_18k (toman/gram), usd (toman), emami_coin (t
 
 - **Raw items**: SHA-256 of `title|url|content_text` → Redis (24h TTL) → DB fallback
 - **Alerts**: `dedupe_key` = SHA-256 of sorted rule IDs + normalized title (source intentionally excluded for cross-source dedup)
+- **Semantic events**: Entity fingerprinting extracts instruments, organizations, events, and numbers from title+content. Same event with different headlines produces the same fingerprint. Redis key `event:fp:<fingerprint>` with 4h TTL
 
 ## Environment Variables
 
@@ -229,7 +256,8 @@ gold-monitor-system/
 │   ├── rule_engine/
 │   │   ├── load_rules.py                    # YAML parser → Rule dataclasses (cached)
 │   │   ├── matcher.py                       # Persian-aware keyword/signal matching
-│   │   ├── severity.py                      # Deterministic severity from criteria
+│   │   ├── severity.py                      # Event-type severity classification (critical/high/medium/low)
+│   │   ├── direction.py                     # 3-stage direction detection (regex→lexicon→LLM)
 │   │   └── alert_builder.py                 # Alert dict assembly + dedupe key
 │   ├── worker/
 │   │   ├── main.py                          # Worker loop (60s cycle) + pipeline
@@ -284,7 +312,7 @@ gold-monitor-system/
 - **httpx** — OpenRouter + BrsAPI client
 - **python-jose** — JWT (HS256)
 - **passlib + bcrypt** — Password hashing
-- **pytest + pytest-asyncio** — 105 tests
+- **pytest + pytest-asyncio** — 136 tests
 
 ### Frontend (TypeScript)
 - **Next.js 14** (App Router) — React framework
@@ -329,7 +357,7 @@ gold-monitor-system/
 cd gold-monitor-system
 pip install -r api/requirements.txt
 python -m pytest api/tests/ -v
-# 105 tests pass
+# 136 tests pass
 ```
 
 ### Deploy Updates
@@ -377,7 +405,7 @@ On every API container start:
 ### No alerts appearing
 - Check worker logs: `docker compose logs -f worker`
 - Verify sources enabled: Admin → Sources
-- Check MIN_MATCH_SCORE (0.18 in `worker/main.py`)
+- Check MIN_MATCH_SCORE (0.15 in `worker/main.py`)
 - Bump dedup flush version in `api/main.py` and restart
 
 ### Prices not updating

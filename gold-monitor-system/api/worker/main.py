@@ -68,7 +68,7 @@ LOCK_KEY = "worker:lock"
 LOCK_TTL = 55  # seconds — slightly less than CYCLE_INTERVAL
 FETCH_TIMEOUT = 30  # per-request HTTP timeout (seconds)
 MAX_ALERTS_PER_SOURCE = 10  # prevent any single source from flooding
-MIN_MATCH_SCORE = 0.10  # lowered from 0.18 to capture English title-only content
+MIN_MATCH_SCORE = 0.15  # compound keywords prevent false positives at this threshold
 HIGH_CONFIDENCE_SCORE = 0.30  # above this, skip LLM relevance check
 MAX_ARTICLE_AGE_HOURS = 6  # skip RSS items older than 6 hours for freshness
 
@@ -514,10 +514,28 @@ class Worker:
         alert = _re_build_alert(raw_item_dict, match_results)
         alert["raw_item_id"] = raw_item_id
 
+        # Persist direction data in match_evidence for the API to read
+        evidence = alert.get("match_evidence", {})
+        evidence["direction"] = alert.get("direction", "neutral")
+        evidence["direction_confidence"] = alert.get("direction_confidence", 0.0)
+        evidence["direction_method"] = alert.get("direction_method", "fallback")
+        evidence["alert_score"] = alert.get("alert_score", 50)
+        alert["match_evidence"] = evidence
+
         dedupe_key = alert["dedupe_key"]
 
         if await dedup.is_alert_duplicate(dedupe_key):
             logger.debug("Skipping duplicate alert: %s", dedupe_key)
+            return 0
+
+        # Semantic event dedup — catches same event with different headlines
+        if await dedup.is_event_duplicate(
+            item.title or "", item.content_text or "",
+        ):
+            logger.info(
+                "  Skipping semantically duplicate event: %s",
+                (item.title or "")[:60],
+            )
             return 0
 
         # Optional LLM enrichment
@@ -542,6 +560,7 @@ class Worker:
 
         await self._store_alert(db, alert)
         await dedup.mark_alert(dedupe_key)
+        await dedup.mark_event(item.title or "", item.content_text or "")
         return 1
 
     async def _match_and_alert_fallback(

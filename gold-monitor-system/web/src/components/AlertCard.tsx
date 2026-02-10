@@ -28,81 +28,6 @@ function getDisplayTitle(alert: Alert): string {
 
 type Direction = "bullish" | "bearish" | "neutral";
 
-/**
- * Determine per-alert gold market direction.
- * CONSERVATIVE: only marks bullish/bearish when there's strong gold-specific
- * evidence. Defaults to neutral — most news is neutral.
- */
-function getAlertDirection(alert: Alert): Direction {
-  // 1. Check expected_impact for explicit direction
-  const impacts = alert.expected_impact || [];
-  if (impacts.length > 0) {
-    const hasUp = impacts.some((i) => i.direction === "up");
-    const hasDown = impacts.some((i) => i.direction === "down");
-    if (hasUp && !hasDown) return "bullish";
-    if (hasDown && !hasUp) return "bearish";
-  }
-
-  // 2. Gold-specific keyword analysis — ONLY strong signals
-  const text = ((alert.title || "") + " " + (alert.summary_fa || "")).toLowerCase();
-
-  // Must be gold-specific, not generic economic terms
-  const bullishPatterns = [
-    // English: gold going up
-    "gold rises", "gold surges", "gold rallies", "gold jumps", "gold soars",
-    "gold climbs", "gold gains", "gold hits record", "gold all-time high",
-    "gold safe haven", "gold demand",
-    // English: rate cuts (bullish for gold)
-    "rate cut", "dovish",
-    // Persian: gold going up
-    "طلا صعود", "طلا افزایش یافت", "قیمت طلا بالا", "رشد قیمت طلا",
-    "رکورد قیمت طلا", "رکورد طلا", "جهش طلا", "جهش قیمت طلا",
-    "طلا رشد کرد", "بازگشت طلا به بالا", "رشد طلا",
-    // Persian: rate cut
-    "کاهش نرخ بهره",
-  ];
-
-  const bearishPatterns = [
-    // English: gold going down
-    "gold falls", "gold drops", "gold slips", "gold declines", "gold plunges",
-    "gold sinks", "gold crashes", "gold slides", "gold retreats",
-    // English: rate hikes (bearish for gold)
-    "rate hike", "hawkish", "stronger dollar",
-    // Persian: gold going down
-    "طلا نزول", "طلا کاهش یافت", "قیمت طلا پایین", "کاهش قیمت طلا",
-    "افت طلا", "سقوط طلا", "ریزش طلا", "افت قیمت طلا",
-    // Persian: rate hike / strong dollar
-    "افزایش نرخ بهره", "تقویت دلار",
-  ];
-
-  const hasBull = bullishPatterns.some((p) => text.includes(p));
-  const hasBear = bearishPatterns.some((p) => text.includes(p));
-
-  if (hasBull && !hasBear) return "bullish";
-  if (hasBear && !hasBull) return "bearish";
-  return "neutral";
-}
-
-/**
- * Compute a 0-100 per-alert sentiment score.
- * Uses direction + severity + actual confidence for variance.
- * 50 = neutral, >50 = bullish for gold, <50 = bearish for gold.
- */
-function getAlertScore(direction: Direction, severity: string, confidence: number): number {
-  if (direction === "neutral") {
-    // Neutral still varies slightly by severity
-    const nudge: Record<string, number> = { high: 3, medium: 0, low: -2 };
-    return 50 + (nudge[severity] || 0);
-  }
-
-  const sign = direction === "bullish" ? 1 : -1;
-  // confidence ranges 0.30-0.95, map to 10-30 range for the shift
-  const confShift = 10 + (confidence - 0.3) * (20 / 0.65);
-  const sevBonus: Record<string, number> = { high: 10, medium: 5, low: 0 };
-  const score = 50 + sign * (confShift + (sevBonus[severity] || 0));
-  return Math.round(Math.max(0, Math.min(100, score)));
-}
-
 const DIR_CONFIG: Record<Direction, { icon: string; label: string; color: string }> = {
   bullish: { icon: "▲", label: "صعودی", color: "text-emerald-500" },
   bearish: { icon: "▼", label: "نزولی", color: "text-red-500" },
@@ -110,6 +35,7 @@ const DIR_CONFIG: Record<Direction, { icon: string; label: string; color: string
 };
 
 const SEVERITY_BORDER: Record<string, string> = {
+  critical: "border-r-4 border-r-purple-600",
   high: "border-r-4 border-r-red-500",
   medium: "border-r-4 border-r-amber-500/40",
   low: "",
@@ -139,9 +65,12 @@ interface AlertCardProps {
 export default function AlertCard({ alert, compact = false }: AlertCardProps) {
   const displayTitle = getDisplayTitle(alert);
   const hasEnglishTitle = isLikelyEnglish(alert.title) && displayTitle !== alert.title;
-  const direction = getAlertDirection(alert);
+
+  // Use server-provided direction and score (computed by direction.py)
+  const direction: Direction =
+    (alert.direction as Direction) || "neutral";
   const dir = DIR_CONFIG[direction];
-  const score = getAlertScore(direction, alert.severity, alert.confidence);
+  const score = alert.alert_score ?? 50;
 
   if (compact) {
     return (

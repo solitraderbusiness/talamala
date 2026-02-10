@@ -75,9 +75,13 @@ export interface Alert {
   summary_fa: string;
   why_important_fa: string;
   expected_impact: ExpectedImpact;
-  severity: "high" | "medium" | "low";
+  severity: "critical" | "high" | "medium" | "low";
   time_horizon: "immediate" | "short" | "medium" | "long";
   confidence: number;
+  direction?: "bullish" | "bearish" | "neutral" | "pending_llm";
+  direction_confidence?: number;
+  direction_method?: string;
+  alert_score?: number;
   follow_up_questions: string[];
   dedupe_key: string;
   match_evidence: Record<string, unknown>;
@@ -99,6 +103,7 @@ export interface AlertStats {
   top_alerts: Alert[];
   risk_score: number;
   counts: {
+    critical: number;
     high: number;
     medium: number;
     low: number;

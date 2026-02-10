@@ -53,18 +53,10 @@ _TIMEFRAMES = [
 
 # Importance weights mapping severity → weight
 _IMPORTANCE_WEIGHT: dict[str, float] = {
-    "critical": 3.0,
+    "critical": 4.0,
     "high": 2.0,
     "medium": 1.0,
     "low": 0.5,
-}
-
-# Default polarity by severity when direction is unknown.
-# Gold monitoring: high-severity events generally drive safe-haven demand.
-_DEFAULT_POLARITY: dict[str, float] = {
-    "high": 0.3,
-    "medium": 0.15,
-    "low": 0.05,
 }
 
 # Exponential decay rate (lambda) per timeframe.
@@ -87,46 +79,40 @@ _VOLUME_THRESHOLD: dict[str, int] = {
 # ── Polarity Detection ───────────────────────────────────────────────
 
 
-def _detect_polarity(alert: dict) -> float:
-    """Detect polarity from alert's expected_impact data.
+def _detect_polarity(alert: dict) -> tuple[float, float]:
+    """Detect polarity from alert's direction data.
 
-    Returns a value from -1.0 (bearish for gold) to +1.0 (bullish for gold).
-    Falls back to a mild severity-based bias reflecting gold's safe-haven role.
+    Returns (polarity, confidence) where polarity is:
+    -1.0 (bearish for gold), +1.0 (bullish for gold), or 0.0 (neutral).
+
+    Uses stored direction data from the pipeline if available,
+    otherwise computes on-the-fly using detect_direction.
+    Neutral alerts contribute 0 polarity (not a small positive).
     """
-    impact = alert.get("expected_impact")
+    from api.rule_engine.direction import detect_direction
 
-    # Try extracting direction from impact data (array format)
-    if isinstance(impact, list):
-        up_count = 0
-        down_count = 0
-        for item in impact:
-            if not isinstance(item, dict):
-                continue
-            d = str(item.get("direction", "")).lower()
-            if d in ("up", "bullish"):
-                up_count += 1
-            elif d in ("down", "bearish"):
-                down_count += 1
-        if up_count > down_count:
-            return 1.0
-        if down_count > up_count:
-            return -1.0
-        if up_count > 0 and down_count > 0:
-            return 0.0  # mixed
+    # Check for stored direction (new pipeline alerts)
+    evidence = alert.get("match_evidence", {})
+    stored_direction = evidence.get("direction")
+    stored_confidence = evidence.get("direction_confidence")
 
-    # Try extracting from dict format (legacy)
-    elif isinstance(impact, dict):
-        for _asset, details in impact.items():
-            if isinstance(details, dict):
-                d = str(details.get("direction", "")).lower()
-                if d in ("up", "bullish"):
-                    return 1.0
-                if d in ("down", "bearish"):
-                    return -1.0
+    if stored_direction:
+        direction = stored_direction
+        confidence = stored_confidence or 0.3
+    else:
+        # Compute on-the-fly for legacy alerts
+        title = alert.get("title", "")
+        summary = alert.get("summary_fa", "")
+        dir_result = detect_direction(title, summary)
+        direction = dir_result["direction"]
+        confidence = dir_result["confidence"]
 
-    # Default: mild severity-based bias for gold's safe-haven nature
-    severity = alert.get("severity", "medium")
-    return _DEFAULT_POLARITY.get(severity, 0.1)
+    if direction == "bullish":
+        return (1.0, confidence)
+    elif direction == "bearish":
+        return (-1.0, confidence)
+    else:
+        return (0.0, 0.0)  # neutral contributes nothing
 
 
 # ── Deterministic Score Computation ──────────────────────────────────
@@ -139,14 +125,19 @@ def _compute_sentiment_score(
 ) -> tuple[int, str, str]:
     """Compute deterministic sentiment score using 3-layer weighted formula.
 
-    Layer 1 (per alert):  RSS_i = Polarity_i × Confidence_i
+    Layer 1 (per alert):  RSS_i = Polarity_i × Direction_Confidence_i
     Layer 2 (importance):  WS_i  = RSS_i × W_imp_i
     Layer 3 (time decay):  contribution_i = WS_i × e^(-λ × t_i)
+
+    Key change: neutral polarity = 0 (not a small positive). Neutral alerts
+    do not push the score in either direction.
 
     Aggregation:
         raw = Σ(WS_i × W_time_i) / Σ(|W_imp_i × W_time_i|) × 100
     Volume dampening:
         dampened = raw × min(1.0, n / threshold)
+    Directional ratio dampening:
+        If most alerts are neutral, dampens score toward 50.
     Final score:
         50 + dampened / 2, clamped to [0, 100]
 
@@ -161,12 +152,16 @@ def _compute_sentiment_score(
 
     numerator = 0.0
     denominator = 0.0
+    directional_count = 0  # alerts with non-neutral direction
 
     for alert in alerts:
-        # Layer 1: RSS = Polarity × Confidence
-        polarity = _detect_polarity(alert)
-        confidence = max(alert.get("confidence", 0.5), 0.1)
-        rss = polarity * confidence
+        # Layer 1: RSS = Polarity × Direction_Confidence
+        polarity, dir_confidence = _detect_polarity(alert)
+        if polarity != 0.0:
+            directional_count += 1
+            rss = polarity * max(dir_confidence, 0.3)
+        else:
+            rss = 0.0  # neutral contributes nothing to direction
 
         # Layer 2: Importance weight
         severity = alert.get("severity", "medium")
@@ -197,6 +192,14 @@ def _compute_sentiment_score(
     dampening = min(1.0, n / volume_threshold)
     dampened = sentiment_raw * dampening
 
+    # Directional ratio dampening: if most alerts are neutral,
+    # the overall score should stay closer to 50
+    if n > 0:
+        directional_ratio = directional_count / n
+        # Minimum ratio: even with 1 directional alert, keep some signal
+        dir_dampening = max(0.3, directional_ratio)
+        dampened = dampened * dir_dampening
+
     # Final score: 50 + dampened/2, clamped to [0, 100]
     score = int(round(max(0, min(100, 50 + dampened / 2))))
 
@@ -209,10 +212,14 @@ def _score_to_sentiment(score: int) -> tuple[str, str]:
     """Map a 0-100 score to a (sentiment_key, persian_label) pair."""
     if score >= 80:
         return "very_bullish", "بسیار صعودی"
-    if score >= 62:
+    if score >= 65:
         return "bullish", "صعودی"
-    if score >= 38:
+    if score >= 55:
+        return "slightly_bullish", "نسبتاً صعودی"
+    if score >= 45:
         return "neutral", "خنثی"
+    if score >= 35:
+        return "slightly_bearish", "نسبتاً نزولی"
     if score >= 20:
         return "bearish", "نزولی"
     return "very_bearish", "بسیار نزولی"
@@ -263,7 +270,7 @@ def _select_top_alerts(alerts: list[dict], max_count: int) -> list[dict]:
     Sorts by severity (high first), then recency (newest first).
     Returns at most *max_count* alerts.
     """
-    severity_order = {"high": 0, "medium": 1, "low": 2}
+    severity_order = {"critical": -1, "high": 0, "medium": 1, "low": 2}
 
     def sort_key(a: dict) -> tuple:
         sev = severity_order.get(a.get("severity", "medium"), 1)
@@ -296,10 +303,10 @@ def _format_alerts_for_llm(alerts: list[dict], window_hours: int) -> str:
             hours_ago = 0
 
         still_relevant = ""
-        if hours_ago > window_hours and severity == "high":
+        if hours_ago > window_hours and severity in ("critical", "high"):
             still_relevant = " [STILL RELEVANT]"
 
-        sev_label = {"high": "HIGH", "medium": "MED", "low": "LOW"}.get(severity, severity)
+        sev_label = {"critical": "CRIT", "high": "HIGH", "medium": "MED", "low": "LOW"}.get(severity, severity)
 
         line = f"{i}. [{sev_label}] {title}{still_relevant}"
         if summary:
@@ -435,12 +442,15 @@ def _fallback_text(alerts: list[dict], score: int) -> dict[str, Any]:
             "outlook": "داده کافی برای تحلیل وجود ندارد.",
         }
 
+    crit = sum(1 for a in alerts if a["severity"] == "critical")
     high = sum(1 for a in alerts if a["severity"] == "high")
     med = sum(1 for a in alerts if a["severity"] == "medium")
     low = sum(1 for a in alerts if a["severity"] == "low")
     total = len(alerts)
 
     parts = []
+    if crit:
+        parts.append(f"{crit} بحرانی")
     if high:
         parts.append(f"{high} بالا")
     if med:
@@ -495,8 +505,8 @@ async def get_sentiment(
             "expected_impact": a.expected_impact or [],
         })
 
-    # High-severity alerts from last 24h (always considered)
-    high_severity = [a for a in all_alerts if a["severity"] == "high"]
+    # High/critical-severity alerts from last 24h (always considered)
+    high_severity = [a for a in all_alerts if a["severity"] in ("critical", "high")]
 
     results: dict[str, Any] = {
         "timeframes": {},

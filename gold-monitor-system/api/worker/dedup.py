@@ -8,14 +8,17 @@ Deduplication checker backed by Redis (fast path) and PostgreSQL (durable).
 * **Alerts** are deduplicated by ``dedupe_key``.  A Redis key
   ``alert:dedup:<key>`` is set with a configurable TTL (default 6 hours,
   read from the ``settings`` table).
+
+* **Events** are deduplicated by semantic fingerprint — entity extraction
+  from title + content produces a stable key that groups different headlines
+  about the same event.
 """
 
 from __future__ import annotations
 
+import re
 import logging
 from typing import TYPE_CHECKING
-
-from sqlalchemy import text
 
 if TYPE_CHECKING:
     import redis.asyncio as aioredis
@@ -26,10 +29,57 @@ logger = logging.getLogger(__name__)
 # Redis key prefixes
 _RAW_HASH_PREFIX = "raw_items:hash:"
 _ALERT_DEDUP_PREFIX = "alert:dedup:"
+_EVENT_FP_PREFIX = "event:fp:"
 
 # Defaults
 _RAW_HASH_TTL_SECONDS = 86_400  # 24 hours
 _DEFAULT_DEDUPE_WINDOW_HOURS = 6
+_EVENT_FP_TTL_SECONDS = 14_400  # 4 hours
+
+
+# ── Event fingerprinting ─────────────────────────────────────────────────
+
+_ENTITY_PATTERNS = [
+    # Price levels
+    re.compile(r"(\d{3,})\s*(دلار|dollar|تومان|ریال)", re.IGNORECASE),
+    # Instruments
+    re.compile(r"(طلا|gold|نقره|silver|سکه|coin|دلار|dollar|بیت‌?کوین|bitcoin)", re.IGNORECASE),
+    # Organizations
+    re.compile(r"(فدرال\s*رزرو|fed|بانک\s*مرکزی|central\s*bank|ECB|BOJ|PBOC|CME|COMEX)", re.IGNORECASE),
+    # Events
+    re.compile(r"(جنگ|war|تحریم|sanction|مذاکر|negotiat|نرخ\s*بهره|interest\s*rate)", re.IGNORECASE),
+    # Direction words (for fingerprinting, not sentiment)
+    re.compile(r"(رکورد|record|سقوط|crash|صعود|surge)", re.IGNORECASE),
+]
+
+
+def extract_event_fingerprint(title: str, content: str = "") -> str:
+    """Extract key entities + numbers to create an event fingerprint.
+
+    Same event with different titles will produce similar/identical
+    fingerprints.  For example:
+    - "قیمت طلا به بالای ۵۰۰۰ دلار" → "5000|دلار|طلا"
+    - "طلا بالای ۵۰۰۰ دلار بازگشت" → "5000|دلار|طلا"
+    """
+    text_combined = f"{title} {content}"
+
+    key_entities: set[str] = set()
+
+    # Extract entities from patterns
+    for pattern in _ENTITY_PATTERNS:
+        matches = pattern.findall(text_combined)
+        for m in matches:
+            if isinstance(m, tuple):
+                key_entities.update(part.lower().strip() for part in m if part.strip())
+            else:
+                key_entities.add(m.lower().strip())
+
+    # Extract significant numbers (prices, percentages)
+    numbers = sorted(set(re.findall(r"\d{3,}", text_combined)))[:5]
+
+    # Sort for consistency
+    parts = sorted(key_entities) + numbers
+    return "|".join(parts) if parts else ""
 
 
 class DedupChecker:
@@ -40,8 +90,10 @@ class DedupChecker:
         redis_client: aioredis.Redis,
         db_session: AsyncSession,
     ) -> None:
+        from sqlalchemy import text as _sa_text
         self._redis = redis_client
         self._db = db_session
+        self._text = _sa_text
 
     # ------------------------------------------------------------------
     # Raw-item dedup (by content_hash)
@@ -69,7 +121,7 @@ class DedupChecker:
         # 2. Durable check — PostgreSQL
         try:
             result = await self._db.execute(
-                text(
+                self._text(
                     "SELECT 1 FROM raw_items "
                     "WHERE content_hash = :hash LIMIT 1"
                 ),
@@ -120,7 +172,7 @@ class DedupChecker:
         window_hours = await self.get_dedupe_window()
         try:
             result = await self._db.execute(
-                text(
+                self._text(
                     "SELECT 1 FROM alerts "
                     "WHERE dedupe_key = :key "
                     "  AND created_at >= NOW() - MAKE_INTERVAL(hours => :hours) "
@@ -166,7 +218,7 @@ class DedupChecker:
         """
         try:
             result = await self._db.execute(
-                text(
+                self._text(
                     "SELECT value FROM settings "
                     "WHERE key = 'dedupe_window_hours' LIMIT 1"
                 )
@@ -182,6 +234,46 @@ class DedupChecker:
                 exc_info=True,
             )
         return _DEFAULT_DEDUPE_WINDOW_HOURS
+
+    # ------------------------------------------------------------------
+    # Internal
+    # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # Event dedup (by semantic fingerprint)
+    # ------------------------------------------------------------------
+
+    async def is_event_duplicate(self, title: str, content: str = "") -> bool:
+        """Return ``True`` if an event with the same semantic fingerprint
+        was already seen within the fingerprint TTL window.
+
+        Uses ``extract_event_fingerprint`` to produce a stable key from
+        entity extraction so that different headlines about the same event
+        produce the same fingerprint.
+        """
+        fp = extract_event_fingerprint(title, content)
+        if not fp:
+            return False  # No entities extracted — cannot deduplicate
+
+        redis_key = f"{_EVENT_FP_PREFIX}{fp}"
+        try:
+            if await self._redis.exists(redis_key):
+                return True
+        except Exception:
+            logger.warning(
+                "Redis lookup failed for event fingerprint %s",
+                fp[:40],
+                exc_info=True,
+            )
+        return False
+
+    async def mark_event(self, title: str, content: str = "") -> None:
+        """Record the event fingerprint in Redis."""
+        fp = extract_event_fingerprint(title, content)
+        if not fp:
+            return
+        redis_key = f"{_EVENT_FP_PREFIX}{fp}"
+        await self._safe_redis_setex(redis_key, _EVENT_FP_TTL_SECONDS, "1")
 
     # ------------------------------------------------------------------
     # Internal

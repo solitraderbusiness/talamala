@@ -1,13 +1,19 @@
 """
-Deterministic severity assessment — checks news content against the
-``importance_criteria`` conditions defined in each rule, with a
-match-score-based fallback for meaningful severity distribution.
+Deterministic severity assessment using event-type classification.
 
-**No LLM is involved.**  Severity is decided by condition matching first,
-then by match_score thresholds when conditions don't match.
+**Priority order:**
+
+1. **Event classification** — regex patterns classify the EVENT TYPE
+   (war, rate decision, price record, etc.) into severity levels.
+2. **YAML condition matching** — ``importance_criteria`` substring check.
+3. **Match-score fallback** — score thresholds when nothing else matches.
+
+**No LLM is involved.**
 """
 
 from __future__ import annotations
+
+import re
 
 from api.rule_engine.load_rules import Rule
 from api.rule_engine.matcher import MatchResult, normalize_text
@@ -16,21 +22,61 @@ from api.rule_engine.matcher import MatchResult, normalize_text
 # Constants
 # ---------------------------------------------------------------------------
 
+SEVERITY_CRITICAL = "critical"
 SEVERITY_HIGH = "high"
 SEVERITY_MEDIUM = "medium"
 SEVERITY_LOW = "low"
 
-_VALID_SEVERITIES = frozenset({SEVERITY_HIGH, SEVERITY_MEDIUM, SEVERITY_LOW})
+_VALID_SEVERITIES = frozenset(
+    {SEVERITY_CRITICAL, SEVERITY_HIGH, SEVERITY_MEDIUM, SEVERITY_LOW}
+)
 
 # Confidence clamp bounds
 _MIN_CONFIDENCE = 0.3
 _MAX_CONFIDENCE = 0.95
 
-# Match-score thresholds for severity fallback.
-# These kick in when the YAML importance_criteria conditions don't match.
-_HIGH_SCORE_THRESHOLD = 0.35       # 3+ keywords or 2 kw + signals → high
-_HIGH_IMMEDIATE_THRESHOLD = 0.25   # immediate-horizon rules: lower bar for high
-_LOW_SCORE_THRESHOLD = 0.15        # borderline single-keyword match → low
+# Match-score thresholds (last-resort fallback only)
+_HIGH_SCORE_THRESHOLD = 0.35
+_HIGH_IMMEDIATE_THRESHOLD = 0.25
+_LOW_SCORE_THRESHOLD = 0.15
+
+# ---------------------------------------------------------------------------
+# Event-type severity patterns
+# ---------------------------------------------------------------------------
+# Checked in order: critical → high → medium → low.
+# First match wins.
+
+EVENT_SEVERITY_MAP: dict[str, list[str]] = {
+    "critical": [
+        r"(جنگ|حمله\s*نظامی|war\b|military\s*strike|بمباران)",
+        r"(فدرال\s*رزرو.*نرخ\s*بهره|fed.*rate\s*(cut|hike|decision))",
+        r"(تحریم\s*جدید|new\s*sanction|snapback)",
+        r"(مذاکرات?\s*هسته.?ای|nuclear\s*negoti|JCPOA|برجام)",
+        r"(رکورد\s*(تاریخی|جدید)|all.time\s*high|ATH)",
+        r"(سقوط\s*(شدید|بازار)|crash|black\s*swan)",
+    ],
+    "high": [
+        r"(CPI|تورم\s*آمریکا|inflation\s*data)",
+        r"(NFP|non.?farm|اشتغال\s*آمریکا)",
+        r"(بانک\s*مرکزی.*خرید\s*طلا|central\s*bank.*gold\s*buy)",
+        r"(ETF.*(inflow|outflow|ورود|خروج))",
+        r"(نرخ\s*بهره.*(افزایش|کاهش)|rate\s*(hike|cut))",
+        r"(قیمت\s*طلا.*(بالای|زیر)\s*\d{3,}|gold.*(above|below)\s*\d{3,})",
+        r"(دلار.*(سقوط|جهش)|dollar.*(crash|surge))",
+        r"(تنش.*ایران|iran.*tension)",
+    ],
+    "medium": [
+        r"(تحلیل|analysis|پیش.?بینی|forecast)",
+        r"(گزارش\s*فصلی|quarterly\s*report)",
+        r"(PMI|GDP|بازار\s*سهام|stock\s*market)",
+        r"(تقاضای?\s*(فیزیکی|طلا)|physical\s*demand)",
+    ],
+    "low": [
+        r"(نظرسنجی|survey|poll)",
+        r"(آموزش|tutorial|معرفی)",
+        r"(تاریخچه|history|گذشته)",
+    ],
+}
 
 
 # ---------------------------------------------------------------------------
@@ -38,26 +84,33 @@ _LOW_SCORE_THRESHOLD = 0.15        # borderline single-keyword match → low
 # ---------------------------------------------------------------------------
 
 
+def classify_severity(title: str, content: str = "") -> str | None:
+    """Classify severity based on EVENT TYPE using regex patterns.
+
+    Returns the severity level if a pattern matches, or ``None`` if
+    no event pattern was recognized.
+    """
+    text = f"{title} {content}"
+    for severity in ("critical", "high", "medium", "low"):
+        for pattern in EVENT_SEVERITY_MAP[severity]:
+            if re.search(pattern, text, re.IGNORECASE):
+                return severity
+    return None
+
+
 def determine_severity(
     content: str,
     rule: Rule,
     match_score: float = 0.0,
+    title: str = "",
 ) -> str:
-    """Determine the severity level for *content* using the rule's criteria.
-
-    The function first tries condition-based matching from the YAML
-    ``importance_criteria``, then falls back to match-score thresholds
-    for a meaningful severity distribution.
+    """Determine the severity level using a 3-tier approach.
 
     **Priority order:**
 
-    1. **Condition matching** — if any ``high_if`` / ``medium_if`` /
-       ``low_if`` condition string is found in the normalised content,
-       return that severity immediately.
-    2. **Score-based fallback** — when no condition matches:
-       - ``"high"`` if score >= 0.35 (or >= 0.25 for immediate-horizon rules)
-       - ``"low"`` if score < 0.15
-       - ``"medium"`` otherwise
+    1. **Event classification** — regex patterns on title + content.
+    2. **YAML condition matching** — ``importance_criteria`` substrings.
+    3. **Match-score fallback** — thresholds based on keyword match quality.
 
     Parameters
     ----------
@@ -66,29 +119,32 @@ def determine_severity(
     rule:
         The matched :class:`Rule` whose criteria to evaluate.
     match_score:
-        The match score from the matcher (0.0 – 1.0).  Higher scores mean
-        more keywords/signals matched.
+        The match score from the matcher (0.0 – 1.0).
+    title:
+        The news title (used for event classification).
 
     Returns
     -------
     str
-        One of ``"high"``, ``"medium"``, or ``"low"``.
+        One of ``"critical"``, ``"high"``, ``"medium"``, or ``"low"``.
     """
+    # 1. Event classification (regex on title + content)
+    event_sev = classify_severity(title, content)
+    if event_sev is not None:
+        return event_sev
+
+    # 2. YAML condition matching (original logic)
     norm_content = normalize_text(content)
     criteria = rule.importance_criteria
 
-    # 1. Condition-based matching (original YAML logic)
     if _any_condition_matches(norm_content, criteria.get("high_if", [])):
         return SEVERITY_HIGH
-
     if _any_condition_matches(norm_content, criteria.get("medium_if", [])):
         return SEVERITY_MEDIUM
-
     if _any_condition_matches(norm_content, criteria.get("low_if", [])):
         return SEVERITY_LOW
 
-    # 2. Score-based fallback for meaningful severity distribution
-    # Immediate-horizon rules (breaking events) have a lower threshold for high
+    # 3. Score-based fallback
     high_threshold = (
         _HIGH_IMMEDIATE_THRESHOLD
         if rule.horizon == "immediate"
@@ -96,7 +152,6 @@ def determine_severity(
     )
     if match_score >= high_threshold:
         return SEVERITY_HIGH
-
     if match_score < _LOW_SCORE_THRESHOLD:
         return SEVERITY_LOW
 
@@ -106,22 +161,9 @@ def determine_severity(
 def calculate_confidence(match_result: MatchResult) -> float:
     """Derive a confidence score from the ``match_score`` of a match result.
 
-    Higher ``match_score`` (more keywords/signals matched) yields higher
-    confidence.  The value is clamped to [0.3, 0.95] — we never claim 100 %
-    confidence from substring matching alone, and even a single-keyword match
-    gives at least 0.3.
-
-    Parameters
-    ----------
-    match_result:
-        The :class:`MatchResult` produced by the matcher.
-
-    Returns
-    -------
-    float
-        Confidence in [0.3, 0.95].
+    Linear mapping: score 0 → 0.3, score 1 → 0.95.
+    Clamped to [0.3, 0.95].
     """
-    # Linear mapping:  score 0 -> 0.3,  score 1 -> 0.95
     raw = _MIN_CONFIDENCE + match_result.match_score * (_MAX_CONFIDENCE - _MIN_CONFIDENCE)
     return _clamp(raw, _MIN_CONFIDENCE, _MAX_CONFIDENCE)
 

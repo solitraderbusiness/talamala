@@ -50,7 +50,16 @@ from api.rule_engine.matcher import (
 # -- severity --------------------------------------------------------------
 from api.rule_engine.severity import (
     calculate_confidence,
+    classify_severity,
     determine_severity,
+)
+
+# -- direction -------------------------------------------------------------
+from api.rule_engine.direction import (
+    calculate_alert_score,
+    detect_direction,
+    detect_direction_lexicon,
+    detect_direction_regex,
 )
 
 # -- alert_builder ---------------------------------------------------------
@@ -77,7 +86,13 @@ __all__ = [
     "match_rules",
     # severity
     "determine_severity",
+    "classify_severity",
     "calculate_confidence",
+    # direction
+    "detect_direction",
+    "detect_direction_regex",
+    "detect_direction_lexicon",
+    "calculate_alert_score",
     # alert_builder
     "build_alert",
     "generate_dedupe_key",

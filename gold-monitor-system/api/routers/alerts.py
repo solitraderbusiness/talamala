@@ -16,6 +16,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.database import get_db
 from api.models import Alert, SentimentScore
+from api.rule_engine.direction import (
+    calculate_alert_score,
+    detect_direction,
+)
 
 router = APIRouter(tags=["alerts"])
 
@@ -60,8 +64,36 @@ def _alert_section(alert: Alert) -> str:
 
 
 def _alert_to_dict(alert: Alert) -> dict[str, Any]:
-    """Convert a SQLAlchemy Alert object to a plain dict."""
+    """Convert a SQLAlchemy Alert object to a plain dict.
+
+    For alerts stored with direction data (new pipeline), uses those values.
+    For legacy alerts without direction, computes on-the-fly using the
+    direction detection module.
+    """
     section = _alert_section(alert)
+
+    # Extract stored direction data from match_evidence (new alerts store it)
+    evidence = alert.match_evidence or {}
+    stored_direction = evidence.get("direction")
+    stored_dir_confidence = evidence.get("direction_confidence")
+    stored_dir_method = evidence.get("direction_method")
+    stored_alert_score = evidence.get("alert_score")
+
+    if stored_direction and stored_alert_score is not None:
+        direction = stored_direction
+        direction_confidence = stored_dir_confidence or 0.0
+        direction_method = stored_dir_method or "stored"
+        alert_score = stored_alert_score
+    else:
+        # Compute on-the-fly for legacy alerts
+        dir_result = detect_direction(alert.title or "", alert.summary_fa or "")
+        direction = dir_result["direction"]
+        direction_confidence = dir_result["confidence"]
+        direction_method = dir_result["method"]
+        alert_score = calculate_alert_score(
+            direction, direction_confidence, alert.severity or "medium",
+        )
+
     return {
         "id": str(alert.id),
         "title": alert.title,
@@ -75,6 +107,10 @@ def _alert_to_dict(alert: Alert) -> dict[str, Any]:
         "severity": alert.severity,
         "time_horizon": alert.time_horizon,
         "confidence": alert.confidence,
+        "direction": direction,
+        "direction_confidence": direction_confidence,
+        "direction_method": direction_method,
+        "alert_score": alert_score,
         "follow_up_questions": alert.follow_up_questions or [],
         "dedupe_key": alert.dedupe_key,
         "raw_item_id": str(alert.raw_item_id) if alert.raw_item_id else None,
@@ -192,7 +228,7 @@ def _compute_activity_score(alerts: list[Alert]) -> int:
         return 0
 
     now = datetime.datetime.now(datetime.timezone.utc)
-    severity_w = {"high": 8.0, "medium": 2.0, "low": 0.5}
+    severity_w = {"critical": 12.0, "high": 8.0, "medium": 2.0, "low": 0.5}
     half_life_hours = 4.0
     decay_constant = math.log(2) / half_life_hours
 
@@ -225,7 +261,7 @@ async def alerts_stats_today(
     all_alerts = list((await db.execute(all_stmt)).scalars().all())
 
     # Severity counts
-    counts: dict[str, int] = {"high": 0, "medium": 0, "low": 0}
+    counts: dict[str, int] = {"critical": 0, "high": 0, "medium": 0, "low": 0}
     for a in all_alerts:
         counts[a.severity] = counts.get(a.severity, 0) + 1
 
@@ -240,7 +276,7 @@ async def alerts_stats_today(
     risk_score = sentiment_row.score if sentiment_row else _compute_activity_score(all_alerts)
 
     # Top alerts: prioritize by severity, then recency (most recent first)
-    severity_order = {"high": 0, "medium": 1, "low": 2}
+    severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
     now = datetime.datetime.now(datetime.timezone.utc)
     sorted_by_importance = sorted(
         all_alerts,
@@ -265,12 +301,13 @@ async def alerts_stats_today(
     for sec_id in sorted(
         sections.keys(),
         key=lambda s: (
-            -sum(1 for a in sections[s] if a.get("severity") == "high"),
+            -sum(1 for a in sections[s] if a.get("severity") in ("critical", "high")),
             -len(sections[s]),
         ),
     ):
         meta = _SECTION_META.get(sec_id, {"label": sec_id, "icon": "📰"})
         sec_alerts = sections[sec_id]
+        critical_count = sum(1 for a in sec_alerts if a["severity"] == "critical")
         high_count = sum(1 for a in sec_alerts if a["severity"] == "high")
         med_count = sum(1 for a in sec_alerts if a["severity"] == "medium")
         section_summaries.append({
@@ -278,6 +315,7 @@ async def alerts_stats_today(
             "label": meta["label"],
             "icon": meta["icon"],
             "total": len([a for a in all_alerts if _alert_section(a) == sec_id]),
+            "critical": critical_count,
             "high": high_count,
             "medium": med_count,
             "alerts": sec_alerts,

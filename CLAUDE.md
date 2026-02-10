@@ -138,6 +138,7 @@ talamala/
 │   │   │   ├── load_rules.py                    ← YAML parser → Rule dataclasses (cached)
 │   │   │   ├── matcher.py                       ← Persian-aware keyword/signal matching
 │   │   │   ├── severity.py                      ← Deterministic severity from criteria
+│   │   │   ├── direction.py                     ← 3-stage direction detection (regex→lexicon→LLM)
 │   │   │   └── alert_builder.py                 ← Alert dict assembly + dedupe key
 │   │   ├── worker/
 │   │   │   ├── __init__.py
@@ -300,11 +301,11 @@ python -m pytest api/tests/ -v
 The dashboard's sentiment gauge shows a 0-100 numeric score per timeframe (1h, 4h, 24h), computed deterministically:
 
 **Layer 1 — Per-alert signal:** `RSS_i = Polarity × Confidence`
-- Polarity: +1 (bullish) / -1 (bearish) / 0 (neutral), detected from `expected_impact.direction`
-- Falls back to severity-based default: high=0.3, medium=0.15, low=0.05
+- Polarity: +1 (bullish) / -1 (bearish) / 0 (neutral), from per-alert direction detection
+- Neutral polarity = 0 (contributes nothing to directional signal)
 
 **Layer 2 — Importance weighting:** `WS_i = RSS_i × W_imp`
-- Weights: critical=3.0, high=2.0, medium=1.0, low=0.5
+- Weights: critical=4.0, high=2.0, medium=1.0, low=0.5
 
 **Layer 3 — Exponential time decay:** `W_time = e^(-λ × hours_ago)`
 - λ: 1h=2.0, 4h=0.5, 24h=0.1
@@ -312,10 +313,11 @@ The dashboard's sentiment gauge shows a 0-100 numeric score per timeframe (1h, 4
 **Aggregation:**
 - `raw = Σ(WS_i × W_time_i) / Σ(|W_imp_i × W_time_i|) × 100` → [-100, +100]
 - Volume dampening: `min(1.0, n / threshold)` where thresholds are 1h=10, 4h=20, 24h=30
+- **Directional ratio dampening**: If most alerts are neutral (no clear direction), the score is pulled toward 50. `directional_ratio = directional_alerts / total_alerts`; raw score is multiplied by this ratio before final mapping.
 - Final: `50 + dampened / 2` clamped to [0, 100]
 
 **Score → Category mapping:**
-- 80+ = very_bullish (بسیار صعودی), 62-79 = bullish (صعودی), 38-61 = neutral (خنثی), 20-37 = bearish (نزولی), <20 = very_bearish (بسیار نزولی)
+- 80+ = very_bullish (بسیار صعودی), 65-79 = bullish (صعودی), 55-64 = slightly_bullish (نسبتا صعودی), 45-54 = neutral (خنثی), 35-44 = slightly_bearish (نسبتا نزولی), 20-34 = bearish (نزولی), <20 = very_bearish (بسیار نزولی)
 
 The LLM is used ONLY for generating text (summary, key_drivers, outlook). The numeric score is always deterministic.
 - Scores persist to `sentiment_scores` table on each API call
@@ -415,13 +417,13 @@ Generated alerts with severity, impact, and Persian text.
 | `summary_fa` | TEXT | Persian summary (LLM or truncated content) |
 | `why_important_fa` | TEXT | Persian importance explanation |
 | `expected_impact` | JSONB | Impact on assets [{asset, direction, mechanism}] |
-| `severity` | VARCHAR(10) | `high`, `medium`, `low` (deterministic) |
+| `severity` | VARCHAR(10) | `critical`, `high`, `medium`, `low` (deterministic) |
 | `time_horizon` | VARCHAR(20) | `immediate`, `short`, `medium`, `long` |
 | `confidence` | FLOAT | 0.3–0.95 (from match score) |
 | `follow_up_questions` | JSONB | List of Persian follow-up questions |
 | `dedupe_key` | VARCHAR(255) | Unique constraint for dedup |
 | `raw_item_id` | UUID | FK → raw_items (SET NULL) |
-| `match_evidence` | JSONB | {rule_id: {keywords: [], signals: []}} |
+| `match_evidence` | JSONB | {rule_id: {keywords: [], signals: []}, direction, direction_confidence, direction_method, alert_score} |
 
 ### fetch_logs
 Per-source fetch history with timing and error tracking.
@@ -471,7 +473,7 @@ Historical sentiment scores for charting (created by sentiment API on each call)
 | `id` | UUID | PK |
 | `timeframe` | VARCHAR(10) | `1h`, `4h`, `24h` |
 | `score` | INTEGER | 0-100 numeric score |
-| `sentiment` | VARCHAR(20) | `very_bullish`, `bullish`, `neutral`, `bearish`, `very_bearish` |
+| `sentiment` | VARCHAR(20) | `very_bullish`, `bullish`, `slightly_bullish`, `neutral`, `slightly_bearish`, `bearish`, `very_bearish` |
 | `sentiment_label` | VARCHAR(50) | Persian label (e.g., صعودی) |
 | `alert_count` | INTEGER | Number of alerts in that window |
 | `created_at` | TIMESTAMPTZ | Auto-set to now() |
@@ -495,17 +497,39 @@ Indexed on `(timeframe, created_at)` for efficient history queries.
 
 ### Rule Engine Design (Critical)
 - **LLM is NEVER used for classification.** Severity, time horizon, and confidence are always deterministic.
-- The LLM (OpenRouter) ONLY generates Persian text: `summary_fa`, `why_important_fa`, `follow_up_questions`.
+- The LLM (OpenRouter) generates Persian text (`summary_fa`, `why_important_fa`, `follow_up_questions`) and serves as a last-resort fallback for direction detection (Stage 3).
 - Rules are defined in `gold_monitor_rules_fa.yaml` with 4 sections: `global_gold`, `iran_gold`, `coin`, `gold_funds`.
 - Matching uses Persian-normalized substring matching (`matcher.py:normalize_text`): NFC normalization, diacritic stripping, Arabic→Persian character mapping (yaa, kaf), ZWNJ→space, lowercase.
 - **Compound keywords**: Catch-all rules use multi-word keywords like "gold price", "قیمت طلا" instead of bare "gold", "طلا" to prevent false positives from non-market articles (sports medals, land supply, etc.).
 - Match score: 60% keyword ratio + 40% signal ratio (when rule has both; pure ratio when only one type).
-- Severity: checked in priority order `high_if → medium_if → low_if`, defaults to `medium`.
+- **Severity**: Event-type classification with 4 levels: `critical`, `high`, `medium`, `low`. Critical-level events detected via regex patterns (war/conflict, Fed rate decisions, sanctions, currency crises, etc.). Remaining levels use `importance_criteria` conditions checked in priority order `high_if → medium_if → low_if`, with score-based fallback (high: score >= 0.35 or >= 0.25 for immediate-horizon rules; low: score < 0.15; medium: everything else).
 - Confidence: linear map from match_score to [0.3, 0.95].
+
+### Per-Alert Direction Detection
+3-stage pipeline in `direction.py` to determine market direction for each alert:
+
+**Stage 1 — Regex patterns** (catches ~60%): Flexible word-order patterns with `.{0,N}` gaps match explicit directional phrases (e.g., "gold rises", "prices fall", "rate cut"). High confidence (0.7-0.9).
+
+**Stage 2 — Lexicon scoring** (catches ~20% more): Gold-domain word weights (bullish/bearish terms) are summed across title + content. Net score above threshold determines direction. Medium confidence (0.5-0.6).
+
+**Stage 3 — LLM fallback** (last resort): If Stages 1-2 return neutral/low-confidence, the alert is queued for LLM batch direction detection via OpenRouter. Returns direction with LLM-reported confidence.
+
+**Output per alert:** `direction` (bullish/bearish/neutral), `direction_confidence` (0.0-1.0), `direction_method` (regex/lexicon/llm).
+
+### Per-Alert Score
+Each alert receives a computed score (0-100) stored in `match_evidence` JSONB:
+
+**Formula:** `alert_score = 50 + sign × swing × severity_multiplier`
+- `sign`: +1 (bullish), -1 (bearish), 0 (neutral → score always 50)
+- `swing`: `15 + (confidence - 0.3) × (30 / 0.7)` — maps confidence [0.3, 1.0] to swing [15, 45]
+- `severity_multiplier`: critical=1.0, high=0.8, medium=0.6, low=0.35
+
+Result is clamped to [0, 100]. Bullish critical alerts with high confidence score near 95; bearish ones near 5.
 
 ### Deduplication
 - **Raw items**: SHA-256 of `title|url|content_text`. Redis key `raw_items:hash:<hash>` with 24h TTL. DB fallback.
 - **Alerts**: `dedupe_key` = SHA-256 of sorted rule IDs + normalized title (source intentionally excluded for cross-source dedup — same story from IRNA/Mehr/ISNA produces same key). Redis key `alert:dedup:<key>` with configurable window (default 6h from settings table).
+- **Semantic event fingerprinting**: Extracts entities (instruments, organizations, events, numbers) from title + content to build an event fingerprint. Same underlying event with different headlines produces the same fingerprint, preventing duplicate alerts across sources. Redis key `event:fp:<fingerprint>` with 4h TTL.
 
 ### Frontend Patterns
 - **RTL layout**: `<html lang="fa" dir="rtl">` in root layout.
@@ -537,6 +561,10 @@ Indexed on `(timeframe, created_at)` for efficient history queries.
 - Worker pipeline: fetch → dedup → match → alert (60s cycle)
 - Three fetcher types (RSS, HTML, JSON)
 - Deterministic rule engine with 32+ rules (compound keywords + signals to prevent false positives)
+- Event-type severity classification with 4 levels including "critical" (regex patterns for war, Fed decisions, sanctions, etc.)
+- 3-stage direction detection per alert (regex patterns → lexicon scoring → LLM fallback)
+- Per-alert direction and sentiment score (server-computed, stored in match_evidence)
+- Semantic event deduplication (entity fingerprinting prevents same event with different headlines)
 - Persian text normalization for matching
 - JWT authentication for admin endpoints
 - Web dashboard with:
@@ -555,18 +583,18 @@ Indexed on `(timeframe, created_at)` for efficient history queries.
 - Rule library browser
 - Cross-source deduplication (same news from IRNA/Mehr/ISNA produces one alert)
 - OpenRouter LLM integration for text generation (summary, key_drivers, outlook)
-- **Deterministic 3-layer weighted sentiment scoring** (polarity × confidence × importance × time decay × volume dampening)
+- **Deterministic 3-layer weighted sentiment scoring** (polarity × confidence × importance × time decay × volume dampening × directional ratio dampening)
 - Sentiment scoring system (0-100) with historical persistence
 - 16 RSS sources (9 international, 1 Persian, 6 disabled)
 - Worker LLM type safety (_ensure_str helper prevents list-to-str crashes)
-- Rule engine unit tests (matcher, severity, alert_builder) — 105 tests passing
+- Rule engine unit tests (matcher, severity, alert_builder, direction) — 136 tests passing
 
 ### Known Issues
 - CORS is fully permissive (`allow_origins=["*"]`) — needs restriction for production
 - Passwords are truncated to 72 bytes for bcrypt compatibility (`auth.py:_truncate_for_bcrypt`)
 - Web frontend's `fetchSourceNow` calls `/api/sources/{id}/fetch` but the API route is `/api/sources/{id}/fetch-now`
 - The `gold-monitor/` prototype uses mock data only; not connected to the backend
-- Most existing alerts have empty `expected_impact.direction` — polarity defaults to severity-based heuristic
+- Older alerts lack `direction`/`alert_score` in `match_evidence` — polarity defaults to neutral for sentiment calculation
 
 ## 11. Common Tasks
 
@@ -698,7 +726,7 @@ docker compose exec db psql -U goldmon -d goldmonitor -c \
 **No alerts appearing:**
 - Check worker logs: `docker compose logs -f worker`
 - Verify sources are enabled: Admin panel → Sources
-- Check MIN_MATCH_SCORE threshold (currently 0.18 in `worker/main.py`)
+- Check MIN_MATCH_SCORE threshold (currently 0.15 in `worker/main.py`)
 - Redis dedup might be blocking: bump dedup flush version in `api/main.py` and restart
 
 **Prices not updating:**
@@ -733,7 +761,7 @@ docker volume ls                 # List volumes
 - **Adding new columns** to existing tables should use `checkfirst=True` pattern (see `_create_sentiment_scores_table` in `main.py`)
 
 ### Match Score Tuning
-- `MIN_MATCH_SCORE = 0.18` in `worker/main.py` — controls minimum threshold for alerts
+- `MIN_MATCH_SCORE = 0.15` in `worker/main.py` — controls minimum threshold for alerts
 - Match score = 60% keyword ratio + 40% signal ratio (when both present)
 - If rule has only keywords (no signals): score = keyword_matches / total_keywords
 - If rule has only signals (no keywords): score = signal_matches / total_signals
@@ -745,9 +773,10 @@ docker volume ls                 # List volumes
 
 ### Sentiment Score Tuning
 - Formula parameters in `api/routers/sentiment.py`
-- **Default polarity** (`_DEFAULT_POLARITY`): high=0.3, medium=0.15, low=0.05
-- **Importance weights** (`_IMPORTANCE_WEIGHT`): critical=3.0, high=2.0, medium=1.0, low=0.5
+- **Neutral polarity = 0** — alerts without detected direction contribute nothing to directional signal
+- **Importance weights** (`_IMPORTANCE_WEIGHT`): critical=4.0, high=2.0, medium=1.0, low=0.5
 - **Decay λ** (`_DECAY_LAMBDA`): 1h=2.0, 4h=0.5, 24h=0.1
 - **Volume thresholds** (`_VOLUME_THRESHOLD`): 1h=10, 4h=20, 24h=30
-- **Score ranges**: 80+ very_bullish, 62-79 bullish, 38-61 neutral, 20-37 bearish, <20 very_bearish
-- With 16 medium alerts (no direction data): score ≈ 51-53 (neutral) — correctly reflects low-signal volume
+- **Directional ratio dampening**: If most alerts are neutral, score stays near 50 regardless of the few directional ones
+- **Score ranges**: 80+ very_bullish, 65-79 bullish, 55-64 slightly_bullish, 45-54 neutral, 35-44 slightly_bearish, 20-34 bearish, <20 very_bearish
+- With many neutral alerts (no direction data): score = 50.0 (neutral) — neutral alerts contribute zero directional signal

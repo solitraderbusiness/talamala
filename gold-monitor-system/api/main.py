@@ -1394,19 +1394,22 @@ async def _flush_dedup_keys() -> None:
     Uses a marker key ``dedup:flushed:v2`` to avoid re-flushing on
     subsequent restarts.
     """
-    marker = "dedup:flushed:v17"
+    marker = "dedup:flushed:v18"
     try:
         r = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
         if await r.exists(marker):
             await r.aclose()
             return
 
-        # Flush raw_items:hash:* and alert:dedup:* keys
+        # Flush raw_items:hash:*, alert:dedup:*, and event:fp:* keys
         count = 0
         async for key in r.scan_iter("raw_items:hash:*", count=500):
             await r.delete(key)
             count += 1
         async for key in r.scan_iter("alert:dedup:*", count=500):
+            await r.delete(key)
+            count += 1
+        async for key in r.scan_iter("event:fp:*", count=500):
             await r.delete(key)
             count += 1
 

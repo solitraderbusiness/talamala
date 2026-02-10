@@ -14,7 +14,12 @@ from datetime import datetime, timezone
 from typing import Any
 
 from api.rule_engine.matcher import MatchResult, normalize_text
+from api.rule_engine.direction import (
+    calculate_alert_score,
+    detect_direction,
+)
 from api.rule_engine.severity import (
+    SEVERITY_CRITICAL,
     SEVERITY_HIGH,
     SEVERITY_MEDIUM,
     calculate_confidence,
@@ -28,6 +33,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _SEVERITY_RANK: dict[str, int] = {
+    SEVERITY_CRITICAL: 4,
     SEVERITY_HIGH: 3,
     SEVERITY_MEDIUM: 2,
     "low": 1,
@@ -137,21 +143,33 @@ def build_alert(
     # --- severity per rule ------------------------------------------------ #
     severity_map: dict[str, str] = {}
     for mr in match_results:
-        sev = determine_severity(item_content, mr.rule, mr.match_score)
+        sev = determine_severity(
+            item_content, mr.rule, mr.match_score, title=item_title,
+        )
         severity_map[mr.rule.id] = sev
 
     highest_severity = _pick_highest_severity(list(severity_map.values()))
 
-    # Multi-rule boost: if 2+ rules matched, upgrade medium → high
-    if len(match_results) >= 2 and highest_severity == SEVERITY_MEDIUM:
-        highest_severity = SEVERITY_HIGH
-
     # --- time horizon (from the highest-severity rule) -------------------- #
     time_horizon = _pick_horizon(match_results, severity_map)
 
-    # --- confidence (average) --------------------------------------------- #
-    confidences = [calculate_confidence(mr) for mr in match_results]
-    avg_confidence = round(sum(confidences) / len(confidences), 4)
+    # --- direction detection (3-stage: regex → lexicon → fallback) -------- #
+    dir_result = detect_direction(item_title, item_content)
+    direction = dir_result["direction"]
+    direction_confidence = dir_result["confidence"]
+    direction_method = dir_result["method"]
+
+    # --- confidence (based on detection method + match quality) ------------ #
+    base_confidences = [calculate_confidence(mr) for mr in match_results]
+    avg_match_confidence = round(sum(base_confidences) / len(base_confidences), 4)
+
+    # Blend match confidence with direction confidence for final value
+    if direction in ("bullish", "bearish"):
+        avg_confidence = round(
+            0.5 * avg_match_confidence + 0.5 * direction_confidence, 4
+        )
+    else:
+        avg_confidence = avg_match_confidence
 
     # --- expected impact -------------------------------------------------- #
     expected_impact = _build_expected_impact(match_results)
@@ -162,6 +180,11 @@ def build_alert(
         llm.get("why_important_fa") or match_results[0].rule.why_important
     )
     follow_up_questions: list[str] = llm.get("follow_up_questions", [])
+
+    # --- per-alert sentiment score ---------------------------------------- #
+    alert_score = calculate_alert_score(
+        direction, direction_confidence, highest_severity,
+    )
 
     # --- dedupe key ------------------------------------------------------- #
     dedupe_key = generate_dedupe_key(matched_rule_ids, item_title, source_name)
@@ -181,6 +204,10 @@ def build_alert(
         "severity": highest_severity,
         "time_horizon": time_horizon,
         "confidence": avg_confidence,
+        "direction": direction,
+        "direction_confidence": direction_confidence,
+        "direction_method": direction_method,
+        "alert_score": alert_score,
         "follow_up_questions": follow_up_questions,
         "dedupe_key": dedupe_key,
         "match_evidence": match_evidence,
