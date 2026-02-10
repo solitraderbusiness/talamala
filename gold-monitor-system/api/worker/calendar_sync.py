@@ -6,7 +6,8 @@ Fetches this week's and next week's events, upserts into database.
 
 Data sources (in priority order):
 1. JBlanked Calendar API (MQL5 aggregation) — requires JBLANKED_API_KEY
-2. Finnhub Economic Calendar API — requires FINNHUB_API_KEY
+2. Finnhub Economic Calendar API — requires FINNHUB_API_KEY (paid plan)
+3. Forex Factory Calendar (free, no API key) — fallback
 """
 
 from __future__ import annotations
@@ -41,6 +42,7 @@ _JBLANKED_IMPACT_MAP = {
     "low": "low",
     "none": "low",
     "holiday": "low",
+    "non-economic": "low",
     # MQL5 uses numeric strength
     "3": "high",
     "2": "medium",
@@ -166,6 +168,80 @@ async def _fetch_finnhub_calendar(
     except Exception:
         logger.warning("Finnhub API request failed", exc_info=True)
         return []
+
+
+async def _fetch_forexfactory_calendar(
+    session: aiohttp.ClientSession,
+) -> list[dict[str, Any]]:
+    """Fetch events from Forex Factory free JSON endpoint (no API key needed).
+
+    Returns this week's economic events. Rate limit: 2 req / 5 min.
+    Fields: title, country (currency code), date (ISO 8601), impact, forecast, previous.
+    """
+    url = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
+    try:
+        headers = {
+            "User-Agent": "GoldMonitor/1.0",
+            "Accept": "application/json",
+        }
+        async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                if isinstance(data, list):
+                    logger.info("ForexFactory returned %d raw events.", len(data))
+                    return data
+                return []
+            else:
+                text = await resp.text()
+                logger.warning("ForexFactory returned %d: %s", resp.status, text[:300])
+                return []
+    except Exception:
+        logger.warning("ForexFactory request failed", exc_info=True)
+        return []
+
+
+def _parse_forexfactory_event(raw: dict[str, Any]) -> dict[str, Any] | None:
+    """Parse a Forex Factory calendar event into our model format.
+
+    FF fields: title, country (currency code like USD), date (ISO 8601),
+    impact (High/Medium/Low/Holiday), forecast, previous.
+    """
+    name = raw.get("title") or ""
+    if not name:
+        return None
+
+    dt_str = raw.get("date") or ""
+    dt = _parse_datetime(dt_str)
+    if not dt:
+        return None
+
+    # FF uses currency code in "country" field (e.g., "USD", "EUR")
+    currency = raw.get("country") or ""
+    country = _extract_country_from_currency(currency)
+    impact_raw = raw.get("impact") or "Low"
+
+    forecast = raw.get("forecast")
+    previous = raw.get("previous")
+
+    if forecast is not None:
+        forecast = str(forecast).strip() if str(forecast).strip() else None
+    if previous is not None:
+        previous = str(previous).strip() if str(previous).strip() else None
+
+    return {
+        "event_name": name.strip(),
+        "event_name_fa": translate_event_name(name.strip()),
+        "country": country.upper()[:10] if country else "",
+        "currency": currency.upper()[:10] if currency else "",
+        "category": "",
+        "datetime_utc": dt,
+        "impact": _normalize_impact(impact_raw),
+        "actual": None,  # FF doesn't provide actual values
+        "forecast": forecast,
+        "previous": previous,
+        "source": "forexfactory",
+        "affected_assets": get_affected_assets(name.strip(), currency),
+    }
 
 
 def _parse_jblanked_event(raw: dict[str, Any]) -> dict[str, Any] | None:
@@ -381,6 +457,19 @@ async def sync_calendar() -> dict[str, Any]:
             logger.info("Finnhub parsed events: %d (from %d raw)", len(all_events), len(finnhub_events))
             if all_events:
                 source_used = "finnhub"
+
+        # Fallback to Forex Factory (free, no API key needed)
+        if not all_events:
+            logger.info("Falling back to ForexFactory (free)...")
+            ff_events = await _fetch_forexfactory_calendar(http_session)
+            for raw in ff_events:
+                parsed = _parse_forexfactory_event(raw)
+                if parsed:
+                    all_events.append(parsed)
+
+            if all_events:
+                source_used = "forexfactory"
+                logger.info("ForexFactory parsed %d events.", len(all_events))
 
     if not all_events:
         logger.warning("No calendar events fetched from any source.")
