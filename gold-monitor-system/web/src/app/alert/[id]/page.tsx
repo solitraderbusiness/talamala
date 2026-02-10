@@ -52,39 +52,6 @@ function normalizeImpact(impact: unknown): ImpactItem[] {
 
 type Direction = "bullish" | "bearish" | "neutral";
 
-/** Determine per-alert market direction. */
-function getAlertDirection(alert: Alert): Direction {
-  const impacts = normalizeImpact(alert.expected_impact);
-  if (impacts.length > 0) {
-    const hasUp = impacts.some((i) => i.direction === "up");
-    const hasDown = impacts.some((i) => i.direction === "down");
-    if (hasUp && !hasDown) return "bullish";
-    if (hasDown && !hasUp) return "bearish";
-  }
-  const text = ((alert.title || "") + " " + (alert.summary_fa || "")).toLowerCase();
-  const bullishPatterns = [
-    "gold rises", "gold surges", "gold rallies", "gold jumps", "gold soars",
-    "gold climbs", "gold gains", "gold hits record", "gold all-time high",
-    "gold safe haven", "gold demand", "rate cut", "dovish",
-    "طلا صعود", "طلا افزایش یافت", "قیمت طلا بالا", "رشد قیمت طلا",
-    "رکورد قیمت طلا", "رکورد طلا", "جهش طلا", "جهش قیمت طلا",
-    "طلا رشد کرد", "بازگشت طلا به بالا", "رشد طلا", "کاهش نرخ بهره",
-  ];
-  const bearishPatterns = [
-    "gold falls", "gold drops", "gold slips", "gold declines", "gold plunges",
-    "gold sinks", "gold crashes", "gold slides", "gold retreats",
-    "rate hike", "hawkish", "stronger dollar",
-    "طلا نزول", "طلا کاهش یافت", "قیمت طلا پایین", "کاهش قیمت طلا",
-    "افت طلا", "سقوط طلا", "ریزش طلا", "افت قیمت طلا",
-    "افزایش نرخ بهره", "تقویت دلار",
-  ];
-  const hasBull = bullishPatterns.some((p) => text.includes(p));
-  const hasBear = bearishPatterns.some((p) => text.includes(p));
-  if (hasBull && !hasBear) return "bullish";
-  if (hasBear && !hasBull) return "bearish";
-  return "neutral";
-}
-
 const DIR_CONFIG: Record<Direction, { icon: string; label: string; color: string; bg: string }> = {
   bullish: { icon: "▲", label: "صعودی برای طلا", color: "text-emerald-600 dark:text-emerald-400", bg: "bg-emerald-50 border-emerald-200 dark:bg-emerald-950/30 dark:border-emerald-800" },
   bearish: { icon: "▼", label: "نزولی برای طلا", color: "text-red-600 dark:text-red-400", bg: "bg-red-50 border-red-200 dark:bg-red-950/30 dark:border-red-800" },
@@ -145,6 +112,15 @@ export default function AlertDetailPage() {
     long: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-400",
   };
 
+  // Use server-provided direction (from direction.py pipeline)
+  const direction: Direction = (alert.direction as Direction) || "neutral";
+  const dc = DIR_CONFIG[direction];
+
+  // Non-causal detection
+  const isPriceReport = alert.news_type === "price_report";
+  const isBackground = alert.news_type === "background_context";
+  const isNonCausal = isPriceReport || isBackground;
+
   return (
     <div className="mx-auto max-w-3xl space-y-6">
       {/* Breadcrumb */}
@@ -171,14 +147,22 @@ export default function AlertDetailPage() {
               </p>
             )}
             <div className="mt-2 flex flex-wrap items-center gap-2">
-              <SeverityBadge severity={alert.severity} />
-              <span
-                className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                  horizonColorMap[alert.time_horizon] || horizonColorMap.long
-                }`}
-              >
-                {timeHorizonLabel(alert.time_horizon)}
-              </span>
+              {isNonCausal ? (
+                <span className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+                  {isPriceReport ? "گزارش قیمت" : "تحلیل/زمینه"}
+                </span>
+              ) : (
+                <SeverityBadge severity={alert.severity} />
+              )}
+              {!isNonCausal && (
+                <span
+                  className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
+                    horizonColorMap[alert.time_horizon] || horizonColorMap.long
+                  }`}
+                >
+                  {timeHorizonLabel(alert.time_horizon)}
+                </span>
+              )}
             </div>
           </div>
           <div className="text-left text-sm text-gray-500 dark:text-gray-400">
@@ -199,18 +183,34 @@ export default function AlertDetailPage() {
       </div>
 
       {/* Why Important */}
-      <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-950/30">
-        <h2 className="mb-2 text-sm font-semibold text-amber-800 dark:text-amber-400">
-          چرا مهم است؟
+      <div className={`rounded-xl border p-4 ${
+        isNonCausal
+          ? "border-slate-300 bg-slate-50 dark:border-slate-700 dark:bg-slate-900/30"
+          : "border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30"
+      }`}>
+        <h2 className={`mb-2 text-sm font-semibold ${
+          isNonCausal
+            ? "text-slate-600 dark:text-slate-400"
+            : "text-amber-800 dark:text-amber-400"
+        }`}>
+          {isNonCausal ? "توضیح" : "چرا مهم است؟"}
         </h2>
-        <ul className="space-y-1.5 text-amber-900 dark:text-amber-200">
+        <ul className={`space-y-1.5 ${
+          isNonCausal
+            ? "text-slate-700 dark:text-slate-300"
+            : "text-amber-900 dark:text-amber-200"
+        }`}>
           {alert.why_important_fa
             .split(/\n/)
             .map((line) => line.replace(/^[-–•]\s*/, "").trim())
             .filter((line) => line.length > 0)
             .map((line, i) => (
               <li key={i} className="flex items-start gap-2 leading-7">
-                <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500 dark:bg-amber-400" />
+                <span className={`mt-2 h-1.5 w-1.5 shrink-0 rounded-full ${
+                  isNonCausal
+                    ? "bg-slate-400 dark:bg-slate-500"
+                    : "bg-amber-500 dark:bg-amber-400"
+                }`} />
                 <span>{line}</span>
               </li>
             ))}
@@ -277,28 +277,45 @@ export default function AlertDetailPage() {
         ) : null;
       })()}
 
-      {/* Market Direction */}
-      {(() => {
-        const direction = getAlertDirection(alert);
-        const dc = DIR_CONFIG[direction];
-        return (
-          <div className={`rounded-xl border p-4 ${dc.bg}`}>
-            <div className="flex items-center gap-3">
-              <span className={`text-2xl font-bold ${dc.color}`}>
-                {dc.icon}
-              </span>
-              <div>
-                <h2 className={`text-base font-semibold ${dc.color}`}>
-                  {dc.label}
-                </h2>
-                <p className="text-xs text-gray-500 dark:text-gray-400">
-                  بر اساس تحلیل قوانین و محتوای خبر
-                </p>
-              </div>
+      {/* Market Direction — only show for causal events */}
+      {!isNonCausal && (
+        <div className={`rounded-xl border p-4 ${dc.bg}`}>
+          <div className="flex items-center gap-3">
+            <span className={`text-2xl font-bold ${dc.color}`}>
+              {dc.icon}
+            </span>
+            <div>
+              <h2 className={`text-base font-semibold ${dc.color}`}>
+                {dc.label}
+              </h2>
+              <p className="text-xs text-gray-500 dark:text-gray-400">
+                بر اساس تحلیل قوانین و محتوای خبر
+              </p>
             </div>
           </div>
-        );
-      })()}
+        </div>
+      )}
+
+      {/* Non-causal info banner */}
+      {isNonCausal && (
+        <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900/30">
+          <div className="flex items-center gap-3">
+            <span className="text-2xl text-slate-400">
+              {isPriceReport ? "📊" : "📝"}
+            </span>
+            <div>
+              <h2 className="text-base font-semibold text-slate-600 dark:text-slate-400">
+                {isPriceReport ? "گزارش قیمت" : "اطلاعات زمینه‌ای"}
+              </h2>
+              <p className="text-xs text-slate-500 dark:text-slate-500">
+                {isPriceReport
+                  ? "صرفاً اطلاع‌رسانی قیمت — تاثیری بر روند آینده بازار ندارد"
+                  : "اطلاعات موجود و شناخته‌شده — قبلاً در قیمت لحاظ شده است"}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Follow-up Questions */}
       {alert.follow_up_questions && alert.follow_up_questions.length > 0 && (

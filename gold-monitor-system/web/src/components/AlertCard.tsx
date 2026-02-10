@@ -74,14 +74,17 @@ export default function AlertCard({ alert, compact = false }: AlertCardProps) {
   const dir = DIR_CONFIG[direction];
   const score = alert.alert_score ?? 50;
   const isPriceReport = alert.news_type === "price_report";
+  const isBackground = alert.news_type === "background_context";
+  const isNonCausal = isPriceReport || isBackground;
+  const nonCausalBadge = isPriceReport ? "گزارش قیمت" : "تحلیل/زمینه";
 
   if (compact) {
     return (
       <Link href={`/alert/${alert.id}`}>
-        <div className={`group flex cursor-pointer items-center gap-3 px-4 py-2.5 transition-colors hover:bg-gray-50 dark:hover:bg-gray-800/50 ${isPriceReport ? "opacity-60" : ""} ${SEVERITY_BORDER[alert.severity] || ""}`}>
+        <div className={`group flex cursor-pointer items-center gap-3 px-4 py-2.5 transition-colors hover:bg-gray-50 dark:hover:bg-gray-800/50 ${isNonCausal ? "opacity-60" : ""} ${SEVERITY_BORDER[alert.severity] || ""}`}>
           {/* Score circle */}
-          <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${scoreBg(score, isPriceReport)}`}>
-            <span className={`text-xs font-bold ${scoreColor(score, isPriceReport)}`}>{score}</span>
+          <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${scoreBg(score, isNonCausal)}`}>
+            <span className={`text-xs font-bold ${scoreColor(score, isNonCausal)}`}>{score}</span>
           </div>
           {/* Title + meta */}
           <div className="min-w-0 flex-1">
@@ -89,9 +92,9 @@ export default function AlertCard({ alert, compact = false }: AlertCardProps) {
               {displayTitle}
             </h3>
             <div className="mt-0.5 flex items-center gap-2 text-[10px] text-gray-400 dark:text-gray-500">
-              {isPriceReport && (
+              {isNonCausal && (
                 <span className="inline-flex items-center rounded-full bg-slate-100 px-1.5 py-0 text-[9px] font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400">
-                  گزارش قیمت
+                  {nonCausalBadge}
                 </span>
               )}
               <span>{alert.source_name}</span>
@@ -101,14 +104,14 @@ export default function AlertCard({ alert, compact = false }: AlertCardProps) {
           </div>
           {/* Direction + severity */}
           <div className="flex shrink-0 flex-col items-end gap-0.5">
-            {isPriceReport ? (
+            {isNonCausal ? (
               <span className="inline-flex items-center rounded-full bg-slate-100 px-1.5 py-0 text-[10px] font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400">
-                قیمت
+                {nonCausalBadge}
               </span>
             ) : (
               <SeverityBadge severity={alert.severity} className="!text-[10px] !px-1.5 !py-0" />
             )}
-            {!isPriceReport && (
+            {!isNonCausal && (
               <span className={`text-[10px] font-medium ${dir.color}`}>
                 {dir.icon} {dir.label}
               </span>
@@ -122,7 +125,7 @@ export default function AlertCard({ alert, compact = false }: AlertCardProps) {
   return (
     <Link href={`/alert/${alert.id}`}>
       <div
-        className={`card group cursor-pointer transition-all hover:shadow-md ${isPriceReport ? "opacity-60" : ""} ${SEVERITY_BORDER[alert.severity] || ""}`}
+        className={`card group cursor-pointer transition-all hover:shadow-md ${isNonCausal ? "opacity-60" : ""} ${SEVERITY_BORDER[alert.severity] || ""}`}
       >
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
@@ -130,9 +133,9 @@ export default function AlertCard({ alert, compact = false }: AlertCardProps) {
               <h3 className="text-base font-semibold text-gray-900 group-hover:text-gold-600 dark:text-gray-100 dark:group-hover:text-gold-400">
                 {displayTitle}
               </h3>
-              {isPriceReport && (
+              {isNonCausal && (
                 <span className="inline-flex shrink-0 items-center rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400">
-                  گزارش قیمت
+                  {nonCausalBadge}
                 </span>
               )}
             </div>
@@ -148,15 +151,15 @@ export default function AlertCard({ alert, compact = false }: AlertCardProps) {
             )}
           </div>
           {/* Score circle */}
-          <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full ${scoreBg(score, isPriceReport)}`}>
-            <span className={`text-sm font-bold ${scoreColor(score, isPriceReport)}`}>{score}</span>
+          <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full ${scoreBg(score, isNonCausal)}`}>
+            <span className={`text-sm font-bold ${scoreColor(score, isNonCausal)}`}>{score}</span>
           </div>
         </div>
         <div className="mt-2 flex items-center justify-between">
           <div className="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-500">
-            {isPriceReport ? (
+            {isNonCausal ? (
               <span className="inline-flex items-center rounded-full bg-slate-100 px-1.5 py-0 text-[10px] font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400">
-                قیمت
+                {nonCausalBadge}
               </span>
             ) : (
               <SeverityBadge severity={alert.severity} className="!text-[10px] !px-1.5 !py-0" />
@@ -175,7 +178,7 @@ export default function AlertCard({ alert, compact = false }: AlertCardProps) {
             <span>{timeAgo(alert.timestamp_utc)}</span>
           </div>
           {/* Direction label */}
-          {!isPriceReport && (
+          {!isNonCausal && (
             <span className={`text-xs font-medium ${dir.color}`}>
               {dir.icon} {dir.label}
             </span>

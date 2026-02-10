@@ -54,7 +54,13 @@ follow these rules strictly:
      This should capture the main point of the news in a concise Persian headline.
    - "summary_fa": A concise summary of the news in 2-3 Persian sentences.
    - "why_important_fa": Why this news matters for the gold and precious metals \
-     market, written as 2-3 Persian bullet points (use "- " prefix for each point).
+     market, written as 2-3 Persian bullet points (use "- " prefix for each point). \
+     IMPORTANT: Only list impacts that represent NEW information or CHANGES from \
+     the current status quo. Do NOT list existing, ongoing conditions (like \
+     "sanctions continue to exist" or "tensions remain" or "economic instability \
+     persists") as reasons — the market has already priced those in. If the news \
+     contains no genuinely new market-moving information, write: \
+     "این خبر حاوی اطلاعات جدید تاثیرگذار بر بازار نیست"
    - "follow_up_questions": A JSON array of 2-3 follow-up questions in Persian \
      that a gold market analyst should investigate next.
 

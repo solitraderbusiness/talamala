@@ -19,9 +19,10 @@ from api.rule_engine.direction import (
     detect_direction,
 )
 from api.rule_engine.news_type import (
+    BACKGROUND_CONTEXT_IMPACT,
+    NON_CAUSAL_SCORE,
+    NON_CAUSAL_SEVERITY,
     PRICE_REPORT_IMPACT,
-    PRICE_REPORT_SCORE,
-    PRICE_REPORT_SEVERITY,
     classify_news_type,
 )
 from api.rule_engine.severity import (
@@ -195,17 +196,28 @@ def build_alert(
         direction, direction_confidence, highest_severity,
     )
 
-    # --- PRICE_REPORT overrides ------------------------------------------- #
-    # Price reports are informational only — they do NOT drive the market.
+    # --- Non-causal overrides ------------------------------------------------ #
+    # Price reports and background context do NOT drive the market.
     # Force neutral direction, low severity, score=50, and replace impact.
     if news_type == "price_report":
         direction = "neutral"
         direction_confidence = 0.0
         direction_method = "price_report"
-        highest_severity = PRICE_REPORT_SEVERITY
-        alert_score = PRICE_REPORT_SCORE
+        highest_severity = NON_CAUSAL_SEVERITY
+        alert_score = NON_CAUSAL_SCORE
         expected_impact = PRICE_REPORT_IMPACT
         why_important_fa = "گزارش قیمت — صرفاً اطلاع‌رسانی قیمت فعلی بازار"
+    elif news_type == "background_context":
+        direction = "neutral"
+        direction_confidence = 0.0
+        direction_method = "background_context"
+        highest_severity = NON_CAUSAL_SEVERITY
+        alert_score = NON_CAUSAL_SCORE
+        expected_impact = BACKGROUND_CONTEXT_IMPACT
+        why_important_fa = (
+            "این خبر حاوی اطلاعات جدید تاثیرگذار بر بازار نیست — "
+            "شرایط موجود قبلاً در قیمت لحاظ شده است"
+        )
 
     # --- dedupe key ------------------------------------------------------- #
     dedupe_key = generate_dedupe_key(matched_rule_ids, item_title, source_name)

@@ -488,3 +488,82 @@ class TestNewsTypeClassification:
         assert alert["news_type"] == "causal_event"
         # Causal events should NOT be forced to score 50
         assert alert["severity"] != "low" or alert["direction"] != "neutral"
+
+    # --- Background context tests (Fix #9) ---
+
+    def test_anniversary_is_background(self):
+        from api.rule_engine.news_type import classify_news_type
+        result = classify_news_type(
+            "چهل و هفتمین سالگرد پیروزی انقلاب اسلامی و تأثیر بر بازار طلا",
+            "ایران سالگرد انقلاب را در شرایط تحریم و تنش پشت سر می‌گذارد",
+        )
+        assert result == "background_context"
+
+    def test_english_anniversary_is_background(self):
+        from api.rule_engine.news_type import classify_news_type
+        assert classify_news_type("47th anniversary of Islamic Revolution and its impact on gold") == "background_context"
+
+    def test_commemoration_is_background(self):
+        from api.rule_engine.news_type import classify_news_type
+        assert classify_news_type("یادبود شهدای جنگ تحمیلی و وضعیت اقتصادی") == "background_context"
+
+    def test_ceremony_is_background(self):
+        from api.rule_engine.news_type import classify_news_type
+        assert classify_news_type("مراسم بزرگداشت هفته دولت") == "background_context"
+
+    def test_historical_review_is_background(self):
+        from api.rule_engine.news_type import classify_news_type
+        assert classify_news_type("تاریخچه بازار طلا در ایران") == "background_context"
+
+    def test_look_at_review_is_background(self):
+        from api.rule_engine.news_type import classify_news_type
+        assert classify_news_type("نگاهی به روند تحولات بازار ارز") == "background_context"
+
+    def test_editorial_is_background(self):
+        from api.rule_engine.news_type import classify_news_type
+        assert classify_news_type("Editorial: Gold market outlook for 2026") == "background_context"
+
+    def test_anniversary_with_new_policy_is_NOT_background(self):
+        """Anniversary + new event = causal (new event overrides)."""
+        from api.rule_engine.news_type import classify_news_type
+        result = classify_news_type(
+            "سالگرد انقلاب: دولت سیاست ارزی جدید اعلام کرد",
+            "رئیس بانک مرکزی اعلام کرد نرخ بهره کاهش داد",
+        )
+        assert result != "background_context"
+
+    def test_anniversary_with_new_sanctions_is_NOT_background(self):
+        """Anniversary + new sanctions announced = not background."""
+        from api.rule_engine.news_type import classify_news_type
+        result = classify_news_type(
+            "سالگرد انقلاب: تحریم‌های جدید آمریکا اعمال شد",
+        )
+        assert result != "background_context"
+
+    def test_background_content_heavy_status_quo(self):
+        """Content with heavy status-quo language and no new event."""
+        from api.rule_engine.news_type import classify_news_type
+        result = classify_news_type(
+            "وضعیت بازار طلا",
+            "تحلیلگران معتقدند شرایط همچنان ادامه دارد و پیش‌بینی می‌شود تغییر چندانی رخ ندهد",
+        )
+        assert result == "background_context"
+
+    def test_background_override_in_builder(self):
+        """Background context should get score=50, severity=low, neutral."""
+        from api.rule_engine.alert_builder import build_alert
+
+        raw_item = {
+            "title": "چهل و هفتمین سالگرد پیروزی انقلاب اسلامی و تأثیر بر بازار طلا",
+            "content": "ایران سالگرد انقلاب را در شرایط تحریم و تنش پشت سر می‌گذارد",
+            "source_name": "irna",
+            "url": "http://example.com",
+        }
+        mr = _make_match_result(match_score=0.5)
+        alert = build_alert(raw_item, [mr])
+
+        assert alert["news_type"] == "background_context"
+        assert alert["alert_score"] == 50
+        assert alert["severity"] == "low"
+        assert alert["direction"] == "neutral"
+        assert alert["direction_method"] == "background_context"

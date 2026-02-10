@@ -155,10 +155,10 @@ def _compute_sentiment_score(
     directional_count = 0  # alerts with non-neutral direction
 
     for alert in alerts:
-        # Skip price reports — they are informational only and should
+        # Skip non-causal alerts — they are informational only and should
         # NOT influence the sentiment gauge (circular logic prevention).
         alert_news_type = alert.get("match_evidence", {}).get("news_type", "")
-        if alert_news_type == "price_report":
+        if alert_news_type in ("price_report", "background_context"):
             continue
 
         # Layer 1: RSS = Polarity × Direction_Confidence
