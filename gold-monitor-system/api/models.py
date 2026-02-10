@@ -337,6 +337,52 @@ class SentimentScore(Base):
         return f"<SentimentScore {self.timeframe} score={self.score} {self.sentiment}>"
 
 
+# ── Economic Events (Calendar) ─────────────────────────────────────────
+
+class EconomicEvent(Base):
+    """Cached economic calendar events from JBlanked / Finnhub APIs."""
+    __tablename__ = "economic_events"
+    __table_args__ = (
+        Index("ix_econ_events_datetime", "datetime_utc"),
+        Index("ix_econ_events_impact", "impact"),
+        Index("ix_econ_events_currency", "currency"),
+        UniqueConstraint("event_name", "datetime_utc", name="uq_econ_events_name_datetime"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=_new_uuid,
+    )
+    event_name: Mapped[str] = mapped_column(String(512), nullable=False)
+    event_name_fa: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    country: Mapped[str] = mapped_column(String(10), nullable=False, default="")
+    currency: Mapped[str] = mapped_column(String(10), nullable=False, default="")
+    category: Mapped[str] = mapped_column(String(50), nullable=False, default="")
+    datetime_utc: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+    )
+    impact: Mapped[str] = mapped_column(
+        String(10), nullable=False, default="low",
+    )
+    actual: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    forecast: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    previous: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    source: Mapped[str] = mapped_column(
+        String(50), nullable=False, default="mql5",
+    )
+    affected_assets: Mapped[Any] = mapped_column(
+        JSONB, default=list, server_default="[]",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default="now()",
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, server_default="now()",
+    )
+
+    def __repr__(self) -> str:
+        return f"<EconomicEvent {self.event_name!r} {self.datetime_utc}>"
+
+
 class RulesSnapshot(Base):
     __tablename__ = "rules_snapshot"
 

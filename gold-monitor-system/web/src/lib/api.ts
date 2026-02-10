@@ -329,6 +329,89 @@ export function getHealth(): Promise<{ status: string }> {
   return request<{ status: string }>("/api/health");
 }
 
+/* ---------- Calendar types ---------- */
+
+export interface GoldImpactNote {
+  above_forecast?: string;
+  below_forecast?: string;
+  hawkish?: string;
+  dovish?: string;
+}
+
+export interface CalendarEvent {
+  id: string;
+  event_name: string;
+  event_name_fa: string;
+  country: string;
+  currency: string;
+  category: string;
+  datetime_utc: string;
+  datetime_tehran: string;
+  impact: "high" | "medium" | "low";
+  actual: string | null;
+  forecast: string | null;
+  previous: string | null;
+  source: string;
+  affected_assets: string[];
+  is_upcoming: boolean;
+  time_until: string | null;
+  gold_impact_note?: GoldImpactNote;
+}
+
+export interface CalendarResponse {
+  events: CalendarEvent[];
+  counts: {
+    total: number;
+    high: number;
+    medium: number;
+    low: number;
+  };
+  from: string;
+  to: string;
+}
+
+export interface UpcomingEventsResponse {
+  events: CalendarEvent[];
+  countdown: {
+    event_name: string;
+    event_name_fa: string;
+    time_until: string;
+    datetime_utc: string;
+    datetime_tehran: string;
+    impact: string;
+  } | null;
+  last_synced: string;
+}
+
+/* ---------- Calendar API ---------- */
+
+export function getCalendarEvents(params?: {
+  from?: string;
+  to?: string;
+  asset?: string;
+  impact?: string;
+}): Promise<CalendarResponse> {
+  const searchParams = new URLSearchParams();
+  if (params) {
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== "") {
+        searchParams.set(key, String(value));
+      }
+    });
+  }
+  const qs = searchParams.toString();
+  return request<CalendarResponse>(`/api/calendar${qs ? `?${qs}` : ""}`);
+}
+
+export function getUpcomingEvents(
+  limit: number = 5,
+  impact: string = "high",
+): Promise<UpcomingEventsResponse> {
+  return request<UpcomingEventsResponse>(
+    `/api/calendar/upcoming?limit=${limit}&impact=${impact}`,
+  );
+}
+
 /* ---------- Admin API ---------- */
 
 export function adminLogin(

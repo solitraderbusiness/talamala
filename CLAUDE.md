@@ -132,6 +132,7 @@ talamala/
 │   │   │   ├── rules.py                         ← Rule library + single rule
 │   │   │   ├── prices.py                        ← Real-time prices via TGJU API
 │   │   │   ├── sentiment.py                     ← Multi-timeframe sentiment analysis + history
+│   │   │   ├── calendar.py                      ← Economic event calendar API
 │   │   │   └── health.py                        ← Health check (DB + Redis + rules)
 │   │   ├── rule_engine/
 │   │   │   ├── __init__.py                      ← Public API re-exports
@@ -140,9 +141,11 @@ talamala/
 │   │   │   ├── severity.py                      ← Deterministic severity from criteria
 │   │   │   ├── direction.py                     ← 3-stage direction detection (regex→lexicon→LLM)
 │   │   │   └── alert_builder.py                 ← Alert dict assembly + dedupe key
+│   │   ├── calendar_config.py                    ← Event translations, asset mappings, gold impact notes
 │   │   ├── worker/
 │   │   │   ├── __init__.py
 │   │   │   ├── main.py                          ← Worker loop (60s cycle) + pipeline
+│   │   │   ├── calendar_sync.py                 ← Calendar sync (JBlanked + Finnhub, 6h interval)
 │   │   │   ├── dedup.py                         ← Redis + DB deduplication checker
 │   │   │   └── fetchers/
 │   │   │       ├── __init__.py                  ← Fetcher registry (get_fetcher)
@@ -175,6 +178,7 @@ talamala/
 │           │   ├── page.tsx                     ← Dashboard (stats, risk gauge, alert feed)
 │           │   ├── not-found.tsx                ← 404 page
 │           │   ├── alert/[id]/page.tsx          ← Alert detail view
+│           │   ├── calendar/page.tsx            ← Economic event calendar (list/week views)
 │           │   ├── library/page.tsx             ← Rule library browser
 │           │   └── admin/
 │           │       ├── layout.tsx               ← Admin auth guard + tab navigation
@@ -279,6 +283,10 @@ python -m pytest api/tests/ -v
 | `GET` | `/api/rules/library` | All rules grouped by section |
 | `GET` | `/api/rules/{rule_id}` | Single rule with full metadata |
 | `GET` | `/api/health` | Health check: DB, Redis, rules count, last worker run |
+| `GET` | `/api/calendar` | Economic events calendar (filterable: from, to, asset, impact) |
+| `GET` | `/api/calendar/upcoming` | Next upcoming high-impact events (params: limit, impact) |
+| `GET` | `/api/calendar/sync-status` | Calendar sync status (last synced, total events) |
+| `POST` | `/api/calendar/sync` | Trigger manual calendar sync |
 
 ### Admin Endpoints (JWT required)
 
@@ -479,6 +487,29 @@ Historical sentiment scores for charting (created by sentiment API on each call)
 | `created_at` | TIMESTAMPTZ | Auto-set to now() |
 
 Indexed on `(timeframe, created_at)` for efficient history queries.
+
+### economic_events
+Cached economic calendar events from external APIs (JBlanked / Finnhub).
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | UUID | PK |
+| `event_name` | VARCHAR(512) | English event name |
+| `event_name_fa` | VARCHAR(512) | Persian translation |
+| `country` | VARCHAR(10) | Country code (US, EU, JP, etc.) |
+| `currency` | VARCHAR(10) | Currency code (USD, EUR, JPY, etc.) |
+| `category` | VARCHAR(50) | Event category |
+| `datetime_utc` | TIMESTAMPTZ | Event date/time in UTC |
+| `impact` | VARCHAR(10) | `high`, `medium`, `low` |
+| `actual` | VARCHAR(100) | Actual value (nullable, filled after release) |
+| `forecast` | VARCHAR(100) | Market consensus forecast (nullable) |
+| `previous` | VARCHAR(100) | Previous period value (nullable) |
+| `source` | VARCHAR(50) | `mql5`, `finnhub` |
+| `affected_assets` | JSONB | Array of affected asset IDs |
+| `created_at` | TIMESTAMPTZ | |
+| `updated_at` | TIMESTAMPTZ | |
+
+Unique constraint on `(event_name, datetime_utc)` for upsert dedup.
+Indexed on `datetime_utc`, `impact`, `currency`.
 
 ### Relationships
 - `sources` → `raw_items` (one-to-many, CASCADE delete)

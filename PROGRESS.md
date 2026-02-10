@@ -16,7 +16,7 @@ These are features that already exist in the design/prototype but are broken or 
 | 3 | **Glossary Tooltips** | Restore the 18-term glossary (FOMC, CPI, QE, NAV, ETF, RSI, etc.) with hover tooltips so users understand financial terms. | ⬜ Not Started | Was in prototype as `Tooltip.tsx` + `GlossaryText`. 18 terms defined in `constants.ts`. |
 | 4 | **Cause-Effect Maps** | Restore visual diagrams: محرک→مکانیزم→اثر (Driver→Mechanism→Effect). Shows users WHY an event matters for gold. | ⬜ Not Started | Was in prototype as `CauseEffect.tsx`. 3 hardcoded examples existed. |
 | 5 | **Mode Switch (کوتاه/حرفه‌ای)** | Toggle between beginner and professional view. Beginners get simpler cards, professionals see rule IDs, confidence, match evidence. | ⬜ Not Started | Was in prototype as `ModeSwitch.tsx` + `AppContext.tsx`. |
-| 6 | **Event Calendar Page** | Show upcoming scheduled macro events (FOMC, CPI, NFP, ECB, etc.). Data already defined in YAML `scheduled_events`. | ⬜ Not Started | YAML has full list: CPI, Core CPI, PCE, Core PCE, PPI, NFP, GDP, PMI, ISM, Retail Sales + 4 central bank meetings. |
+| 6 | **Event Calendar Page** | Show upcoming scheduled macro events (FOMC, CPI, NFP, ECB, etc.). Data from JBlanked/Finnhub APIs. | ✅ Done | Full economic calendar with event-asset mapping, gold impact notes, Persian translations (~120 events), countdown timer, asset/impact filters, list/week views, dashboard widget. APIs: JBlanked (primary) + Finnhub (fallback). Auto-sync every 6h. |
 
 ---
 
@@ -77,4 +77,5 @@ Nice-to-have features for future development.
 
 | Date | What Changed |
 |------|-------------|
+| 2026-02-10 | **Economic Event Calendar**: Full implementation — new model (`EconomicEvent`), calendar sync worker (JBlanked + Finnhub APIs, 6h interval), `/api/calendar` endpoint with asset/impact filtering, `/calendar` frontend page with list/week views, countdown timer, event-asset mapping with gold impact notes, ~120 Persian translations, dashboard upcoming events widget, navigation updated. |
 | 2026-02-09 | Created this progress tracker. Tagged `safe-checkpoint-2026-02-09`. |
