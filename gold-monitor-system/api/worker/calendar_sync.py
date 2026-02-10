@@ -18,7 +18,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import aiohttp
-from sqlalchemy import select, and_
+from bs4 import BeautifulSoup
+from sqlalchemy import select, and_, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from api.calendar_config import (
@@ -220,9 +221,12 @@ def _parse_forexfactory_event(raw: dict[str, Any]) -> dict[str, Any] | None:
     country = _extract_country_from_currency(currency)
     impact_raw = raw.get("impact") or "Low"
 
+    actual = raw.get("actual")
     forecast = raw.get("forecast")
     previous = raw.get("previous")
 
+    if actual is not None:
+        actual = str(actual).strip() if str(actual).strip() else None
     if forecast is not None:
         forecast = str(forecast).strip() if str(forecast).strip() else None
     if previous is not None:
@@ -236,7 +240,7 @@ def _parse_forexfactory_event(raw: dict[str, Any]) -> dict[str, Any] | None:
         "category": "",
         "datetime_utc": dt,
         "impact": _normalize_impact(impact_raw),
-        "actual": None,  # FF doesn't provide actual values
+        "actual": actual,
         "forecast": forecast,
         "previous": previous,
         "source": "forexfactory",
@@ -387,6 +391,132 @@ async def _upsert_events(events: list[dict[str, Any]]) -> int:
     return count
 
 
+async def _fetch_investingcom_actuals(
+    session: aiohttp.ClientSession,
+    date_str: str,
+) -> dict[str, str]:
+    """Fetch actual values from Investing.com calendar for a specific date.
+
+    Returns a dict mapping lowercase event_name -> actual_value.
+    Uses the sslecal2 embed endpoint which returns server-rendered HTML.
+    """
+    url = "https://sslecal2.investing.com/"
+    params = {
+        "columns": "exc_flags,exc_currency,exc_importance,exc_actual,exc_forecast,exc_previous",
+        "importance": "1,2,3",
+        "timeZone": "0",
+        "timeFilter": "timeOnly",
+        "startDate": date_str,
+        "endDate": date_str,
+        "limit_from": "0",
+    }
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "X-Requested-With": "XMLHttpRequest",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    }
+    try:
+        async with session.get(
+            url, params=params, headers=headers,
+            timeout=aiohttp.ClientTimeout(total=30),
+        ) as resp:
+            if resp.status != 200:
+                logger.info("Investing.com returned %d, skipping actuals enrichment.", resp.status)
+                return {}
+
+            html = await resp.text()
+            soup = BeautifulSoup(html, "html.parser")
+
+            actuals: dict[str, str] = {}
+            for row in soup.select("tr.js-event-item"):
+                # Event name
+                name_el = row.select_one("td.event a, td.left.event a")
+                if not name_el:
+                    continue
+                event_name = name_el.get_text(strip=True)
+                if not event_name:
+                    continue
+
+                # Actual value — typically in td with class 'bold' or 'act'
+                actual_el = row.select_one("td.bold, td.act")
+                if not actual_el:
+                    continue
+                actual_text = actual_el.get_text(strip=True)
+                if not actual_text or actual_text == "\xa0":
+                    continue
+
+                actuals[event_name.lower()] = actual_text
+
+            logger.info("Investing.com enrichment: found %d actuals for %s.", len(actuals), date_str)
+            return actuals
+    except Exception:
+        logger.info("Investing.com actuals fetch failed (non-critical), skipping.", exc_info=False)
+        return {}
+
+
+async def _enrich_past_events_actuals(http_session: aiohttp.ClientSession) -> int:
+    """Enrich past events that have no actual value using Investing.com data.
+
+    Only processes events from today and yesterday that have actual=NULL.
+    Returns the number of events updated.
+    """
+    now = datetime.now(timezone.utc)
+    today = now.strftime("%Y-%m-%d")
+    yesterday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+
+    total_updated = 0
+    for date_str in [today, yesterday]:
+        actuals_map = await _fetch_investingcom_actuals(http_session, date_str)
+        if not actuals_map:
+            continue
+
+        # Update events in DB that match and have no actual value
+        async with AsyncSessionLocal() as db_session:
+            # Find past events without actual values for this date
+            date_start = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            date_end = date_start + timedelta(days=1)
+            stmt = select(EconomicEvent).where(
+                and_(
+                    EconomicEvent.datetime_utc >= date_start,
+                    EconomicEvent.datetime_utc < date_end,
+                    EconomicEvent.datetime_utc < now,
+                    EconomicEvent.actual.is_(None),
+                )
+            )
+            result = await db_session.execute(stmt)
+            events = result.scalars().all()
+
+            for event in events:
+                # Try exact match first, then fuzzy
+                key = event.event_name.lower()
+                actual = actuals_map.get(key)
+                if not actual:
+                    # Try partial match — FF uses "m/m" while IC might use "(MoM)"
+                    for ic_name, ic_actual in actuals_map.items():
+                        # Match if core event name is contained
+                        core = key.split("(")[0].split("m/m")[0].split("q/q")[0].split("y/y")[0].strip()
+                        ic_core = ic_name.split("(")[0].strip()
+                        if core and ic_core and (core in ic_name or ic_core in key):
+                            actual = ic_actual
+                            break
+
+                if actual:
+                    event.actual = actual
+                    total_updated += 1
+
+            if total_updated:
+                await db_session.commit()
+
+        await asyncio.sleep(_RATE_LIMIT_DELAY)  # Rate limit between date fetches
+
+    if total_updated:
+        logger.info("Enriched %d events with actual values from Investing.com.", total_updated)
+    return total_updated
+
+
 async def sync_calendar() -> dict[str, Any]:
     """Main sync function — fetch events from APIs and upsert into DB.
 
@@ -480,10 +610,19 @@ async def sync_calendar() -> dict[str, Any]:
     logger.info("Calendar sync complete: %d fetched, %d upserted from %s.",
                 len(all_events), upserted, source_used)
 
+    # Enrich past events with actual values from Investing.com
+    enriched = 0
+    try:
+        async with aiohttp.ClientSession() as enrich_session:
+            enriched = await _enrich_past_events_actuals(enrich_session)
+    except Exception:
+        logger.info("Actuals enrichment failed (non-critical).", exc_info=False)
+
     return {
         "source": source_used,
         "fetched": len(all_events),
         "upserted": upserted,
+        "enriched_actuals": enriched,
     }
 
 
