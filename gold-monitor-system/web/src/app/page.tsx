@@ -430,7 +430,7 @@ export default function DashboardPage() {
                   key={event.id}
                   className="flex items-center gap-3 rounded-lg px-2 py-1.5 hover:bg-gray-50 dark:hover:bg-gray-800/50"
                 >
-                  <div className={cn("h-2.5 w-2.5 shrink-0 rounded-full", impactColor)} />
+                  <div className={`h-2.5 w-2.5 shrink-0 rounded-full ${impactColor}`} />
                   <span className="text-xs text-gold-600 dark:text-gold-400 w-20 shrink-0">
                     {event.time_until}
                   </span>
