@@ -166,14 +166,19 @@ export default function DashboardPage() {
     }
   }, [fetchAlerts, fetchSentiment]);
 
-  // Initial load (with spinner) — sentiment loads separately to avoid blocking
+  // Keep a ref to the latest refreshAll so the init effect can call it
+  // without re-triggering on every filter change.
+  const refreshAllRef = useRef(refreshAll);
+  refreshAllRef.current = refreshAll;
+
+  // Initial load (with spinner) — runs only ONCE on mount
   useEffect(() => {
     async function init() {
       setLoading(true);
       setError(null);
       try {
         const [, freshnessData] = await Promise.allSettled([
-          refreshAll(),
+          refreshAllRef.current(),
           getDataFreshness(),
         ]);
         if (freshnessData.status === "fulfilled") {
@@ -186,7 +191,7 @@ export default function DashboardPage() {
       }
     }
     init();
-  }, [refreshAll]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Sentiment loads independently (non-blocking) since it may be slow (LLM call)
   useEffect(() => {
