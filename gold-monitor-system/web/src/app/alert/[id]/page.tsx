@@ -4,7 +4,6 @@ import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { getAlertById, type Alert, type ImpactItem } from "@/lib/api";
-import SeverityBadge from "@/components/SeverityBadge";
 import {
   formatDate,
   timeHorizonLabel,
@@ -171,7 +170,6 @@ export default function AlertDetailPage() {
               </p>
             )}
             <div className="mt-2 flex flex-wrap items-center gap-2">
-              <SeverityBadge severity={alert.severity} />
               <span
                 className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
                   horizonColorMap[alert.time_horizon] || horizonColorMap.long

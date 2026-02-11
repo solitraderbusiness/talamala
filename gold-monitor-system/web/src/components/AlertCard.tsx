@@ -2,8 +2,7 @@
 
 import Link from "next/link";
 import type { Alert } from "@/lib/api";
-import { timeAgo, timeHorizonLabel, sectionLabel } from "@/lib/utils";
-import SeverityBadge from "./SeverityBadge";
+import { timeAgo, sectionLabel } from "@/lib/utils";
 
 /** Check if a string is mostly Latin/English characters. */
 function isLikelyEnglish(text: string): boolean {
@@ -32,13 +31,6 @@ const DIR_CONFIG: Record<Direction, { icon: string; label: string; color: string
   bullish: { icon: "▲", label: "صعودی", color: "text-emerald-500" },
   bearish: { icon: "▼", label: "نزولی", color: "text-red-500" },
   neutral: { icon: "◆", label: "خنثی", color: "text-gray-400 dark:text-gray-500" },
-};
-
-const SEVERITY_BORDER: Record<string, string> = {
-  critical: "border-r-4 border-r-purple-600",
-  high: "border-r-4 border-r-red-500",
-  medium: "border-r-4 border-r-amber-500/40",
-  low: "",
 };
 
 function scoreColor(score: number): string {
@@ -75,7 +67,7 @@ export default function AlertCard({ alert, compact = false }: AlertCardProps) {
   if (compact) {
     return (
       <Link href={`/alert/${alert.id}`}>
-        <div className={`group flex cursor-pointer items-center gap-3 px-4 py-2.5 transition-colors hover:bg-gray-50 dark:hover:bg-gray-800/50 ${SEVERITY_BORDER[alert.severity] || ""}`}>
+        <div className="group flex cursor-pointer items-center gap-3 px-4 py-2.5 transition-colors hover:bg-gray-50 dark:hover:bg-gray-800/50">
           {/* Score circle */}
           <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${scoreBg(score)}`}>
             <span className={`text-xs font-bold ${scoreColor(score)}`}>{score}</span>
@@ -91,13 +83,10 @@ export default function AlertCard({ alert, compact = false }: AlertCardProps) {
               <span>{timeAgo(alert.timestamp_utc)}</span>
             </div>
           </div>
-          {/* Direction + severity */}
-          <div className="flex shrink-0 flex-col items-end gap-0.5">
-            <SeverityBadge severity={alert.severity} className="!text-[10px] !px-1.5 !py-0" />
-            <span className={`text-[10px] font-medium ${dir.color}`}>
-              {dir.icon} {dir.label}
-            </span>
-          </div>
+          {/* Direction */}
+          <span className={`shrink-0 text-[10px] font-medium ${dir.color}`}>
+            {dir.icon} {dir.label}
+          </span>
         </div>
       </Link>
     );
@@ -106,7 +95,7 @@ export default function AlertCard({ alert, compact = false }: AlertCardProps) {
   return (
     <Link href={`/alert/${alert.id}`}>
       <div
-        className={`card group cursor-pointer transition-all hover:shadow-md ${SEVERITY_BORDER[alert.severity] || ""}`}
+        className="card group cursor-pointer transition-all hover:shadow-md"
       >
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
@@ -131,16 +120,14 @@ export default function AlertCard({ alert, compact = false }: AlertCardProps) {
         </div>
         <div className="mt-2 flex items-center justify-between">
           <div className="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-500">
-            <SeverityBadge severity={alert.severity} className="!text-[10px] !px-1.5 !py-0" />
             {alert.section && (
               <>
-                <span className="text-gray-300 dark:text-gray-700">|</span>
                 <span className="text-[10px]">
                   {sectionLabel(alert.section)}
                 </span>
+                <span className="text-gray-300 dark:text-gray-700">|</span>
               </>
             )}
-            <span className="text-gray-300 dark:text-gray-700">|</span>
             <span>{alert.source_name}</span>
             <span className="text-gray-300 dark:text-gray-700">|</span>
             <span>{timeAgo(alert.timestamp_utc)}</span>
