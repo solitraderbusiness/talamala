@@ -207,11 +207,11 @@ export default function ChatAnalyticsPage() {
                     <p className="whitespace-pre-wrap text-sm text-gray-800 dark:text-gray-200">
                       {msg.content}
                     </p>
-                    {msg.tool_calls && (
+                    {msg.tool_calls ? (
                       <div className="mt-2 rounded bg-gray-100 p-2 text-xs text-gray-500 dark:bg-gray-700">
-                        Tools used: {JSON.stringify(msg.tool_calls)}
+                        Tools used: {JSON.stringify(msg.tool_calls, null, 2)}
                       </div>
-                    )}
+                    ) : null}
                   </div>
                 ))}
               </div>
