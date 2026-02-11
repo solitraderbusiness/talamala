@@ -306,6 +306,42 @@ async def chat(
     )
 
 
+@router.get("/history")
+async def chat_history(session_id: str | None = None):
+    """Return messages for an existing chat session (no auth — session_id is the secret)."""
+    if not session_id:
+        return JSONResponse(content={"messages": []})
+
+    try:
+        sid = uuid.UUID(session_id)
+    except ValueError:
+        return JSONResponse(content={"messages": []})
+
+    async with AsyncSessionLocal() as db:
+        from api.models import ChatMessage as ChatMessageModel
+        from sqlalchemy import select
+
+        result = await db.execute(
+            select(ChatMessageModel)
+            .where(ChatMessageModel.session_id == sid)
+            .order_by(ChatMessageModel.created_at.asc())
+            .limit(50)
+        )
+        msgs = result.scalars().all()
+
+    return JSONResponse(content={
+        "messages": [
+            {
+                "id": str(m.id),
+                "role": m.role,
+                "content": m.content,
+            }
+            for m in msgs
+            if m.role in ("user", "assistant")
+        ]
+    })
+
+
 @router.get("/status")
 async def chat_status():
     """Check if chat is enabled and return welcome message."""

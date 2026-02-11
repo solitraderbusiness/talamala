@@ -26,11 +26,29 @@ export default function ChatWidget() {
 
   const abortRef = useRef<AbortController | null>(null);
 
-  // Load session from localStorage on mount
+  // Load session + history from localStorage/DB on mount
   useEffect(() => {
     const savedSessionId = localStorage.getItem(SESSION_STORAGE_KEY);
     if (savedSessionId) {
       setSessionId(savedSessionId);
+
+      // Load previous messages from the database
+      fetch(`/api/chat/history?session_id=${encodeURIComponent(savedSessionId)}`)
+        .then((res) => res.ok ? res.json() : null)
+        .then((data) => {
+          if (data?.messages?.length) {
+            setMessages(
+              data.messages.map((m: { id: string; role: string; content: string }) => ({
+                id: m.id,
+                role: m.role as "user" | "assistant",
+                content: m.content,
+              }))
+            );
+          }
+        })
+        .catch(() => {
+          // History load failed — not critical, start fresh
+        });
     }
 
     // Check chat status
