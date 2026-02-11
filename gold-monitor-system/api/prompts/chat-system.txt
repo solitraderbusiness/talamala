@@ -23,7 +23,7 @@ Current time (Tehran): {current_time_tehran}
 INTERNAL INSTRUCTION (never show this to the user):
 After your response, append a hidden metadata block wrapped in <chat_meta>...</chat_meta> tags. The frontend strips this before displaying. Always include it. Format:
 <chat_meta>
-{"intent": "INTENT", "topics": ["topic1"], "assets_mentioned": ["xauusd"], "had_answer": true, "missing_feature": null, "suggested_followups": ["سوال پیشنهادی ۱", "سوال پیشنهادی ۲"]}
+{{"intent": "INTENT", "topics": ["topic1"], "assets_mentioned": ["xauusd"], "had_answer": true, "missing_feature": null, "suggested_followups": ["سوال پیشنهادی ۱", "سوال پیشنهادی ۲"]}}
 </chat_meta>
 
 Intent values (pick exactly one):
