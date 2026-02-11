@@ -601,6 +601,8 @@ class ChatSession(Base):
     ip_address: Mapped[str] = mapped_column(String(45), nullable=False, default="")
     messages_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     first_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    primary_intent: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    had_answer_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, server_default="now()",
     )
@@ -611,6 +613,10 @@ class ChatSession(Base):
     # Relationships
     messages: Mapped[list[ChatMessage]] = relationship(
         "ChatMessage", back_populates="session", lazy="noload",
+        cascade="all, delete-orphan",
+    )
+    analytics: Mapped[list[ChatAnalytics]] = relationship(
+        "ChatAnalytics", back_populates="session", lazy="noload",
         cascade="all, delete-orphan",
     )
 
@@ -649,6 +655,47 @@ class ChatMessage(Base):
 
     def __repr__(self) -> str:
         return f"<ChatMessage {self.role} session={self.session_id}>"
+
+
+class ChatAnalytics(Base):
+    """Analytics data extracted from each chat interaction."""
+    __tablename__ = "chat_analytics"
+    __table_args__ = (
+        Index("idx_chat_analytics_intent", "intent"),
+        Index("idx_chat_analytics_created", "created_at"),
+        Index("idx_chat_analytics_had_answer", "had_answer"),
+        Index("idx_chat_analytics_intent_date", "intent", "created_at"),
+        Index("idx_chat_analytics_session", "session_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=_new_uuid,
+    )
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("chat_sessions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    message_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("chat_messages.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    intent: Mapped[str] = mapped_column(String(50), nullable=False)
+    topics: Mapped[Any | None] = mapped_column(JSONB, default=list)
+    assets_mentioned: Mapped[Any | None] = mapped_column(JSONB, default=list)
+    had_answer: Mapped[bool] = mapped_column(Boolean, default=True)
+    missing_feature: Mapped[str | None] = mapped_column(Text, nullable=True)
+    suggested_followups: Mapped[Any | None] = mapped_column(JSONB, default=list)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default="now()",
+    )
+
+    # Relationships
+    session: Mapped[ChatSession] = relationship("ChatSession", back_populates="analytics")
+
+    def __repr__(self) -> str:
+        return f"<ChatAnalytics {self.intent} session={self.session_id}>"
 
 
 class ChatSetting(Base):

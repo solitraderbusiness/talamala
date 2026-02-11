@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils";
 const adminNavItems = [
   { href: "/admin/monitoring", label: "پایش عملیات" },
   { href: "/admin/sources", label: "منابع" },
-  { href: "/admin/chat", label: "چت هوشمند" },
+  { href: "/admin/chat", label: "بینش‌های چت" },
   { href: "/admin/settings", label: "تنظیمات" },
 ];
 

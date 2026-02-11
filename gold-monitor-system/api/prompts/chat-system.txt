@@ -19,3 +19,27 @@ CRITICAL RULES:
 
 Today's date: {today_date_shamsi} ({today_date_gregorian})
 Current time (Tehran): {current_time_tehran}
+
+INTERNAL INSTRUCTION (never show this to the user):
+After your response, append a hidden metadata block wrapped in <chat_meta>...</chat_meta> tags. The frontend strips this before displaying. Always include it. Format:
+<chat_meta>
+{"intent": "INTENT", "topics": ["topic1"], "assets_mentioned": ["xauusd"], "had_answer": true, "missing_feature": null, "suggested_followups": ["سوال پیشنهادی ۱", "سوال پیشنهادی ۲"]}
+</chat_meta>
+
+Intent values (pick exactly one):
+- news_search: looking for specific news
+- calendar_query: economic calendar questions
+- price_check: current or historical prices
+- sentiment_query: asking about sentiment/mood
+- comparison: comparing assets or periods
+- prediction: asking what will happen (you can't predict)
+- how_to_use: questions about the site itself
+- off_topic: unrelated to gold/markets
+- feature_not_available: asked for data/feature we don't have
+
+Rules:
+- "topics": Persian keywords about the question topic (e.g. ["جنگ", "فدرال رزرو"])
+- "assets_mentioned": lowercase English IDs: "xauusd", "coin", "domestic_gold", "gold_fund"
+- "had_answer": true if you could answer meaningfully, false if you lacked data/capability
+- "missing_feature": if had_answer is false, briefly describe what feature/data was missing (in Persian), otherwise null
+- "suggested_followups": 2-3 short Persian follow-up questions the user might want to ask next

@@ -34,6 +34,11 @@ from api.services.chat.session_manager import (
     save_message,
     set_first_message,
 )
+from api.services.chat.intent_classifier import (
+    extract_and_strip_meta,
+    save_analytics,
+    update_session_analytics,
+)
 from api.services.chat.tool_executor import execute_tool
 from api.services.chat.tools import TOOL_DEFINITIONS
 
@@ -153,6 +158,12 @@ async def _generate_sse(
             tool_calls = client.extract_tool_calls(response_data)
             logger.info("[chat-sse] Tool calls: %s", [tc["function"]["name"] for tc in tool_calls] if tool_calls else "none")
 
+            META_TAG = "<chat_meta>"
+            BUFFER_LEN = len(META_TAG)
+            cleaned_response = ""
+            chat_meta: dict[str, Any] | None = None
+            assistant_msg_id: uuid.UUID | None = None
+
             if tool_calls:
                 # Execute tool calls
                 tool_results_for_save = []
@@ -190,40 +201,80 @@ async def _generate_sse(
                         "content": tool_result,
                     })
 
-                # 7. Second LLM call — stream the final response
+                # 7. Second LLM call — stream with meta buffering
                 logger.info("[chat-sse] Tools done, starting streaming response")
                 yield f"data: {json.dumps({'type': 'status', 'content': 'generating'}, ensure_ascii=False)}\n\n"
                 full_response = ""
+                yielded_up_to = 0
+                meta_found = False
+
                 async for chunk in client.chat_completion_stream(messages=messages):
                     full_response += chunk
-                    yield f"data: {json.dumps({'type': 'content', 'content': chunk}, ensure_ascii=False)}\n\n"
-                logger.info("[chat-sse] Streaming complete, response length=%d", len(full_response))
+                    meta_pos = full_response.find(META_TAG)
+                    if meta_pos >= 0:
+                        # Yield remaining clean content before the meta tag
+                        if meta_pos > yielded_up_to:
+                            safe = full_response[yielded_up_to:meta_pos]
+                            yield f"data: {json.dumps({'type': 'content', 'content': safe}, ensure_ascii=False)}\n\n"
+                            yielded_up_to = meta_pos
+                        meta_found = True
+                    elif not meta_found:
+                        # Hold back BUFFER_LEN chars to catch partial tag starts
+                        safe_end = max(yielded_up_to, len(full_response) - BUFFER_LEN)
+                        if safe_end > yielded_up_to:
+                            safe = full_response[yielded_up_to:safe_end]
+                            yield f"data: {json.dumps({'type': 'content', 'content': safe}, ensure_ascii=False)}\n\n"
+                            yielded_up_to = safe_end
 
-                # Save assistant response with tool call info
-                await save_message(
-                    db, session_id, "assistant", full_response,
+                # Stream done — parse meta and yield remaining clean content
+                cleaned_response, chat_meta = extract_and_strip_meta(full_response)
+                remaining = cleaned_response[yielded_up_to:]
+                if remaining:
+                    yield f"data: {json.dumps({'type': 'content', 'content': remaining}, ensure_ascii=False)}\n\n"
+                logger.info("[chat-sse] Streaming complete, response length=%d, meta=%s", len(cleaned_response), bool(chat_meta))
+
+                # Save cleaned assistant response
+                saved_msg = await save_message(
+                    db, session_id, "assistant", cleaned_response,
                     tool_calls=tool_results_for_save,
                     tokens_used=total_tokens,
                 )
+                assistant_msg_id = saved_msg.id
                 await db.commit()
 
             else:
-                # No tool calls — check if there's direct content
-                content = client.extract_content(response_data)
-                if content:
+                # No tool calls — strip meta before streaming
+                raw_content = client.extract_content(response_data)
+                if raw_content:
+                    cleaned_response, chat_meta = extract_and_strip_meta(raw_content)
                     chunk_size = 10
-                    for i in range(0, len(content), chunk_size):
-                        chunk = content[i:i + chunk_size]
+                    for i in range(0, len(cleaned_response), chunk_size):
+                        chunk = cleaned_response[i:i + chunk_size]
                         yield f"data: {json.dumps({'type': 'content', 'content': chunk}, ensure_ascii=False)}\n\n"
 
-                    await save_message(
-                        db, session_id, "assistant", content,
+                    saved_msg = await save_message(
+                        db, session_id, "assistant", cleaned_response,
                         tokens_used=total_tokens,
                     )
+                    assistant_msg_id = saved_msg.id
                     await db.commit()
                 else:
                     error_msg = "متأسفانه نتوانستم پاسخ مناسبی تولید کنم. لطفاً دوباره تلاش کنید."
                     yield f"data: {json.dumps({'type': 'content', 'content': error_msg}, ensure_ascii=False)}\n\n"
+
+            # 8. Analytics: save chat_meta and send suggestion chips
+            if chat_meta:
+                try:
+                    await save_analytics(db, session_id, assistant_msg_id, chat_meta)
+                    await update_session_analytics(db, session_id)
+                    await db.commit()
+
+                    # Send suggestion chips to frontend
+                    followups = chat_meta.get("suggested_followups", [])
+                    if followups and isinstance(followups, list):
+                        yield f"data: {json.dumps({'type': 'suggestions', 'content': followups[:3]}, ensure_ascii=False)}\n\n"
+                except Exception as analytics_err:
+                    logger.warning("[chat-sse] Analytics save failed (non-fatal): %s", analytics_err)
 
             # Send done event
             yield f"data: {json.dumps({'type': 'done', 'session_id': str(session_id)}, ensure_ascii=False)}\n\n"

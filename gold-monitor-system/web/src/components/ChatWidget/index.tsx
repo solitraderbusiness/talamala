@@ -18,6 +18,7 @@ export default function ChatWidget() {
   const [isLoading, setIsLoading] = useState(false);
   const [streamingContent, setStreamingContent] = useState("");
   const [statusText, setStatusText] = useState("");
+  const [suggestions, setSuggestions] = useState<string[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [enabled, setEnabled] = useState(true);
   const [welcomeMessage, setWelcomeMessage] = useState(
@@ -98,6 +99,7 @@ export default function ChatWidget() {
       setMessages((prev) => [...prev, userMsg]);
       setIsLoading(true);
       setStreamingContent("");
+      setSuggestions([]);
 
       // Abort any existing request
       abortRef.current?.abort();
@@ -203,6 +205,10 @@ export default function ChatWidget() {
                 if (data.session_id) {
                   setSessionId(data.session_id);
                 }
+              } else if (data.type === "suggestions") {
+                if (Array.isArray(data.content)) {
+                  setSuggestions(data.content);
+                }
               } else if (data.type === "error") {
                 addErrorMessage(data.content || "خطایی رخ داد.");
               }
@@ -241,6 +247,7 @@ export default function ChatWidget() {
   const handleClear = useCallback(() => {
     setMessages([]);
     setStreamingContent("");
+    setSuggestions([]);
     setSessionId(null);
     localStorage.removeItem(SESSION_STORAGE_KEY);
     abortRef.current?.abort();
@@ -261,6 +268,7 @@ export default function ChatWidget() {
         onSend={handleSend}
         welcomeMessage={welcomeMessage}
         onClear={handleClear}
+        dynamicSuggestions={suggestions}
       />
       {/* Mobile backdrop */}
       {isOpen && (

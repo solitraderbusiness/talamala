@@ -704,11 +704,23 @@ export interface ChatDashboard {
   total_sessions: number;
 }
 
+export interface ChatOverview {
+  total_messages: number;
+  prev_total_messages: number;
+  unique_sessions: number;
+  prev_unique_sessions: number;
+  avg_messages_per_session: number;
+  api_cost_estimate: number;
+  unanswered_count: number;
+}
+
 export interface ChatSessionSummary {
   id: string;
   messages_count: number;
   first_message: string | null;
   ip_address: string;
+  primary_intent: string | null;
+  had_answer_rate: number | null;
   created_at: string;
   last_active_at: string;
 }
@@ -722,6 +734,12 @@ export interface ChatConversation {
     tool_calls: unknown;
     tokens_used: number | null;
     created_at: string;
+    analytics?: {
+      intent: string;
+      topics: string[];
+      had_answer: boolean;
+      missing_feature: string | null;
+    } | null;
   }>;
 }
 
@@ -734,10 +752,60 @@ export interface ChatSettingsData {
   system_prompt: string;
 }
 
+export interface IntentCount {
+  intent: string;
+  count: number;
+}
+
+export interface TopicCount {
+  topic: string;
+  count: number;
+}
+
+export interface AssetCount {
+  asset: string;
+  label: string;
+  count: number;
+}
+
+export interface FeatureGap {
+  feature: string;
+  count: number;
+  example: string;
+}
+
+export interface UsageHour {
+  dow: number;
+  hour: number;
+  count: number;
+}
+
+export interface SessionDepthBucket {
+  bucket: string;
+  count: number;
+}
+
+export interface ConversationsPage {
+  items: ChatSessionSummary[];
+  total: number;
+  page: number;
+  pages: number;
+}
+
 /* ---------- Chat Analytics API ---------- */
 
 export function getChatDashboard(token: string): Promise<ChatDashboard> {
   return authRequest<ChatDashboard>("/api/admin/chat/dashboard", token);
+}
+
+export function getChatOverview(
+  token: string,
+  period: string = "today",
+): Promise<ChatOverview> {
+  return authRequest<ChatOverview>(
+    `/api/admin/chat/overview?period=${period}`,
+    token,
+  );
 }
 
 export function getChatSessions(
@@ -756,7 +824,7 @@ export function getChatConversation(
   sessionId: string,
 ): Promise<ChatConversation> {
   return authRequest<ChatConversation>(
-    `/api/admin/chat/sessions/${sessionId}`,
+    `/api/admin/chat/conversations/${sessionId}`,
     token,
   );
 }
@@ -781,6 +849,100 @@ export function getPopularQuestions(
 ): Promise<Array<{ question: string; count: number }>> {
   return authRequest<Array<{ question: string; count: number }>>(
     `/api/admin/chat/popular-questions?limit=${limit}`,
+    token,
+  );
+}
+
+export function getChatIntents(
+  token: string,
+  period?: string,
+): Promise<IntentCount[]> {
+  const params = period ? `?period=${period}` : "";
+  return authRequest<IntentCount[]>(
+    `/api/admin/chat/insights/intents${params}`,
+    token,
+  );
+}
+
+export function getChatTopics(
+  token: string,
+  period?: string,
+  limit: number = 20,
+): Promise<TopicCount[]> {
+  const params = new URLSearchParams();
+  if (period) params.set("period", period);
+  params.set("limit", String(limit));
+  return authRequest<TopicCount[]>(
+    `/api/admin/chat/insights/topics?${params}`,
+    token,
+  );
+}
+
+export function getChatAssets(
+  token: string,
+  period?: string,
+): Promise<AssetCount[]> {
+  const params = period ? `?period=${period}` : "";
+  return authRequest<AssetCount[]>(
+    `/api/admin/chat/insights/assets${params}`,
+    token,
+  );
+}
+
+export function getChatFeatureGaps(
+  token: string,
+  period?: string,
+  limit: number = 20,
+): Promise<FeatureGap[]> {
+  const params = new URLSearchParams();
+  if (period) params.set("period", period);
+  params.set("limit", String(limit));
+  return authRequest<FeatureGap[]>(
+    `/api/admin/chat/insights/feature-gaps?${params}`,
+    token,
+  );
+}
+
+export function getChatUsageHours(
+  token: string,
+  period?: string,
+): Promise<UsageHour[]> {
+  const params = period ? `?period=${period}` : "";
+  return authRequest<UsageHour[]>(
+    `/api/admin/chat/insights/usage-hours${params}`,
+    token,
+  );
+}
+
+export function getChatSessionDepth(
+  token: string,
+  period?: string,
+): Promise<SessionDepthBucket[]> {
+  const params = period ? `?period=${period}` : "";
+  return authRequest<SessionDepthBucket[]>(
+    `/api/admin/chat/insights/session-depth${params}`,
+    token,
+  );
+}
+
+export function getChatConversations(
+  token: string,
+  params?: {
+    page?: number;
+    limit?: number;
+    intent?: string;
+    had_answer?: boolean;
+    period?: string;
+  },
+): Promise<ConversationsPage> {
+  const sp = new URLSearchParams();
+  if (params?.page) sp.set("page", String(params.page));
+  if (params?.limit) sp.set("limit", String(params.limit));
+  if (params?.intent) sp.set("intent", params.intent);
+  if (params?.had_answer !== undefined) sp.set("had_answer", String(params.had_answer));
+  if (params?.period) sp.set("period", params.period);
+  return authRequest<ConversationsPage>(
+    `/api/admin/chat/conversations?${sp}`,
     token,
   );
 }

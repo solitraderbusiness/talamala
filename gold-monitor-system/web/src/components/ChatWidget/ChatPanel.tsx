@@ -21,6 +21,7 @@ interface ChatPanelProps {
   onSend: (message: string) => void;
   welcomeMessage: string;
   onClear: () => void;
+  dynamicSuggestions?: string[];
 }
 
 const DEFAULT_SUGGESTIONS = [
@@ -40,6 +41,7 @@ export default function ChatPanel({
   welcomeMessage,
   onClear,
   statusText,
+  dynamicSuggestions,
 }: ChatPanelProps) {
   const [input, setInput] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -158,6 +160,13 @@ export default function ChatPanel({
         {/* Typing indicator with status */}
         {isLoading && !streamingContent && (
           <TypingIndicator statusText={statusText} />
+        )}
+
+        {/* Dynamic suggestion chips after assistant response */}
+        {!isLoading && !streamingContent && dynamicSuggestions && dynamicSuggestions.length > 0 && messages.length > 0 && (
+          <div className="px-4 pt-2">
+            <SuggestionChips suggestions={dynamicSuggestions} onSelect={onSend} />
+          </div>
         )}
 
         <div ref={messagesEndRef} />
