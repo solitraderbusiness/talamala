@@ -58,5 +58,13 @@ class Settings(BaseSettings):
     CHAT_RATE_LIMIT_IP: int = 30
     CHAT_RATE_LIMIT_GLOBAL: int = 1000
 
+    # ── Signal Aggregator ─────────────────────────────────────────────────
+    TELEGRAM_API_ID: str = ""
+    TELEGRAM_API_HASH: str = ""
+    TELEGRAM_PHONE: str = ""
+    ANTHROPIC_API_KEY: str = ""
+    TRADINGVIEW_COOKIE: str = ""
+    SIGNAL_PARSE_MODEL: str = "claude-sonnet-4-20250514"
+
 
 settings = Settings()

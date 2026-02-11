@@ -7,8 +7,9 @@ Real-time gold market intelligence system for Persian (Farsi) users. Monitors ne
 - **Frontend:** Next.js 14, React 18, TypeScript 5, Tailwind CSS 3, Vazirmatn font (Persian RTL)
 - **Backend:** Python 3.12, FastAPI, SQLAlchemy 2.0 (asyncpg), Pydantic v2
 - **Database:** PostgreSQL 16, Redis 7 (cache + dedup + worker lock)
-- **Deployment:** Docker Compose (5 services: db, redis, api, worker, web)
+- **Deployment:** Docker Compose (6 services: db, redis, api, worker, signal-worker, web)
 - **AI/LLM:** OpenRouter API (Claude Sonnet 4) — alert text generation + AI chat assistant
+- **Signal Aggregator:** Telethon (Telegram), Anthropic Claude API (signal parsing), Recharts (charts)
 
 ## Key Commands
 ```bash
@@ -37,11 +38,11 @@ curl http://localhost:8000/api/health
 ```
 
 ## Services & Architecture
-Five Docker services: **PostgreSQL** (port 5432, 14 tables), **Redis** (6379, dedup cache + worker lock + chat rate limiting), **FastAPI API** (8000, REST endpoints + auto-migrations on startup), **Worker** (same image as API, 60s fetch-match-alert pipeline), **Next.js Web** (3000, RTL Persian dashboard + AI chat widget, proxies `/api/*` to API). Worker acquires Redis distributed lock (55s TTL), fetches enabled sources, deduplicates via SHA-256 content hash, matches against YAML rules, determines severity deterministically, optionally enriches with LLM Persian text, persists alerts. Background jobs: calendar sync (6h), price outcome tracker (15min). AI chat widget provides conversational access to alerts, calendar, and prices via SSE streaming with tool-use pattern.
+Six Docker services: **PostgreSQL** (port 5432, 21 tables), **Redis** (6379, dedup cache + worker lock + chat rate limiting), **FastAPI API** (8000, REST endpoints + auto-migrations on startup), **Worker** (same image as API, 60s fetch-match-alert pipeline), **Signal Worker** (same image, runs signal aggregator: Telegram listener, TradingView scraper, signal parser, price checker, consensus builder, performance tracker), **Next.js Web** (3000, RTL Persian dashboard + AI chat widget + AI Analysis page, proxies `/api/*` to API). Worker acquires Redis distributed lock (55s TTL), fetches enabled sources, deduplicates via SHA-256 content hash, matches against YAML rules, determines severity deterministically, optionally enriches with LLM Persian text, persists alerts. Background jobs: calendar sync (6h), price outcome tracker (15min). AI chat widget provides conversational access to alerts, calendar, and prices via SSE streaming with tool-use pattern.
 
 ## Code Conventions
 - **Async-first**: all DB ops use `AsyncSession` via asyncpg; worker uses aiohttp for HTTP
-- **Python**: snake_case files/functions/vars, PascalCase classes; routers in `api/routers/`, fetchers in `api/worker/fetchers/`, chat services in `api/services/chat/`
+- **Python**: snake_case files/functions/vars, PascalCase classes; routers in `api/routers/`, fetchers in `api/worker/fetchers/`, chat services in `api/services/chat/`, signal aggregator in `api/signal_aggregator/`
 - **TypeScript**: camelCase functions/vars, PascalCase components; pages in `src/app/`, components in `src/components/`
 - **API routes**: `/api/{resource}` with kebab-case multi-word paths
 - **Rule IDs**: `SECTION_DESCRIPTIVE_NAME` (e.g., `GLOB_RATE_DECISION`, `IR_FX_USD`)
@@ -53,6 +54,7 @@ Five Docker services: **PostgreSQL** (port 5432, 14 tables), **Redis** (6379, de
 
 ## Active Work (update each session)
 - [x] AI chat widget (SSE streaming, tool-use, analytics dashboard, admin settings)
+- [x] Signal Aggregator + AI Analysis page (Telegram listener, TradingView scraper, Claude API parser, consensus algorithm, performance tracking, AI Analysis page with 5 sections)
 - [ ] Fix news source reliability (English feeds, negative keywords, LLM relevance filter)
 - [ ] Impact matrix per alert (data exists in YAML, not displayed)
 - [ ] Per-market pages (`/market/[marketId]`)
@@ -81,6 +83,10 @@ Key vars in `gold-monitor-system/.env` (see `.env.example`):
 - `CHAT_MODEL` — Chat LLM model (default: `anthropic/claude-sonnet-4`)
 - `CHAT_RATE_LIMIT_IP` — Chat messages per hour per IP (default: `30`)
 - `CHAT_RATE_LIMIT_GLOBAL` — Chat messages per hour total (default: `1000`)
+- `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` / `TELEGRAM_PHONE` — Telegram user session for signal listening
+- `ANTHROPIC_API_KEY` — Claude API for signal parsing
+- `TRADINGVIEW_COOKIE` — Browser cookie for TradingView scraping (optional)
+- `SIGNAL_PARSE_MODEL` — Claude model for parsing (default: `claude-sonnet-4-20250514`)
 
 ## Access Points
 | Service | URL |
@@ -89,6 +95,8 @@ Key vars in `gold-monitor-system/.env` (see `.env.example`):
 | Admin | http://localhost:3000/admin/login |
 | Swagger | http://localhost:8000/docs |
 | Health | http://localhost:8000/api/health |
+| AI Analysis | http://localhost:3000/ai-analysis |
+| AI Analysis API | http://localhost:8000/api/ai-analysis/consensus/latest |
 
 ## Reference Docs
 When you need detailed information, read these files:
@@ -112,3 +120,50 @@ Only read these when the current task specifically requires that info. Do NOT re
 - New columns should use `checkfirst=True` pattern
 - `MIN_MATCH_SCORE = 0.15` in `worker/main.py` — don't change without understanding implications
 - Safe checkpoint tag: `safe-checkpoint-2026-02-09`
+
+## Signal Aggregator Module
+Crowd-sourced analyst consensus system for XAUUSD. Collects trading signals from Telegram channels and TradingView, parses with Claude API, builds weighted consensus from multiple analysts, tracks outcomes, serves results via the AI Analysis page.
+
+### Module Structure
+```
+api/signal_aggregator/
+├── config.py           -- env vars, constants, timeframe mappings
+├── models.py           -- 7 new tables (signal_sources, raw_posts, parsed_signals, consensus_snapshots, signal_price_ticks, signal_daily_performance, signal_monthly_performance)
+├── workers/
+│   ├── main.py             -- unified worker entry point
+│   ├── telegram_listener.py -- Telethon channel listener
+│   ├── tradingview_scraper.py -- TradingView ideas scraper
+│   ├── signal_parser.py    -- Claude API parsing pipeline
+│   ├── price_checker.py    -- outcome tracking + source weight updates
+│   ├── consensus_builder.py -- weighted consensus algorithm (4 views)
+│   ├── performance_tracker.py -- daily/monthly aggregation
+│   └── journal_generator.py -- template-based daily summaries
+├── api/
+│   └── routes.py       -- /api/ai-analysis/* endpoints
+├── utils/
+│   ├── weight_calculator.py -- source confidence scoring
+│   └── deduplication.py -- duplicate post detection
+└── scripts/
+    └── setup_sources.py -- seed initial Telegram channels + TradingView
+```
+
+### API Endpoints
+- `GET /api/ai-analysis/consensus/latest` — latest consensus for all 4 timeframes
+- `GET /api/ai-analysis/signals/recent` — recent parsed signals with filters
+- `GET /api/ai-analysis/performance/summary` — key metrics
+- `GET /api/ai-analysis/performance/daily` — daily performance for date range
+- `GET /api/ai-analysis/performance/monthly` — monthly performance
+- `GET /api/ai-analysis/sources/leaderboard` — ranked sources
+- `GET /api/ai-analysis/price/current` — current XAUUSD price
+- `GET /api/ai-analysis/journal/recent` — daily journal entries
+
+### Consensus Views
+| View | Signal timeframes | Description |
+|------|------------------|-------------|
+| scalp | 5min, 15min, 30min | Short-term scalping |
+| intraday | 15min, 30min, 1h, 4h | Intraday trading |
+| swing | 4h, daily | Multi-day swing |
+| position | daily, weekly | Long-term position |
+
+### First-time Telegram Setup
+Requires manual phone verification: set `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, `TELEGRAM_PHONE` in `.env`, then run `python -m api.signal_aggregator.scripts.setup_sources` to verify and seed channels.

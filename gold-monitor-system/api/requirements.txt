@@ -19,3 +19,7 @@ httpx
 pytest
 pytest-asyncio
 hazm
+# Signal Aggregator
+telethon
+anthropic
+cryptg

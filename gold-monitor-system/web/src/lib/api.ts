@@ -946,3 +946,183 @@ export function getChatConversations(
     token,
   );
 }
+
+/* ---------- AI Analysis (Signal Aggregator) types ---------- */
+
+export interface ConsensusCard {
+  consensus_view: string;
+  consensus_direction: string;
+  consensus_strength: number;
+  signals_count: number;
+  buy_count: number;
+  sell_count: number;
+  weighted_buy_score: number;
+  weighted_sell_score: number;
+  avg_entry_price: number | null;
+  avg_stop_loss: number | null;
+  avg_take_profit: number | null;
+  dominant_timeframe: string | null;
+  dominant_reasons: string[] | null;
+  timeframe_alignment: Record<string, string> | null;
+  generated_at: string;
+}
+
+export interface ConsensusLatestResponse {
+  consensuses: ConsensusCard[];
+  updated_at: string;
+  current_price: number | null;
+}
+
+export interface SignalItem {
+  id: string;
+  source_name: string;
+  source_accuracy: number | null;
+  source_type: string;
+  direction: string;
+  entry_price: number | null;
+  stop_loss: number | null;
+  take_profit_1: number | null;
+  timeframe: string;
+  analysis_type: string;
+  confidence_raw: number;
+  key_reasons: string[] | null;
+  status: string;
+  outcome_pips: number | null;
+  parsed_at: string;
+  valid_until: string | null;
+}
+
+export interface SignalsRecentResponse {
+  items: SignalItem[];
+  total: number;
+}
+
+export interface PerformanceSummary {
+  total_signals: number;
+  overall_win_rate: number | null;
+  net_pips_all_time: number;
+  profit_factor: number | null;
+  avg_pips_per_signal: number | null;
+  max_drawdown_pips: number | null;
+  active_sources: number;
+  avg_signals_per_day: number | null;
+}
+
+export interface DailyPerfItem {
+  date: string;
+  total_signals: number;
+  closed_signals: number;
+  winning_signals: number;
+  losing_signals: number;
+  win_rate: number | null;
+  net_pips: number;
+  cumulative_pips: number;
+  best_signal_pips: number | null;
+  worst_signal_pips: number | null;
+  scalp_win_rate: number | null;
+  intraday_win_rate: number | null;
+  swing_win_rate: number | null;
+  position_win_rate: number | null;
+}
+
+export interface MonthlyPerfItem {
+  year: number;
+  month: number;
+  total_signals: number;
+  closed_signals: number;
+  win_rate: number | null;
+  net_pips: number;
+  cumulative_pips: number;
+  profit_factor: number | null;
+  max_drawdown_pips: number | null;
+  best_day_pips: number | null;
+  worst_day_pips: number | null;
+  consensus_accuracy: number | null;
+}
+
+export interface SourceLeaderboardItem {
+  id: string;
+  name: string;
+  type: string;
+  total_signals: number;
+  correct_signals: number;
+  wrong_signals: number;
+  accuracy_rate: number | null;
+  avg_profit_pips: number | null;
+  avg_loss_pips: number | null;
+  profit_factor: number | null;
+  current_weight: number;
+  active: boolean;
+  last_signal_at: string | null;
+}
+
+export interface JournalEntry {
+  date: string;
+  summary: string;
+  total_signals: number;
+  closed_signals: number;
+  winning_signals: number;
+  losing_signals: number;
+  net_pips: number;
+  cumulative_pips: number;
+  win_rate: number | null;
+}
+
+export interface CurrentPriceResponse {
+  asset: string;
+  price: number | null;
+  source: string | null;
+  checked_at: string | null;
+}
+
+/* ---------- AI Analysis API ---------- */
+
+export function getAiConsensusLatest(): Promise<ConsensusLatestResponse> {
+  return request<ConsensusLatestResponse>("/api/ai-analysis/consensus/latest");
+}
+
+export function getAiSignalsRecent(params?: {
+  limit?: number;
+  offset?: number;
+  status?: string;
+  timeframe?: string;
+  source_id?: string;
+}): Promise<SignalsRecentResponse> {
+  const sp = new URLSearchParams();
+  if (params?.limit) sp.set("limit", String(params.limit));
+  if (params?.offset) sp.set("offset", String(params.offset));
+  if (params?.status && params.status !== "all") sp.set("status", params.status);
+  if (params?.timeframe && params.timeframe !== "all") sp.set("timeframe", params.timeframe);
+  if (params?.source_id && params.source_id !== "all") sp.set("source_id", params.source_id);
+  return request<SignalsRecentResponse>(`/api/ai-analysis/signals/recent?${sp}`);
+}
+
+export function getAiPerformanceSummary(): Promise<PerformanceSummary> {
+  return request<PerformanceSummary>("/api/ai-analysis/performance/summary");
+}
+
+export function getAiPerformanceDaily(params?: {
+  from?: string;
+  to?: string;
+}): Promise<{ items: DailyPerfItem[] }> {
+  const sp = new URLSearchParams();
+  if (params?.from) sp.set("from", params.from);
+  if (params?.to) sp.set("to", params.to);
+  return request<{ items: DailyPerfItem[] }>(`/api/ai-analysis/performance/daily?${sp}`);
+}
+
+export function getAiPerformanceMonthly(): Promise<{ items: MonthlyPerfItem[] }> {
+  return request<{ items: MonthlyPerfItem[] }>("/api/ai-analysis/performance/monthly");
+}
+
+export function getAiSourcesLeaderboard(): Promise<{ items: SourceLeaderboardItem[] }> {
+  return request<{ items: SourceLeaderboardItem[] }>("/api/ai-analysis/sources/leaderboard");
+}
+
+export function getAiCurrentPrice(): Promise<CurrentPriceResponse> {
+  return request<CurrentPriceResponse>("/api/ai-analysis/price/current");
+}
+
+export function getAiJournalRecent(limit: number = 7): Promise<{ items: JournalEntry[] }> {
+  return request<{ items: JournalEntry[] }>(`/api/ai-analysis/journal/recent?limit=${limit}`);
+}

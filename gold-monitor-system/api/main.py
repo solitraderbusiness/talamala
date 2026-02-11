@@ -36,6 +36,10 @@ from api.auth import get_password_hash
 from api.config import settings
 from api.database import AsyncSessionLocal, sync_engine
 from api.models import AdminUser, Base, ChatMessage, ChatSession, ChatSetting, EconomicEvent, JobRun, RulesSnapshot, SentimentScore, Source, SystemJob
+from api.signal_aggregator.models import (
+    ConsensusSnapshot, DailyPerformance, MonthlyPerformance,
+    ParsedSignal, RawPost, SignalPriceTick, SignalSource,
+)
 
 logger = logging.getLogger("gold_monitor")
 
@@ -1410,6 +1414,17 @@ async def _create_price_outcomes_table() -> None:
         logger.warning("Could not create alert_price_outcomes table", exc_info=True)
 
 
+async def _create_signal_aggregator_tables() -> None:
+    """Create all signal aggregator tables if they don't exist."""
+    try:
+        for model in [SignalSource, RawPost, ParsedSignal, ConsensusSnapshot,
+                      SignalPriceTick, DailyPerformance, MonthlyPerformance]:
+            model.__table__.create(bind=sync_engine, checkfirst=True)
+        logger.info("Signal aggregator tables ensured.")
+    except Exception:
+        logger.warning("Could not create signal aggregator tables", exc_info=True)
+
+
 async def _create_chat_tables() -> None:
     """Create chat_sessions, chat_messages, and chat_settings tables if they don't exist."""
     try:
@@ -1535,6 +1550,7 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     await _create_sentiment_scores_table()
     await _create_economic_events_table()
     await _create_price_outcomes_table()
+    await _create_signal_aggregator_tables()
     await _flush_dedup_keys()
     await _snapshot_rules()
     await _start_calendar_sync()
@@ -1602,6 +1618,7 @@ def create_app() -> FastAPI:
     from api.routers.rules import router as rules_router
     from api.routers.sentiment import router as sentiment_router
     from api.routers.sources import router as sources_router
+    from api.signal_aggregator.api.routes import router as ai_analysis_router
 
     app.include_router(alerts_router, prefix="/api/alerts")
     app.include_router(sources_router, prefix="/api/sources")
@@ -1614,6 +1631,7 @@ def create_app() -> FastAPI:
     app.include_router(sentiment_router, prefix="/api/sentiment")
     app.include_router(calendar_router, prefix="/api/calendar")
     app.include_router(health_router, prefix="/api/health")
+    app.include_router(ai_analysis_router, prefix="/api/ai-analysis")
 
     return app
 
