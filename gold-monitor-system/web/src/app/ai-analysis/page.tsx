@@ -1025,14 +1025,14 @@ export default function AIAnalysisPage() {
                           color: "#F3F4F6",
                           fontSize: "12px",
                         }}
-                        labelFormatter={(label: string) => {
+                        labelFormatter={(label) => {
                           try {
-                            return new Date(label).toLocaleDateString("fa-IR");
+                            return new Date(String(label)).toLocaleDateString("fa-IR");
                           } catch {
-                            return label;
+                            return String(label);
                           }
                         }}
-                        formatter={(value: number) => [`${value.toFixed(1)} pips`, "پیپ تجمعی"]}
+                        formatter={(value) => [`${Number(value).toFixed(1)} pips`, "پیپ تجمعی"]}
                       />
                       <Line
                         type="monotone"
@@ -1131,10 +1131,13 @@ export default function AIAnalysisPage() {
                             color: "#F3F4F6",
                             fontSize: "12px",
                           }}
-                          formatter={(value: number, _name: string, props: { payload: { count: number } }) => [
-                            `${value.toFixed(1)}% (${props.payload.count} سیگنال)`,
-                            "نرخ برد",
-                          ]}
+                          formatter={(value, _name, props) => {
+                            const count = (props as { payload?: { count?: number } })?.payload?.count ?? 0;
+                            return [
+                              `${Number(value).toFixed(1)}% (${count} سیگنال)`,
+                              "نرخ برد",
+                            ];
+                          }}
                         />
                         <Bar
                           dataKey="win_rate"
