@@ -104,10 +104,12 @@ async def _generate_sse(
     client = ChatOpenRouterClient()
     total_tokens = 0
 
+    logger.info("[chat-sse] Generator started for session=%s", session_id)
     async with AsyncSessionLocal() as db:
         try:
             # 1. Get conversation history
             history = await get_conversation_history(db, session_id)
+            logger.info("[chat-sse] History loaded: %d messages", len(history))
 
             # 2. Build system prompt
             custom_prompt = None
@@ -136,18 +138,20 @@ async def _generate_sse(
             await save_message(db, session_id, "user", user_content)
             await set_first_message(db, session_id, user_content)
             await db.commit()
+            logger.info("[chat-sse] User message saved, calling OpenRouter (model=%s)", settings.CHAT_MODEL)
 
             # 5. First LLM call (may return tool_calls)
-            logger.info("Sending chat request to OpenRouter (model=%s)", settings.CHAT_MODEL)
             yield f"data: {json.dumps({'type': 'status', 'content': 'thinking'}, ensure_ascii=False)}\n\n"
             response_data = await client.chat_completion(
                 messages=messages,
                 tools=TOOL_DEFINITIONS,
             )
             total_tokens += client.extract_usage(response_data)
+            logger.info("[chat-sse] OpenRouter responded, tokens=%d", total_tokens)
 
             # 6. Check for tool calls
             tool_calls = client.extract_tool_calls(response_data)
+            logger.info("[chat-sse] Tool calls: %s", [tc["function"]["name"] for tc in tool_calls] if tool_calls else "none")
 
             if tool_calls:
                 # Execute tool calls
@@ -187,11 +191,13 @@ async def _generate_sse(
                     })
 
                 # 7. Second LLM call — stream the final response
+                logger.info("[chat-sse] Tools done, starting streaming response")
                 yield f"data: {json.dumps({'type': 'status', 'content': 'generating'}, ensure_ascii=False)}\n\n"
                 full_response = ""
                 async for chunk in client.chat_completion_stream(messages=messages):
                     full_response += chunk
                     yield f"data: {json.dumps({'type': 'content', 'content': chunk}, ensure_ascii=False)}\n\n"
+                logger.info("[chat-sse] Streaming complete, response length=%d", len(full_response))
 
                 # Save assistant response with tool call info
                 await save_message(
@@ -223,9 +229,10 @@ async def _generate_sse(
             yield f"data: {json.dumps({'type': 'done', 'session_id': str(session_id)}, ensure_ascii=False)}\n\n"
 
         except Exception as e:
-            logger.exception("Chat SSE error: %s", e)
+            logger.exception("[chat-sse] Error: %s", e)
             error_msg = "متأسفانه خطایی رخ داد. لطفاً دوباره تلاش کنید."
             yield f"data: {json.dumps({'type': 'error', 'content': error_msg}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'done', 'session_id': str(session_id)}, ensure_ascii=False)}\n\n"
 
 
 # ── Endpoints ──────────────────────────────────────────────────────────

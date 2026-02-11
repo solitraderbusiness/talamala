@@ -121,7 +121,7 @@ class ChatOpenRouterClient:
             "tool_choice": "auto",
         }
 
-        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0)) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=120.0, write=10.0, pool=10.0)) as client:
             response = await client.post(
                 self.BASE_URL,
                 headers=self._headers(),
@@ -151,7 +151,7 @@ class ChatOpenRouterClient:
             "stream": True,
         }
 
-        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0)) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=120.0, write=10.0, pool=10.0)) as client:
             async with client.stream(
                 "POST",
                 self.BASE_URL,
