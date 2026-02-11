@@ -3,8 +3,8 @@ import "./globals.css";
 import TopBar from "@/components/TopBar";
 
 export const metadata: Metadata = {
-  title: "سامانه رصد طلا | Gold Monitor",
-  description: "داشبورد رصد بازار طلا و ارز",
+  title: "طلاملا | Talamala",
+  description: "داشبورد هوشمند بازار طلا و ارز",
 };
 
 export default function RootLayout({

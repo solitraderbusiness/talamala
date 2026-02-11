@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     # ── LLM / OpenRouter ───────────────────────────────────────────────
     OPENROUTER_API_KEY: str = ""
 
+    # ── Prices API (brsapi.ir) ───────────────────────────────────────
+    BRSAPI_KEY: str = ""
+
     # ── Security ────────────────────────────────────────────────────────
     SECRET_KEY: str = "change-me-in-production"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 24 hours
@@ -36,6 +39,15 @@ class Settings(BaseSettings):
     # ── Default admin credentials (seeded on first run) ─────────────────
     ADMIN_EMAIL: str = "admin@gold.local"
     ADMIN_PASSWORD: str = "changeme"
+
+    # ── Calendar API (JBlanked) ─────────────────────────────────────────
+    JBLANKED_API_KEY: str = ""
+
+    # ── Calendar API (Finnhub fallback) ──────────────────────────────
+    FINNHUB_API_KEY: str = ""
+
+    # ── Calendar sync interval (seconds, default 6 hours) ───────────
+    CALENDAR_SYNC_INTERVAL: int = 21600
 
     # ── Rule engine ─────────────────────────────────────────────────────
     YAML_PATH: str = "/app/gold_monitor_rules_fa.yaml"

@@ -34,3 +34,17 @@
     @apply w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm transition-colors focus:border-gold-500 focus:outline-none focus:ring-1 focus:ring-gold-500 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100;
   }
 }
+
+/* Subtle pulse animation for upcoming events within 2 hours */
+@keyframes subtle-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(217, 174, 56, 0);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(217, 174, 56, 0.15);
+  }
+}
+
+.animate-subtle-pulse {
+  animation: subtle-pulse 2s ease-in-out infinite;
+}

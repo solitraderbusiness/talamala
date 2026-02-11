@@ -43,6 +43,7 @@ export function timeAgo(dateStr: string): string {
  */
 export function severityLabel(severity: string): string {
   const map: Record<string, string> = {
+    critical: "بحرانی",
     high: "بالا",
     medium: "متوسط",
     low: "پایین",
@@ -70,6 +71,9 @@ export function directionLabel(direction: string): string {
   const map: Record<string, string> = {
     up: "صعودی",
     down: "نزولی",
+    bullish: "صعودی",
+    bearish: "نزولی",
+    neutral: "خنثی",
     mixed: "ترکیبی",
   };
   return map[direction] || direction;
@@ -81,9 +85,10 @@ export function directionLabel(direction: string): string {
 export function sectionLabel(section: string): string {
   const map: Record<string, string> = {
     global_gold: "طلای جهانی",
-    iran_gold: "طلای ایران",
+    iran_gold: "طلا و ارز ایران",
     coin: "سکه",
     gold_funds: "صندوق‌های طلا",
+    geopolitics: "ژئوپلیتیک",
   };
   return map[section] || section;
 }

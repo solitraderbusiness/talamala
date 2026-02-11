@@ -7,6 +7,8 @@ import { cn } from "@/lib/utils";
 
 const navItems = [
   { href: "/", label: "داشبورد" },
+  { href: "/prices", label: "قیمت‌ها" },
+  { href: "/calendar", label: "تقویم" },
   { href: "/library", label: "کتابخانه قوانین" },
   { href: "/admin/sources", label: "مدیریت" },
 ];
@@ -43,7 +45,7 @@ export default function TopBar() {
         <Link href="/" className="flex items-center gap-2">
           <span className="text-2xl">🪙</span>
           <span className="text-lg font-bold text-gold-600 dark:text-gold-400">
-            رصد طلا
+            طلاملا
           </span>
         </Link>
 

@@ -107,16 +107,16 @@ class Source(Base):
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, server_default="now()",
     )
 
-    # Relationships
+    # Relationships (lazy="noload" — load explicitly when needed)
     raw_items: Mapped[list[RawItem]] = relationship(
-        "RawItem", back_populates="source", lazy="selectin",
+        "RawItem", back_populates="source", lazy="noload",
     )
     fetch_logs: Mapped[list[FetchLog]] = relationship(
-        "FetchLog", back_populates="source", lazy="selectin",
+        "FetchLog", back_populates="source", lazy="noload",
     )
 
     def __repr__(self) -> str:
-        return f"<Source {self.name!r} ({self.type.value})>"
+        return f"<Source {self.name!r} ({self.type})>"
 
 
 # ── Raw Items ───────────────────────────────────────────────────────────
@@ -148,7 +148,7 @@ class RawItem(Base):
     content_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     metadata_: Mapped[Any] = mapped_column(
-        "metadata", JSONB, default=dict, server_default="{}",
+        "metadata_", JSONB, default=dict, server_default="{}",
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, server_default="now()",
@@ -211,6 +211,29 @@ class Alert(Base):
     match_evidence: Mapped[Any] = mapped_column(
         JSONB, default=dict, server_default="{}",
     )
+
+    # ── Price snapshot at alert creation time ─────────────────────────
+    price_xauusd_at_alert: Mapped[float | None] = mapped_column(
+        Float, nullable=True, default=None,
+    )
+    price_usdirr_at_alert: Mapped[float | None] = mapped_column(
+        Float, nullable=True, default=None,
+    )
+    price_coin_at_alert: Mapped[float | None] = mapped_column(
+        Float, nullable=True, default=None,
+    )
+    price_18k_at_alert: Mapped[float | None] = mapped_column(
+        Float, nullable=True, default=None,
+    )
+
+    # ── Classification metadata ───────────────────────────────────────
+    news_type: Mapped[str | None] = mapped_column(
+        String(50), nullable=True, default=None,
+    )
+    event_category: Mapped[str | None] = mapped_column(
+        String(50), nullable=True, default=None,
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, server_default="now()",
     )
@@ -219,9 +242,70 @@ class Alert(Base):
     raw_item: Mapped[RawItem | None] = relationship(
         "RawItem", back_populates="alert",
     )
+    price_outcomes: Mapped[list[AlertPriceOutcome]] = relationship(
+        "AlertPriceOutcome", back_populates="alert", lazy="noload",
+    )
 
     def __repr__(self) -> str:
-        return f"<Alert {self.severity.value} {self.title[:40]!r}>"
+        return f"<Alert {self.severity} {self.title[:40]!r}>"
+
+
+# ── Alert Price Outcomes ───────────────────────────────────────────────
+
+class AlertPriceOutcome(Base):
+    """Tracks what happened to prices 1h, 4h, and 24h after an alert.
+
+    Populated by a background job that looks back at alerts and records
+    the actual price changes, enabling accuracy scoring.
+    """
+    __tablename__ = "alert_price_outcomes"
+    __table_args__ = (
+        UniqueConstraint("alert_id", "check_interval", name="uq_outcome_alert_interval"),
+        Index("ix_outcome_alert_id", "alert_id"),
+        Index("ix_outcome_checked_at", "checked_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=_new_uuid,
+    )
+    alert_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("alerts.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    check_interval: Mapped[str] = mapped_column(
+        String(10), nullable=False,  # '1h', '4h', '24h'
+    )
+
+    # Prices at the check time
+    price_xauusd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    price_usdirr: Mapped[float | None] = mapped_column(Float, nullable=True)
+    price_coin: Mapped[float | None] = mapped_column(Float, nullable=True)
+    price_18k: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # Change percentages from alert time
+    change_pct_xauusd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    change_pct_usdirr: Mapped[float | None] = mapped_column(Float, nullable=True)
+    change_pct_coin: Mapped[float | None] = mapped_column(Float, nullable=True)
+    change_pct_18k: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # Was the alert's predicted direction correct? (null if neutral)
+    direction_correct: Mapped[bool | None] = mapped_column(
+        Boolean, nullable=True,
+    )
+
+    checked_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default="now()",
+    )
+
+    # Relationships
+    alert: Mapped[Alert] = relationship("Alert", back_populates="price_outcomes")
+
+    def __repr__(self) -> str:
+        return f"<AlertPriceOutcome {self.check_interval} alert={self.alert_id}>"
 
 
 # ── Fetch Logs ──────────────────────────────────────────────────────────
@@ -303,6 +387,88 @@ class AdminUser(Base):
 
 
 # ── Rules Snapshot ──────────────────────────────────────────────────────
+
+class SentimentScore(Base):
+    """Persisted sentiment scores for historical tracking and charting."""
+    __tablename__ = "sentiment_scores"
+    __table_args__ = (
+        Index("ix_sentiment_scores_timeframe_created", "timeframe", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=_new_uuid,
+    )
+    timeframe: Mapped[str] = mapped_column(
+        String(10), nullable=False,  # "1h", "4h", "24h"
+    )
+    score: Mapped[int] = mapped_column(
+        Integer, nullable=False,  # 0-100
+    )
+    sentiment: Mapped[str] = mapped_column(
+        String(20), nullable=False,  # very_bullish, bullish, neutral, bearish, very_bearish
+    )
+    sentiment_label: Mapped[str] = mapped_column(
+        String(50), nullable=False,  # Persian label
+    )
+    alert_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default="now()",
+    )
+
+    def __repr__(self) -> str:
+        return f"<SentimentScore {self.timeframe} score={self.score} {self.sentiment}>"
+
+
+# ── Economic Events (Calendar) ─────────────────────────────────────────
+
+class EconomicEvent(Base):
+    """Cached economic calendar events from JBlanked / Finnhub APIs."""
+    __tablename__ = "economic_events"
+    __table_args__ = (
+        Index("ix_econ_events_datetime", "datetime_utc"),
+        Index("ix_econ_events_impact", "impact"),
+        Index("ix_econ_events_currency", "currency"),
+        UniqueConstraint("event_name", "datetime_utc", name="uq_econ_events_name_datetime"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=_new_uuid,
+    )
+    event_name: Mapped[str] = mapped_column(String(512), nullable=False)
+    event_name_fa: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    country: Mapped[str] = mapped_column(String(10), nullable=False, default="")
+    currency: Mapped[str] = mapped_column(String(10), nullable=False, default="")
+    category: Mapped[str] = mapped_column(String(50), nullable=False, default="")
+    datetime_utc: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+    )
+    impact: Mapped[str] = mapped_column(
+        String(10), nullable=False, default="low",
+    )
+    actual: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    forecast: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    previous: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    source: Mapped[str] = mapped_column(
+        String(50), nullable=False, default="mql5",
+    )
+    affected_assets: Mapped[Any] = mapped_column(
+        JSONB, default=list, server_default="[]",
+    )
+    gold_impact_note: Mapped[Any] = mapped_column(
+        JSONB, nullable=True, default=None,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default="now()",
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, server_default="now()",
+    )
+
+    def __repr__(self) -> str:
+        return f"<EconomicEvent {self.event_name!r} {self.datetime_utc}>"
+
 
 class RulesSnapshot(Base):
     __tablename__ = "rules_snapshot"

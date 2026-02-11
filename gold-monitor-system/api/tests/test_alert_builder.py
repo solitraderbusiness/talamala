@@ -94,10 +94,11 @@ class TestGenerateDedupeKey:
         key2 = generate_dedupe_key(["rule1"], "title_b", "source")
         assert key1 != key2
 
-    def test_different_source_different_key(self):
+    def test_same_title_different_source_same_key(self):
+        # Cross-source dedup: same title + same rules = same key regardless of source
         key1 = generate_dedupe_key(["rule1"], "title", "source_a")
         key2 = generate_dedupe_key(["rule1"], "title", "source_b")
-        assert key1 != key2
+        assert key1 == key2
 
     def test_rule_order_does_not_matter(self):
         # Rules are sorted internally, so order should not affect the key
@@ -232,10 +233,34 @@ class TestBuildAlert:
         # Should be a valid ISO-8601 string containing 'T' and timezone info
         assert "T" in ts
 
-    def test_severity_defaults_to_medium_when_no_criteria(self):
-        rule = _make_rule()
-        mr = _make_match_result(rule=rule)
+    def test_severity_defaults_to_medium_for_moderate_score(self):
+        # With no matching criteria and moderate score, severity = medium
+        rule = _make_rule(horizon="short")
+        mr = _make_match_result(rule=rule, match_score=0.20)
         alert = build_alert({"title": "", "content": ""}, [mr])
+        assert alert["severity"] == "medium"
+
+    def test_severity_high_for_high_score(self):
+        # High match score without criteria → score-based HIGH
+        rule = _make_rule(horizon="short")
+        mr = _make_match_result(rule=rule, match_score=0.50)
+        alert = build_alert({"title": "", "content": ""}, [mr])
+        assert alert["severity"] == "high"
+
+    def test_severity_low_for_low_score(self):
+        # Low match score without criteria → score-based LOW
+        rule = _make_rule(horizon="short")
+        mr = _make_match_result(rule=rule, match_score=0.12)
+        alert = build_alert({"title": "", "content": ""}, [mr])
+        assert alert["severity"] == "low"
+
+    def test_multi_rule_no_boost(self):
+        # Multi-rule boost was removed — severity stays at medium
+        rule1 = _make_rule(rule_id="r1", horizon="short")
+        rule2 = _make_rule(rule_id="r2", horizon="short")
+        mr1 = _make_match_result(rule=rule1, match_score=0.20)
+        mr2 = _make_match_result(rule=rule2, match_score=0.20)
+        alert = build_alert({"title": "", "content": ""}, [mr1, mr2])
         assert alert["severity"] == "medium"
 
     def test_severity_high_when_content_matches_high_criteria(self):

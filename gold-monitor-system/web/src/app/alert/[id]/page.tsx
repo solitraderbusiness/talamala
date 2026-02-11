@@ -3,14 +3,93 @@
 import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { getAlertById, type Alert } from "@/lib/api";
+import { getAlertById, type Alert, type ImpactItem } from "@/lib/api";
 import SeverityBadge from "@/components/SeverityBadge";
 import {
   formatDate,
   timeHorizonLabel,
   directionLabel,
-  confidencePercent,
 } from "@/lib/utils";
+
+/** Check if text is mostly Latin/English. */
+function isLikelyEnglish(text: string): boolean {
+  if (!text) return false;
+  const letters = text.replace(/[\s\d.,;:!?'"()\-\[\]{}/\\@#$%^&*+=<>|~`_]/g, "");
+  if (!letters) return false;
+  const latinCount = (letters.match(/[a-zA-Z]/g) || []).length;
+  return latinCount / letters.length > 0.5;
+}
+
+/** Extract a clean domain name from a URL. */
+function extractDomain(url: string): string {
+  try {
+    const u = new URL(url);
+    return u.hostname.replace(/^www\./, "");
+  } catch {
+    return url;
+  }
+}
+
+/** Normalize expected_impact to an array of ImpactItem. */
+function normalizeImpact(impact: unknown): ImpactItem[] {
+  if (!impact) return [];
+  if (Array.isArray(impact)) {
+    return impact.filter(
+      (item) => item && typeof item === "object" && item.asset
+    );
+  }
+  if (typeof impact === "object" && impact !== null) {
+    return Object.entries(impact as Record<string, { direction?: string; mechanism?: string }>).map(
+      ([asset, details]) => ({
+        asset,
+        direction: details?.direction || "",
+        mechanism: details?.mechanism || "",
+      })
+    );
+  }
+  return [];
+}
+
+type Direction = "bullish" | "bearish" | "neutral";
+
+/** Determine per-alert market direction. */
+function getAlertDirection(alert: Alert): Direction {
+  const impacts = normalizeImpact(alert.expected_impact);
+  if (impacts.length > 0) {
+    const hasUp = impacts.some((i) => i.direction === "up");
+    const hasDown = impacts.some((i) => i.direction === "down");
+    if (hasUp && !hasDown) return "bullish";
+    if (hasDown && !hasUp) return "bearish";
+  }
+  const text = ((alert.title || "") + " " + (alert.summary_fa || "")).toLowerCase();
+  const bullishPatterns = [
+    "gold rises", "gold surges", "gold rallies", "gold jumps", "gold soars",
+    "gold climbs", "gold gains", "gold hits record", "gold all-time high",
+    "gold safe haven", "gold demand", "rate cut", "dovish",
+    "طلا صعود", "طلا افزایش یافت", "قیمت طلا بالا", "رشد قیمت طلا",
+    "رکورد قیمت طلا", "رکورد طلا", "جهش طلا", "جهش قیمت طلا",
+    "طلا رشد کرد", "بازگشت طلا به بالا", "رشد طلا", "کاهش نرخ بهره",
+  ];
+  const bearishPatterns = [
+    "gold falls", "gold drops", "gold slips", "gold declines", "gold plunges",
+    "gold sinks", "gold crashes", "gold slides", "gold retreats",
+    "rate hike", "hawkish", "stronger dollar",
+    "طلا نزول", "طلا کاهش یافت", "قیمت طلا پایین", "کاهش قیمت طلا",
+    "افت طلا", "سقوط طلا", "ریزش طلا", "افت قیمت طلا",
+    "افزایش نرخ بهره", "تقویت دلار",
+  ];
+  const hasBull = bullishPatterns.some((p) => text.includes(p));
+  const hasBear = bearishPatterns.some((p) => text.includes(p));
+  if (hasBull && !hasBear) return "bullish";
+  if (hasBear && !hasBull) return "bearish";
+  return "neutral";
+}
+
+const DIR_CONFIG: Record<Direction, { icon: string; label: string; color: string; bg: string }> = {
+  bullish: { icon: "▲", label: "صعودی برای طلا", color: "text-emerald-600 dark:text-emerald-400", bg: "bg-emerald-50 border-emerald-200 dark:bg-emerald-950/30 dark:border-emerald-800" },
+  bearish: { icon: "▼", label: "نزولی برای طلا", color: "text-red-600 dark:text-red-400", bg: "bg-red-50 border-red-200 dark:bg-red-950/30 dark:border-red-800" },
+  neutral: { icon: "◆", label: "تاثیر نامشخص", color: "text-gray-600 dark:text-gray-400", bg: "bg-gray-50 border-gray-200 dark:bg-gray-900 dark:border-gray-700" },
+};
 
 export default function AlertDetailPage() {
   const params = useParams();
@@ -82,8 +161,15 @@ export default function AlertDetailPage() {
         <div className="flex flex-wrap items-start gap-3">
           <div className="flex-1">
             <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100">
-              {alert.title}
+              {isLikelyEnglish(alert.title) && alert.summary_fa && !isLikelyEnglish(alert.summary_fa)
+                ? alert.summary_fa.split(/[.۔。]/)[0]?.trim() || alert.summary_fa
+                : alert.title}
             </h1>
+            {isLikelyEnglish(alert.title) && (
+              <p className="mt-1 text-sm text-gray-400 dark:text-gray-500" dir="ltr">
+                {alert.title}
+              </p>
+            )}
             <div className="mt-2 flex flex-wrap items-center gap-2">
               <SeverityBadge severity={alert.severity} />
               <span
@@ -117,14 +203,24 @@ export default function AlertDetailPage() {
         <h2 className="mb-2 text-sm font-semibold text-amber-800 dark:text-amber-400">
           چرا مهم است؟
         </h2>
-        <p className="leading-7 text-amber-900 dark:text-amber-200">
-          {alert.why_important_fa}
-        </p>
+        <ul className="space-y-1.5 text-amber-900 dark:text-amber-200">
+          {alert.why_important_fa
+            .split(/\n/)
+            .map((line) => line.replace(/^[-–•]\s*/, "").trim())
+            .filter((line) => line.length > 0)
+            .map((line, i) => (
+              <li key={i} className="flex items-start gap-2 leading-7">
+                <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500 dark:bg-amber-400" />
+                <span>{line}</span>
+              </li>
+            ))}
+        </ul>
       </div>
 
       {/* Expected Impact */}
-      {alert.expected_impact &&
-        Object.keys(alert.expected_impact).length > 0 && (
+      {(() => {
+        const impacts = normalizeImpact(alert.expected_impact);
+        return impacts.length > 0 ? (
           <div className="card">
             <h2 className="mb-3 text-sm font-semibold text-gray-500 dark:text-gray-400">
               تاثیر مورد انتظار
@@ -145,60 +241,64 @@ export default function AlertDetailPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {Object.entries(alert.expected_impact).map(
-                    ([asset, impact]) => (
-                      <tr
-                        key={asset}
-                        className="border-b border-gray-100 dark:border-gray-800"
-                      >
-                        <td className="py-2 font-medium text-gray-800 dark:text-gray-200">
-                          {asset}
-                        </td>
-                        <td className="py-2">
-                          <span
-                            className={`inline-flex items-center gap-1 font-medium ${
-                              impact.direction === "up"
-                                ? "text-green-600"
-                                : impact.direction === "down"
-                                  ? "text-red-600"
-                                  : "text-amber-600"
-                            }`}
-                          >
-                            {impact.direction === "up" && "▲"}
-                            {impact.direction === "down" && "▼"}
-                            {impact.direction === "mixed" && "◆"}
-                            {directionLabel(impact.direction)}
-                          </span>
-                        </td>
-                        <td className="py-2 text-gray-600 dark:text-gray-400">
-                          {impact.mechanism}
-                        </td>
-                      </tr>
-                    )
-                  )}
+                  {impacts.map((impact, idx) => (
+                    <tr
+                      key={idx}
+                      className="border-b border-gray-100 dark:border-gray-800"
+                    >
+                      <td className="py-2 font-medium text-gray-800 dark:text-gray-200">
+                        {impact.asset}
+                      </td>
+                      <td className="py-2">
+                        <span
+                          className={`inline-flex items-center gap-1 font-medium ${
+                            impact.direction === "up"
+                              ? "text-green-600"
+                              : impact.direction === "down"
+                                ? "text-red-600"
+                                : "text-amber-600"
+                          }`}
+                        >
+                          {impact.direction === "up" && "▲"}
+                          {impact.direction === "down" && "▼"}
+                          {impact.direction === "mixed" && "◆"}
+                          {directionLabel(impact.direction)}
+                        </span>
+                      </td>
+                      <td className="py-2 text-gray-600 dark:text-gray-400">
+                        {impact.mechanism}
+                      </td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>
           </div>
-        )}
+        ) : null;
+      })()}
 
-      {/* Confidence */}
-      <div className="card">
-        <h2 className="mb-2 text-sm font-semibold text-gray-500 dark:text-gray-400">
-          سطح اطمینان
-        </h2>
-        <div className="flex items-center gap-3">
-          <div className="h-3 flex-1 overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700">
-            <div
-              className="h-full rounded-full bg-gold-500 transition-all"
-              style={{ width: `${alert.confidence * 100}%` }}
-            />
+      {/* Market Direction */}
+      {(() => {
+        const direction = getAlertDirection(alert);
+        const dc = DIR_CONFIG[direction];
+        return (
+          <div className={`rounded-xl border p-4 ${dc.bg}`}>
+            <div className="flex items-center gap-3">
+              <span className={`text-2xl font-bold ${dc.color}`}>
+                {dc.icon}
+              </span>
+              <div>
+                <h2 className={`text-base font-semibold ${dc.color}`}>
+                  {dc.label}
+                </h2>
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  بر اساس تحلیل قوانین و محتوای خبر
+                </p>
+              </div>
+            </div>
           </div>
-          <span className="text-sm font-bold text-gray-700 dark:text-gray-300">
-            {confidencePercent(alert.confidence)}
-          </span>
-        </div>
-      </div>
+        );
+      })()}
 
       {/* Follow-up Questions */}
       {alert.follow_up_questions && alert.follow_up_questions.length > 0 && (
@@ -228,14 +328,22 @@ export default function AlertDetailPage() {
           <h2 className="mb-2 text-sm font-semibold text-gray-500 dark:text-gray-400">
             منبع
           </h2>
-          <a
-            href={alert.source_url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-gold-600 underline hover:text-gold-700 dark:text-gold-400 dark:hover:text-gold-300"
-          >
-            {alert.source_url}
-          </a>
+          <div className="flex items-center gap-3">
+            <span className="text-sm text-gray-600 dark:text-gray-400">
+              {alert.source_name || extractDomain(alert.source_url)}
+            </span>
+            <a
+              href={alert.source_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 rounded-lg bg-gold-50 px-3 py-1.5 text-sm font-medium text-gold-700 transition-colors hover:bg-gold-100 dark:bg-gold-900/20 dark:text-gold-400 dark:hover:bg-gold-900/40"
+            >
+              مشاهده منبع
+              <svg className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M4.25 5.5a.75.75 0 00-.75.75v8.5c0 .414.336.75.75.75h8.5a.75.75 0 00.75-.75v-4a.75.75 0 011.5 0v4A2.25 2.25 0 0112.75 17h-8.5A2.25 2.25 0 012 14.75v-8.5A2.25 2.25 0 014.25 4h5a.75.75 0 010 1.5h-5zm7.25-.75a.75.75 0 01.75-.75h3.5a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0V6.31l-5.97 5.97a.75.75 0 11-1.06-1.06l5.97-5.97H12.25a.75.75 0 01-.75-.75z" clipRule="evenodd" />
+              </svg>
+            </a>
+          </div>
         </div>
       )}
 

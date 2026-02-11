@@ -13,10 +13,12 @@ if _PROJECT_ROOT not in sys.path:
 import pytest
 
 from api.rule_engine.severity import (
+    SEVERITY_CRITICAL,
     SEVERITY_HIGH,
     SEVERITY_LOW,
     SEVERITY_MEDIUM,
     calculate_confidence,
+    classify_severity,
     determine_severity,
 )
 from api.rule_engine.matcher import MatchResult
@@ -133,12 +135,42 @@ class TestDetermineSeverity:
             low_if=["qrs_never_matches"],
         )
         content = "some unrelated content"
-        assert determine_severity(content, rule) == SEVERITY_MEDIUM
+        # With a typical match_score (0.20), falls to score-based medium
+        assert determine_severity(content, rule, match_score=0.20) == SEVERITY_MEDIUM
 
     def test_defaults_to_medium_when_criteria_are_empty(self):
         rule = _make_rule()
         content = "any content"
-        assert determine_severity(content, rule) == SEVERITY_MEDIUM
+        assert determine_severity(content, rule, match_score=0.20) == SEVERITY_MEDIUM
+
+    # --- Score-based fallback tests ---
+
+    def test_score_fallback_high_when_score_above_threshold(self):
+        rule = _make_rule(horizon="short")
+        content = "unmatched content"
+        assert determine_severity(content, rule, match_score=0.40) == SEVERITY_HIGH
+
+    def test_score_fallback_high_immediate_horizon_lower_threshold(self):
+        rule = _make_rule(horizon="immediate")
+        content = "unmatched content"
+        # 0.30 is above immediate threshold (0.25) but below general (0.35)
+        assert determine_severity(content, rule, match_score=0.30) == SEVERITY_HIGH
+
+    def test_score_fallback_medium_for_moderate_score(self):
+        rule = _make_rule(horizon="short")
+        content = "unmatched content"
+        assert determine_severity(content, rule, match_score=0.20) == SEVERITY_MEDIUM
+
+    def test_score_fallback_low_when_score_below_threshold(self):
+        rule = _make_rule(horizon="short")
+        content = "unmatched content"
+        assert determine_severity(content, rule, match_score=0.12) == SEVERITY_LOW
+
+    def test_condition_match_takes_priority_over_score(self):
+        # Condition says medium, but score would say high — condition wins
+        rule = _make_rule(medium_if=["بازار"])
+        content = "وضعیت بازار امروز"
+        assert determine_severity(content, rule, match_score=0.50) == SEVERITY_MEDIUM
 
     def test_condition_matching_is_case_insensitive(self):
         rule = _make_rule(high_if=["Surprise"])
@@ -223,3 +255,132 @@ class TestCalculateConfidence:
             mr = _make_match_result(match_score=score)
             expected = 0.3 + score * 0.65
             assert calculate_confidence(mr) == pytest.approx(expected)
+
+
+# =========================================================================
+# classify_severity (event-type regex classification)
+# =========================================================================
+
+
+class TestClassifySeverity:
+    """Tests for regex-based event-type classification."""
+
+    def test_war_is_critical(self):
+        assert classify_severity("جنگ در منطقه") == "critical"
+
+    def test_fed_rate_decision_is_critical(self):
+        assert classify_severity("Fed rate decision today") == "critical"
+
+    def test_nuclear_negotiations_is_critical(self):
+        assert classify_severity("مذاکرات هسته ای برجام") == "critical"
+
+    def test_all_time_high_is_critical(self):
+        assert classify_severity("Gold hits all-time high") == "critical"
+
+    def test_crash_is_critical(self):
+        assert classify_severity("Market crash continues") == "critical"
+
+    def test_cpi_is_high(self):
+        assert classify_severity("CPI inflation data released") == "high"
+
+    def test_gold_above_price_is_high(self):
+        assert classify_severity("Gold above 3000 mark") == "high"
+
+    def test_iran_tension_is_high(self):
+        assert classify_severity("تنش ایران و آمریکا") == "high"
+
+    def test_analysis_is_medium(self):
+        assert classify_severity("تحلیل بازار طلا") == "medium"
+
+    def test_survey_is_low(self):
+        assert classify_severity("نظرسنجی بازار") == "low"
+
+    def test_no_match_returns_none(self):
+        assert classify_severity("random unrelated text") is None
+
+    def test_event_classification_priority_over_score(self):
+        # War in title → critical, even with low match score
+        rule = _make_rule(horizon="short")
+        result = determine_severity(
+            "some content", rule, match_score=0.12, title="جنگ در منطقه"
+        )
+        assert result == "critical"
+
+
+# =========================================================================
+# Direction detection tests
+# =========================================================================
+
+
+class TestDirectionDetection:
+    """Tests for the 3-stage direction detection module."""
+
+    def test_bullish_regex_detection(self):
+        from api.rule_engine.direction import detect_direction
+        result = detect_direction("قیمت طلا افزایش یافت", "")
+        assert result["direction"] == "bullish"
+        assert result["confidence"] >= 0.5
+
+    def test_bearish_regex_detection(self):
+        from api.rule_engine.direction import detect_direction
+        result = detect_direction("Gold price drops sharply", "gold falls below 2000")
+        assert result["direction"] == "bearish"
+
+    def test_neutral_fallback(self):
+        from api.rule_engine.direction import detect_direction
+        result = detect_direction("random unrelated text", "")
+        assert result["direction"] == "neutral"
+
+    def test_alert_score_neutral_is_50(self):
+        from api.rule_engine.direction import calculate_alert_score
+        assert calculate_alert_score("neutral", 0.0, "high") == 50
+
+    def test_alert_score_bullish_above_50(self):
+        from api.rule_engine.direction import calculate_alert_score
+        score = calculate_alert_score("bullish", 0.7, "high")
+        assert score > 50
+
+    def test_alert_score_bearish_below_50(self):
+        from api.rule_engine.direction import calculate_alert_score
+        score = calculate_alert_score("bearish", 0.7, "high")
+        assert score < 50
+
+    def test_alert_score_clamped_0_100(self):
+        from api.rule_engine.direction import calculate_alert_score
+        score = calculate_alert_score("bullish", 1.0, "critical")
+        assert 0 <= score <= 100
+        score = calculate_alert_score("bearish", 1.0, "critical")
+        assert 0 <= score <= 100
+
+
+# =========================================================================
+# Event fingerprint tests
+# =========================================================================
+
+
+class TestEventFingerprint:
+    """Tests for semantic event fingerprinting."""
+
+    def test_same_event_different_titles(self):
+        from api.worker.dedup import extract_event_fingerprint
+        fp1 = extract_event_fingerprint("قیمت طلا به بالای ۵۰۰۰ دلار رسید")
+        fp2 = extract_event_fingerprint("طلا بالای ۵۰۰۰ دلار بازگشت")
+        # Both should extract gold + dollar + 5000
+        assert fp1 == fp2
+
+    def test_different_events_different_fingerprints(self):
+        from api.worker.dedup import extract_event_fingerprint
+        fp1 = extract_event_fingerprint("Gold above 5000 dollars")
+        fp2 = extract_event_fingerprint("Fed rate cut decision")
+        assert fp1 != fp2
+
+    def test_empty_text_returns_empty(self):
+        from api.worker.dedup import extract_event_fingerprint
+        assert extract_event_fingerprint("") == ""
+
+    def test_fingerprint_is_sorted(self):
+        from api.worker.dedup import extract_event_fingerprint
+        fp = extract_event_fingerprint("Gold and silver prices")
+        # Should be alphabetically sorted
+        parts = fp.split("|")
+        assert parts == sorted(parts)

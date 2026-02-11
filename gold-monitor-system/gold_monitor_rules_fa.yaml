@@ -31,6 +31,124 @@ assets:
     name: "صندوق‌های سرمایه‌گذاری طلا در بورس ایران (ETF طلا)"
 
 rules:
+  - id: "GLOB_GOLD_PRICE"
+    section: "global_gold"
+    title: "قیمت طلا و فلزات گرانبها (حرکت قیمتی/رکورد/پیش‌بینی)"
+    what_it_is: "اخبار عمومی حرکت قیمت طلا، رکوردها، پیش‌بینی‌ها و تحلیل بازار."
+    watch_for:
+      keywords:
+        - "gold price"
+        - "gold market"
+        - "gold rises"
+        - "gold drops"
+        - "gold surges"
+        - "gold record"
+        - "gold forecast"
+        - "gold hits"
+        - "gold falls"
+        - "gold climbs"
+        - "gold slips"
+        - "gold steady"
+        - "gold gains"
+        - "precious metals"
+        - "silver and gold"
+        - "gold and silver"
+        - "gold"
+        - "قیمت طلا"
+        - "اونس طلا"
+        - "بازار طلا"
+      signals:
+        - "bullion"
+        - "spot gold"
+        - "gold futures"
+        - "gold rally"
+        - "precious metal"
+        - "gold etf"
+        - "gold trading"
+        - "XAUUSD"
+        - "gold bar"
+        - "troy ounce"
+        - "طلای جهانی"
+        - "شمش طلا"
+        - "فلزات گرانبها"
+        - "نرخ طلا"
+        - "طلای ۱۸ عیار"
+      negative_keywords:
+        - "gold medal"
+        - "gold medalist"
+        - "golden globe"
+        - "golden gate"
+        - "golden state"
+        - "golden age"
+        - "gold coast"
+        - "olympic gold"
+        - "gold rush tv"
+        - "pot of gold"
+        - "Goldman"
+        - "Goldberg"
+        - "Goldstein"
+        - "golfer"
+        - "golf"
+        - "مدال طلا"
+        - "طلای المپیک"
+        - "مدال طلای"
+    why_important: "اخبار مستقیم قیمت طلا مهم‌ترین سیگنال برای معامله‌گران و سرمایه‌گذاران است."
+    impact_hypothesis:
+      typical_effect:
+        - asset: "global_gold"
+          effect: "price_up => bullish sentiment, price_down => bearish sentiment"
+    importance_criteria:
+      high_if:
+        - "رکورد جدید یا حرکت شدید (بیش از ۲٪ در یک روز)"
+        - "پیش‌بینی مهم از نهاد معتبر (Goldman Sachs, JP Morgan, WGC)"
+      medium_if:
+        - "حرکت عادی بازار با تحلیل"
+      low_if:
+        - "تکرار اخبار قبلی بدون داده جدید"
+    horizon: "immediate"
+
+  - id: "IR_GOLD_COIN_PRICE"
+    section: "iran_gold"
+    title: "قیمت طلا، سکه و ارز در بازار ایران"
+    what_it_is: "اخبار عمومی نوسان قیمت طلا، سکه و ارز در بازار داخلی ایران."
+    watch_for:
+      keywords:
+        - "قیمت سکه"
+        - "بازار سکه"
+        - "سکه امامی"
+        - "سکه بهار"
+        - "نرخ سکه"
+      signals:
+        - "حباب سکه"
+        - "سکه طلا"
+        - "نیم سکه"
+        - "ربع سکه"
+        - "سکه گرمی"
+        - "صرافی"
+        - "مثقال"
+        - "قیمت طلا"
+      negative_keywords:
+        - "مدال طلا"
+        - "طلای المپیک"
+        - "مدال طلای"
+        - "قهرمانی"
+    why_important: "قیمت سکه و طلا در ایران مستقیماً به دلار و اونس جهانی وابسته است و تحت تاثیر عرضه و تقاضای داخلی."
+    impact_hypothesis:
+      typical_effect:
+        - asset: "iran_gold"
+          effect: "price_up => bullish"
+        - asset: "coin"
+          effect: "price_up => bullish"
+    importance_criteria:
+      high_if:
+        - "جهش یا ریزش شدید (بیش از ۳٪ در یک روز)"
+        - "رکورد تاریخی شکسته شود"
+      medium_if:
+        - "نوسان عادی با تحلیل"
+      low_if:
+        - "تکرار نرخ‌های روز بدون تحلیل"
+    horizon: "immediate"
+
   - id: "GLOB_RATE_DECISION"
     section: "global_gold"
     title: "تصمیم نرخ بهره (افزایش/کاهش/تثبیت)"
@@ -41,11 +159,14 @@ rules:
         - "rate cut"
         - "hold rates"
         - "interest rate decision"
+        - "interest rate"
         - "FOMC decision"
         - "Fed rate"
         - "ECB rate decision"
         - "BoE rate decision"
         - "BoJ rate decision"
+        - "monetary policy"
+        - "rate decision"
       signals:
         - "افزایش نرخ بهره یا اشاره به افزایش‌های بیشتر"
         - "کاهش نرخ بهره یا اشاره به کاهش‌های آینده"
@@ -109,9 +230,14 @@ rules:
         - "Lagarde"
         - "Bailey"
         - "Ueda"
+        - "Federal Reserve"
+        - "FOMC"
+        - "central bank"
       signals:
         - "تغییر لحن از سختگیرانه به نرم یا برعکس"
         - "اشاره به نگرانی رکود/بحران بانکی"
+        - "rate expectations"
+        - "policy pivot"
     why_important: "لحن سیاست‌گذار می‌تواند حتی بدون تغییر نرخ بهره، بازار را جابه‌جا کند."
     impact_hypothesis:
       typical_effect:
@@ -158,9 +284,16 @@ rules:
         - "dollar index"
         - "USD strengthens"
         - "USD weakens"
+        - "strong dollar"
+        - "weak dollar"
+        - "dollar rises"
+        - "dollar falls"
+        - "US dollar"
       signals:
         - "جهش/سقوط شدید DXY"
         - "دلایل بنیادی تقویت دلار (داده قوی، سیاست سختگیرانه)"
+        - "dollar rally"
+        - "dollar selloff"
     why_important: "دلار قوی معمولاً طلا را تحت فشار می‌گذارد."
     impact_hypothesis:
       typical_effect:
@@ -190,9 +323,21 @@ rules:
         - "PMI"
         - "ISM"
         - "JOLTS"
+        - "inflation data"
+        - "inflation rate"
+        - "consumer prices"
+        - "jobs report"
+        - "nonfarm payrolls"
+        - "jobless claims"
+        - "economic growth"
+        - "inflation"
       signals:
         - "عدد «بالاتر از انتظار» یا «پایین‌تر از انتظار»"
         - "بازنگری‌های بزرگ در داده‌ها"
+        - "beat expectations"
+        - "missed expectations"
+        - "worse than expected"
+        - "better than expected"
     why_important: "غافلگیری داده‌ها می‌تواند مسیر نرخ بهره و دلار را تغییر دهد."
     impact_hypothesis:
       typical_effect:
@@ -211,19 +356,35 @@ rules:
     what_it_is: "رویدادهای امنیتی-سیاسی که ریسک سیستماتیک و تقاضای دارایی امن را بالا می‌برد."
     watch_for:
       keywords:
-        - "war"
+        - "military strike"
         - "escalation"
-        - "strike"
         - "missile"
         - "invasion"
         - "coup"
         - "terror attack"
         - "sanctions"
         - "state of emergency"
+        - "armed conflict"
+        - "trade war"
+        - "tariffs"
+        - "geopolitical"
+        - "Iran sanctions"
+        - "Russia sanctions"
+        - "China tariffs"
       signals:
         - "شروع یا گسترش جنگ"
         - "حمله به زیرساخت انرژی/کشتیرانی"
         - "تحریم‌های بزرگ و ناگهانی"
+        - "safe haven"
+        - "geopolitical risk"
+        - "risk-off"
+        - "flight to safety"
+      negative_keywords:
+        - "star wars"
+        - "bowling strike"
+        - "strike action"
+        - "labor strike"
+        - "workers strike"
     why_important: "افزایش ریسک جهانی غالباً به نفع طلاست."
     impact_hypothesis:
       typical_effect:
@@ -243,9 +404,10 @@ rules:
         - "gold mine production"
         - "output cut"
         - "mine shutdown"
-        - "strike"
+        - "mining strike"
         - "ore grade"
         - "all-in sustaining costs"
+        - "gold mining"
       signals:
         - "افت تولید معنی‌دار یا تعطیلی معدن بزرگ"
         - "گزارش افت عیار یا رشد هزینه استخراج"
@@ -374,9 +536,15 @@ rules:
         - "نیما"
         - "مرکز مبادله"
         - "درهم"
+        - "نرخ ارز"
       signals:
         - "جهش/ریزش ناگهانی نرخ ارز"
         - "تغییر معنادار شکاف نرخ‌ها"
+      negative_keywords:
+        - "نیمار"
+        - "فوتبال"
+        - "جام جهانی"
+        - "ورزشی"
     why_important: "قیمت طلا در ایران تقریباً اونس×دلار است؛ تغییر دلار سریعاً اثر می‌گذارد."
     impact_hypothesis:
       typical_effect:
@@ -541,14 +709,24 @@ rules:
     what_it_is: "کانال سیاسی-اقتصادی اصلی برای دلار و انتظارات."
     watch_for:
       keywords:
-        - "مذاکرات"
+        - "مذاکرات هسته‌ای"
+        - "مذاکرات برجام"
         - "برجام"
-        - "توافق"
+        - "توافق هسته‌ای"
+        - "توافق برجام"
         - "تحریم جدید"
         - "قطعنامه"
+        - "مذاکرات وین"
+        - "تعلیق تحریم"
       signals:
         - "پیشرفت/شکست مهم مذاکرات"
         - "تحریم‌های جدید یا تعلیق تحریم"
+      negative_keywords:
+        - "تجارت مرزی"
+        - "استاندار"
+        - "ورزشی"
+        - "فوتبال"
+        - "شهرداری"
     why_important: "اثر سریع روی نرخ ارز و در نتیجه طلا."
     impact_hypothesis:
       typical_effect:
@@ -691,11 +869,23 @@ rules:
         - "شب عید"
         - "نوروز"
         - "محرم"
-        - "صفر"
+        - "ماه صفر"
         - "مهریه"
         - "فصل عروسی"
       signals:
         - "گزارش افزایش غیرعادی تقاضا یا صف خرید"
+      negative_keywords:
+        - "فوتبال"
+        - "ورزشی"
+        - "لیگ"
+        - "بازی"
+        - "تیم"
+        - "گل"
+        - "بسکتبال"
+        - "والیبال"
+        - "المپیک"
+        - "جام جهانی"
+        - "قهرمانی"
     why_important: "موج تقاضا می‌تواند قیمت را کوتاه‌مدت بالا ببرد."
     impact_hypothesis:
       typical_effect:

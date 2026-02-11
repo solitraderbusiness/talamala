@@ -14,7 +14,12 @@ from datetime import datetime, timezone
 from typing import Any
 
 from api.rule_engine.matcher import MatchResult, normalize_text
+from api.rule_engine.direction import (
+    calculate_alert_score,
+    detect_direction,
+)
 from api.rule_engine.severity import (
+    SEVERITY_CRITICAL,
     SEVERITY_HIGH,
     SEVERITY_MEDIUM,
     calculate_confidence,
@@ -28,6 +33,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _SEVERITY_RANK: dict[str, int] = {
+    SEVERITY_CRITICAL: 4,
     SEVERITY_HIGH: 3,
     SEVERITY_MEDIUM: 2,
     "low": 1,
@@ -42,10 +48,10 @@ _SEVERITY_RANK: dict[str, int] = {
 def generate_dedupe_key(rule_ids: list[str], title: str, source: str) -> str:
     """Generate a stable deduplication key.
 
-    The key is a SHA-256 hex digest of the sorted rule IDs, the normalised
-    title, and the source name.  Two news items that match the same rules,
-    carry the same title, and come from the same source will produce the same
-    key — enabling downstream deduplication.
+    The key is a SHA-256 hex digest of the sorted rule IDs and the normalised
+    title.  Source is intentionally excluded so that the same story reported
+    by multiple outlets (IRNA, Mehr, etc.) produces the same key —
+    preventing duplicate alerts for the same news.
 
     Parameters
     ----------
@@ -54,7 +60,7 @@ def generate_dedupe_key(rule_ids: list[str], title: str, source: str) -> str:
     title:
         News item title (will be normalised).
     source:
-        Source / publisher name (will be normalised).
+        Source / publisher name (kept for API compatibility, not used in hash).
 
     Returns
     -------
@@ -64,7 +70,6 @@ def generate_dedupe_key(rule_ids: list[str], title: str, source: str) -> str:
     parts = [
         ",".join(sorted(rule_ids)),
         normalize_text(title),
-        normalize_text(source),
     ]
     payload = "|".join(parts).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
@@ -129,13 +134,18 @@ def build_alert(
         raw_item.get("source_url", raw_item.get("url", ""))
     )
 
+    # Use Persian title from LLM if available
+    title_fa: str = llm.get("title_fa", "") if llm else ""
+
     # --- matched rule ids ------------------------------------------------- #
     matched_rule_ids: list[str] = [mr.rule.id for mr in match_results]
 
     # --- severity per rule ------------------------------------------------ #
     severity_map: dict[str, str] = {}
     for mr in match_results:
-        sev = determine_severity(item_content, mr.rule)
+        sev = determine_severity(
+            item_content, mr.rule, mr.match_score, title=item_title,
+        )
         severity_map[mr.rule.id] = sev
 
     highest_severity = _pick_highest_severity(list(severity_map.values()))
@@ -143,9 +153,23 @@ def build_alert(
     # --- time horizon (from the highest-severity rule) -------------------- #
     time_horizon = _pick_horizon(match_results, severity_map)
 
-    # --- confidence (average) --------------------------------------------- #
-    confidences = [calculate_confidence(mr) for mr in match_results]
-    avg_confidence = round(sum(confidences) / len(confidences), 4)
+    # --- direction detection (3-stage: regex → lexicon → fallback) -------- #
+    dir_result = detect_direction(item_title, item_content)
+    direction = dir_result["direction"]
+    direction_confidence = dir_result["confidence"]
+    direction_method = dir_result["method"]
+
+    # --- confidence (based on detection method + match quality) ------------ #
+    base_confidences = [calculate_confidence(mr) for mr in match_results]
+    avg_match_confidence = round(sum(base_confidences) / len(base_confidences), 4)
+
+    # Blend match confidence with direction confidence for final value
+    if direction in ("bullish", "bearish"):
+        avg_confidence = round(
+            0.5 * avg_match_confidence + 0.5 * direction_confidence, 4
+        )
+    else:
+        avg_confidence = avg_match_confidence
 
     # --- expected impact -------------------------------------------------- #
     expected_impact = _build_expected_impact(match_results)
@@ -157,6 +181,11 @@ def build_alert(
     )
     follow_up_questions: list[str] = llm.get("follow_up_questions", [])
 
+    # --- per-alert sentiment score ---------------------------------------- #
+    alert_score = calculate_alert_score(
+        direction, direction_confidence, highest_severity,
+    )
+
     # --- dedupe key ------------------------------------------------------- #
     dedupe_key = generate_dedupe_key(matched_rule_ids, item_title, source_name)
 
@@ -164,7 +193,7 @@ def build_alert(
     match_evidence = _build_match_evidence(match_results)
 
     return {
-        "title": item_title,
+        "title": title_fa or item_title,
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "source_name": source_name,
         "source_url": source_url,
@@ -175,6 +204,10 @@ def build_alert(
         "severity": highest_severity,
         "time_horizon": time_horizon,
         "confidence": avg_confidence,
+        "direction": direction,
+        "direction_confidence": direction_confidence,
+        "direction_method": direction_method,
+        "alert_score": alert_score,
         "follow_up_questions": follow_up_questions,
         "dedupe_key": dedupe_key,
         "match_evidence": match_evidence,
@@ -216,8 +249,9 @@ def _build_expected_impact(
     """Aggregate ``impact_hypothesis`` from all matched rules.
 
     Each rule's impact_hypothesis may contain keys like ``asset``,
-    ``direction``, ``mechanism``, or it may contain a list of impacts.
-    We normalise everything into a flat list of dicts with those three keys.
+    ``direction``, ``mechanism``, or a ``typical_effect`` list with
+    ``asset`` and ``effect`` fields.  We normalise everything into a
+    flat list of dicts with ``asset``, ``direction``, ``mechanism``.
     """
     impacts: list[dict[str, str]] = []
     seen: set[str] = set()
@@ -227,26 +261,49 @@ def _build_expected_impact(
         if not hyp:
             continue
 
-        # Handle list-of-dicts or single-dict
+        # Collect candidate item dicts from various YAML layouts
         items: list[dict[str, Any]]
         if "impacts" in hyp and isinstance(hyp["impacts"], list):
             items = hyp["impacts"]
+        elif "typical_effect" in hyp and isinstance(hyp["typical_effect"], list):
+            items = hyp["typical_effect"]
         elif "asset" in hyp:
             items = [hyp]
         else:
-            # Try treating all values as impact dicts
-            items = [v for v in hyp.values() if isinstance(v, dict)]
+            # Try treating all values as impact dicts or lists
+            items = []
+            for v in hyp.values():
+                if isinstance(v, dict):
+                    items.append(v)
+                elif isinstance(v, list):
+                    items.extend(d for d in v if isinstance(d, dict))
             if not items:
-                # Last resort: wrap the whole dict
                 items = [hyp]
 
         for item in items:
             if not isinstance(item, dict):
                 continue
+
+            asset = str(item.get("asset", ""))
+            direction = str(item.get("direction", ""))
+            mechanism = str(item.get("mechanism", "") or item.get("effect", ""))
+
+            # Try to infer direction from effect text when not explicit
+            if not direction and mechanism:
+                ml = mechanism.lower()
+                has_bull = "bullish" in ml or "price_up" in ml
+                has_bear = "bearish" in ml or "price_down" in ml
+                if has_bull and has_bear:
+                    direction = "mixed"
+                elif has_bull:
+                    direction = "up"
+                elif has_bear:
+                    direction = "down"
+
             entry = {
-                "asset": str(item.get("asset", "")),
-                "direction": str(item.get("direction", "")),
-                "mechanism": str(item.get("mechanism", "")),
+                "asset": asset,
+                "direction": direction,
+                "mechanism": mechanism,
             }
             fingerprint = f"{entry['asset']}|{entry['direction']}|{entry['mechanism']}"
             if fingerprint not in seen:

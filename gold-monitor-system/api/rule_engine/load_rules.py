@@ -40,6 +40,7 @@ class Rule:
     importance_criteria: dict[str, list[str]]  # {high_if, medium_if, low_if}
     impact_hypothesis: dict[str, Any]
     horizon: str  # immediate | short | medium | long
+    negative_keywords: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,31 +153,41 @@ def get_rules(yaml_data: dict[str, Any]) -> list[Rule]:
 
     rules: list[Rule] = []
 
-    # The YAML is expected to have a top-level key ``rules`` containing section
-    # dicts, or the sections may live directly at the top level.  We support
-    # both layouts.
+    # The YAML may contain ``rules`` as either:
+    #   A) A flat list of rule dicts (each with its own ``section`` key), or
+    #   B) A dict of section dicts, each containing a ``rules`` list.
+    # We support both layouts.
     sections_container = yaml_data.get("rules", yaml_data)
 
-    for section_key, section_body in sections_container.items():
-        if section_key in ("alert_template", "technical_signals", "meta", "version"):
-            continue
-
-        if not isinstance(section_body, dict):
-            continue
-
-        # Each section may have a ``rules`` list or the items directly.
-        rule_list = section_body.get("rules", [])
-        if isinstance(section_body, dict) and not rule_list:
-            # Maybe the section *is* a single rule dict — skip it.
-            # Or maybe there are sub-keys that are rules.
-            rule_list = _extract_rule_dicts(section_body)
-
-        for item in rule_list:
+    if isinstance(sections_container, list):
+        # Layout A: flat list of rule dicts
+        for item in sections_container:
             if not isinstance(item, dict):
                 continue
-            rule = _dict_to_rule(item, section=section_key)
+            section = str(item.get("section", "unknown"))
+            rule = _dict_to_rule(item, section=section)
             if rule is not None:
                 rules.append(rule)
+    elif isinstance(sections_container, dict):
+        # Layout B: dict of section dicts
+        for section_key, section_body in sections_container.items():
+            if section_key in ("alert_template", "technical_signals", "meta", "version"):
+                continue
+
+            if not isinstance(section_body, dict):
+                continue
+
+            # Each section may have a ``rules`` list or the items directly.
+            rule_list = section_body.get("rules", [])
+            if isinstance(section_body, dict) and not rule_list:
+                rule_list = _extract_rule_dicts(section_body)
+
+            for item in rule_list:
+                if not isinstance(item, dict):
+                    continue
+                rule = _dict_to_rule(item, section=section_key)
+                if rule is not None:
+                    rules.append(rule)
 
     with _cache_lock:
         _cached_rules = list(rules)
@@ -310,15 +321,22 @@ def _dict_to_rule(raw: dict[str, Any], *, section: str) -> Rule | None:
         "low_if": _safe_list(raw_importance.get("low_if")),
     }
 
+    # Keywords/signals may be at top level or nested under ``watch_for``
+    watch_for = _safe_dict(raw.get("watch_for", {}))
+    keywords = raw.get("watch_for_keywords") or watch_for.get("keywords")
+    signals = raw.get("watch_for_signals") or watch_for.get("signals")
+    negative_kw = raw.get("negative_keywords") or watch_for.get("negative_keywords")
+
     return Rule(
         id=str(rule_id),
         section=section,
         title=str(raw.get("title", "")),
         what_it_is=str(raw.get("what_it_is", "")),
-        watch_for_keywords=_safe_list(raw.get("watch_for_keywords")),
-        watch_for_signals=_safe_list(raw.get("watch_for_signals")),
+        watch_for_keywords=_safe_list(keywords),
+        watch_for_signals=_safe_list(signals),
         why_important=str(raw.get("why_important", "")),
         importance_criteria=importance_criteria,
         impact_hypothesis=_safe_dict(raw.get("impact_hypothesis", {})),
         horizon=str(raw.get("horizon", "medium")),
+        negative_keywords=_safe_list(negative_kw),
     )

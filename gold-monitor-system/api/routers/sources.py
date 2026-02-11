@@ -160,20 +160,39 @@ async def fetch_now(
     fetch_status = "success"
 
     try:
-        # Late import to avoid circular dependencies and to keep the router
-        # decoupled from the fetcher implementation.
-        from api.fetcher import run_fetch  # type: ignore[import-untyped]
+        import aiohttp
+        from api.worker.fetchers import get_fetcher
 
-        items = await run_fetch(source)
+        # Build source dict for the fetcher
+        source_dict: dict[str, Any] = {
+            "id": str(source.id),
+            "name": source.name,
+            "type": source.type,
+            "base_url": source.base_url,
+            "endpoints": source.endpoints or [],
+            "method": source.method or "GET",
+            "headers": source.headers or {},
+            "auth_config": source.auth_config or {},
+        }
+        # Ensure endpoints are absolute URLs
+        base_url = (source_dict["base_url"] or "").rstrip("/")
+        if isinstance(source_dict["endpoints"], list) and base_url:
+            source_dict["endpoints"] = [
+                ep if ep.startswith("http") else f"{base_url}{ep}"
+                for ep in source_dict["endpoints"]
+            ]
+
+        fetcher = get_fetcher(source_dict["type"])
+        async with aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=15),
+            headers={"User-Agent": "GoldMonitorWorker/1.0"},
+        ) as http_session:
+            raw_items = await fetcher.fetch(source_dict, http_session)
+
         fetched_items = [
-            {"title": getattr(item, "title", str(item)), "url": getattr(item, "url", "")}
-            for item in (items or [])
+            {"title": item.title, "url": item.url}
+            for item in (raw_items or [])
         ]
-    except ImportError:
-        # Fetcher module not available -- degrade gracefully.
-        logger.warning("Fetcher module not available; returning empty preview")
-        fetch_status = "error"
-        error_message = "Fetcher module not installed or not found"
     except Exception as exc:  # noqa: BLE001
         logger.exception("fetch-now failed for source %s", source_id)
         fetch_status = "error"
@@ -213,6 +232,18 @@ async def fetch_now(
         "duration_ms": duration_ms,
         "error": error_message,
     }
+
+
+# -- POST /sources/{source_id}/fetch (alias for fetch-now) -----------------
+
+
+@router.post("/{source_id}/fetch")
+async def fetch_now_alias(
+    source_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """Alias for fetch-now (frontend calls /fetch)."""
+    return await fetch_now(source_id, db)
 
 
 # -- GET /sources/{source_id}/logs -----------------------------------------

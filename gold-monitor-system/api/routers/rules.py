@@ -37,27 +37,24 @@ async def rules_library() -> dict[str, Any]:
 
     all_rules = get_rules(yaml_data)
 
-    # Group rules by section
-    sections_map: dict[str, dict[str, Any]] = {}
+    # Group rules by section key — frontend expects {section_key: Rule[]}
+    sections_map: dict[str, list[dict[str, Any]]] = {}
     for rule in all_rules:
         if rule.section not in sections_map:
-            sections_map[rule.section] = {
-                "id": rule.section,
-                "title": _section_display_title(rule.section),
-                "rules": [],
-            }
-        sections_map[rule.section]["rules"].append({
+            sections_map[rule.section] = []
+        sections_map[rule.section].append({
             "id": rule.id,
             "title": rule.title,
+            "section": rule.section,
             "what_it_is": rule.what_it_is,
             "why_important": rule.why_important,
             "keywords": rule.watch_for_keywords,
             "signals": rule.watch_for_signals,
             "horizon": rule.horizon,
-            "importance_criteria": rule.importance_criteria,
+            "importance": _format_importance(rule.importance_criteria),
         })
 
-    return {"sections": list(sections_map.values())}
+    return sections_map
 
 
 # -- GET /rules/{rule_id} --------------------------------------------------
@@ -99,3 +96,14 @@ _SECTION_TITLES: dict[str, str] = {
 def _section_display_title(section_key: str) -> str:
     """Map a section key to a human-readable title."""
     return _SECTION_TITLES.get(section_key, section_key.replace("_", " ").title())
+
+
+def _format_importance(criteria: dict[str, list[str]]) -> str:
+    """Format importance_criteria dict into a readable string."""
+    parts: list[str] = []
+    for level in ("high_if", "medium_if", "low_if"):
+        conditions = criteria.get(level, [])
+        if conditions:
+            label = level.replace("_if", "").capitalize()
+            parts.append(f"{label}: {'; '.join(conditions)}")
+    return " | ".join(parts) if parts else ""

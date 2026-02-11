@@ -28,7 +28,7 @@ import signal
 import sys
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +40,8 @@ from sqlalchemy import text
 from api.config import settings
 from api.database import AsyncSessionLocal
 
+from api.alert_classify import classify_alert
+from api.price_snapshot import get_price_snapshot
 from api.worker.dedup import DedupChecker
 from api.worker.fetchers import get_fetcher
 from api.worker.fetchers.base import RawItem
@@ -50,9 +52,12 @@ from api.worker.job_tracker import track_job
 # ---------------------------------------------------------------------------
 _rule_engine_available = False
 try:
+    from api.rule_engine.load_rules import (
+        load_rules as _re_load_yaml,
+        get_rules as _re_get_rules,
+    )
     from api.rule_engine.alert_builder import build_alert as _re_build_alert
     from api.rule_engine.matcher import match_rules as _re_match_rules
-    from api.rule_engine.severity import determine_severity as _re_determine_severity
 
     _rule_engine_available = True
 except ImportError:
@@ -64,7 +69,11 @@ except ImportError:
 CYCLE_INTERVAL = 60  # seconds between cycles
 LOCK_KEY = "worker:lock"
 LOCK_TTL = 55  # seconds — slightly less than CYCLE_INTERVAL
-FETCH_TIMEOUT = 10  # per-request HTTP timeout (seconds)
+FETCH_TIMEOUT = 30  # per-request HTTP timeout (seconds)
+MAX_ALERTS_PER_SOURCE = 10  # prevent any single source from flooding
+MIN_MATCH_SCORE = 0.15  # compound keywords prevent false positives at this threshold
+HIGH_CONFIDENCE_SCORE = 0.30  # above this, skip LLM relevance check
+MAX_ARTICLE_AGE_HOURS = 6  # skip RSS items older than 6 hours for freshness
 
 logger = logging.getLogger("worker")
 
@@ -78,9 +87,13 @@ class Worker:
 
     def __init__(self) -> None:
         self._redis: aioredis.Redis | None = None
-        self._rules: list[dict[str, Any]] = []
+        self._rules: list = []
+        self._use_rule_engine: bool = False
         self._shutdown = asyncio.Event()
         self._http_session: aiohttp.ClientSession | None = None
+        self._price_snapshot: dict[str, float | None] = {
+            "xauusd": None, "usdirr": None, "coin": None, "gold_18k": None,
+        }
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -94,10 +107,25 @@ class Worker:
         self._redis = aioredis.from_url(
             settings.REDIS_URL, decode_responses=True
         )
-        self._rules = _load_rules(settings.YAML_PATH)
+        # Load rules as typed Rule objects when rule engine is available
+        if _rule_engine_available:
+            try:
+                yaml_data = _re_load_yaml(settings.YAML_PATH)
+                self._rules = _re_get_rules(yaml_data)
+                self._use_rule_engine = True
+            except Exception:
+                logger.warning(
+                    "Rule engine load failed — using fallback dict loader",
+                    exc_info=True,
+                )
+                self._rules = _load_rules(settings.YAML_PATH)
+                self._use_rule_engine = False
+        else:
+            self._rules = _load_rules(settings.YAML_PATH)
+            self._use_rule_engine = False
         self._http_session = aiohttp.ClientSession(
             timeout=aiohttp.ClientTimeout(total=FETCH_TIMEOUT),
-            headers={"User-Agent": "GoldMonitorWorker/1.0"},
+            headers={"User-Agent": "Mozilla/5.0 (compatible; GoldMonitor/1.0)"},
         )
 
         # Graceful shutdown on SIGTERM / SIGINT
@@ -181,6 +209,13 @@ class Worker:
 
     async def _run_cycle(self) -> None:
         logger.info("=== Cycle start ===")
+
+        # Fetch current prices once per cycle for stamping on alerts
+        try:
+            self._price_snapshot = await get_price_snapshot(self._redis)
+        except Exception:
+            logger.debug("Price snapshot fetch failed", exc_info=True)
+
         async with track_job(
             job_name="worker_fetch_cycle",
             category="news_scraping",
@@ -214,11 +249,19 @@ class Worker:
                             source.get("name"),
                             source.get("id"),
                         )
-                        await self._record_source_error(
-                            db,
-                            source,
-                            error_msg=_format_exc(),
-                        )
+                        # Rollback the failed transaction before recording error
+                        try:
+                            await db.rollback()
+                        except Exception:
+                            pass
+                        try:
+                            await self._record_source_error(
+                                db,
+                                source,
+                                error_msg=_format_exc(),
+                            )
+                        except Exception:
+                            logger.warning("Could not record source error", exc_info=True)
 
             job_logger.set_items_processed(total_fetched)
             job_logger.add_metadata({
@@ -305,6 +348,14 @@ class Worker:
                 endpoints = [endpoints]
             source["endpoints"] = endpoints
 
+        # Ensure endpoints are absolute URLs (prepend base_url if relative)
+        base_url = (source.get("base_url") or "").rstrip("/")
+        if isinstance(source.get("endpoints"), list) and base_url:
+            source["endpoints"] = [
+                ep if ep.startswith("http") else f"{base_url}{ep}"
+                for ep in source["endpoints"]
+            ]
+
         # Normalise headers/auth_config
         for json_field in ("headers", "auth_config"):
             val = source.get(json_field)
@@ -324,7 +375,12 @@ class Worker:
         # 2-6. Process each item
         new_count = 0
         matched_count = 0
+        age_cutoff = datetime.now(timezone.utc) - timedelta(hours=MAX_ARTICLE_AGE_HOURS)
         for item in raw_items:
+            # Skip old articles (e.g. Google News returning months-old results)
+            if item.published_at and item.published_at < age_cutoff:
+                continue
+
             content_hash = _compute_content_hash(item)
 
             # 3. Dedup raw item
@@ -339,7 +395,9 @@ class Worker:
             await dedup.mark_raw_item(content_hash)
             new_count += 1
 
-            # 5. Match rules and create alerts
+            # 5. Match rules and create alerts (capped per source)
+            if matched_count >= MAX_ALERTS_PER_SOURCE:
+                continue  # already hit limit for this source
             alerts_created = await self._match_and_alert(
                 item, raw_item_id, content_hash, source, db, dedup
             )
@@ -392,7 +450,7 @@ class Worker:
                 "   content_text, published_at, metadata_, created_at) "
                 "VALUES "
                 "  (:id, :source_id, :hash, :title, :url, "
-                "   :content, :pub, :meta::jsonb, :now)"
+                "   :content, :pub, CAST(:meta AS jsonb), :now)"
             ),
             {
                 "id": item_id,
@@ -401,7 +459,7 @@ class Worker:
                 "title": item.title[:2000] if item.title else "",
                 "url": item.url[:2000] if item.url else "",
                 "content": item.content_text,
-                "pub": item.published_at,
+                "pub": _ensure_datetime(item.published_at) if item.published_at else None,
                 "meta": json.dumps(item.metadata or {}, default=str),
                 "now": datetime.now(timezone.utc),
             },
@@ -425,42 +483,207 @@ class Worker:
         if not self._rules:
             return 0
 
-        matched_rules = _match_rules_dispatch(item, self._rules)
+        if self._use_rule_engine:
+            return await self._match_and_alert_engine(
+                item, raw_item_id, content_hash, source, db, dedup,
+            )
+        return await self._match_and_alert_fallback(
+            item, raw_item_id, content_hash, source, db, dedup,
+        )
+
+    async def _match_and_alert_engine(
+        self,
+        item: RawItem,
+        raw_item_id: str,
+        content_hash: str,
+        source: dict[str, Any],
+        db,
+        dedup: DedupChecker,
+    ) -> int:
+        """Rule-engine path: use typed Rule objects and proper matcher API."""
+        match_results = _re_match_rules(
+            item.title or "",
+            item.content_text or "",
+            self._rules,
+        )
+        if not match_results:
+            logger.info(
+                "  No rule matches for: %s",
+                (item.title or "")[:80],
+            )
+            return 0
+
+        # Filter out low-quality matches by minimum score threshold.
+        # Score of 0.10 means at least ~1 compound keyword on a 10-keyword rule.
+        # Compound keywords (e.g. "gold price", "قیمت طلا") are specific enough
+        # that even a single match indicates relevance.
+        top = match_results[0]
+        match_results = [
+            mr for mr in match_results
+            if mr.match_score >= MIN_MATCH_SCORE
+        ]
+        if not match_results:
+            logger.info(
+                "  Best score %.3f (kw=%d sig=%d) < threshold for: %s (rule=%s, kw=%s)",
+                top.match_score,
+                len(top.matched_keywords),
+                len(top.matched_signals),
+                (item.title or "")[:60],
+                top.rule.id,
+                top.matched_keywords[:3],
+            )
+            return 0
+
+        best_score = match_results[0].match_score
+
+        # LLM relevance filter for borderline matches (score < HIGH_CONFIDENCE_SCORE).
+        # High-confidence matches (>= 0.30) skip this check.
+        # This catches false positives like sports articles mentioning "gold".
+        if best_score < HIGH_CONFIDENCE_SCORE:
+            llm_enabled = await self._check_llm_enabled(db)
+            if llm_enabled and settings.OPENROUTER_API_KEY:
+                try:
+                    is_relevant = await self._llm_relevance_check(
+                        item.title or "", item.content_text or "", db=db,
+                    )
+                    if not is_relevant:
+                        logger.info(
+                            "  LLM says NOT relevant (score=%.3f): %s",
+                            best_score,
+                            (item.title or "")[:60],
+                        )
+                        return 0
+                except Exception:
+                    logger.debug(
+                        "LLM relevance check failed, proceeding with alert",
+                        exc_info=True,
+                    )
+
+        logger.info(
+            "  MATCH score=%.3f rules=%d for: %s",
+            best_score,
+            len(match_results),
+            (item.title or "")[:80],
+        )
+
+        # Build a single combined alert from all matched rules
+        raw_item_dict = {
+            "title": item.title or "",
+            "content": item.content_text or "",
+            "source_name": source.get("name", ""),
+            "source_url": item.url or "",
+            "url": item.url or "",
+        }
+
+        alert = _re_build_alert(raw_item_dict, match_results)
+        alert["raw_item_id"] = raw_item_id
+
+        # Persist direction data in match_evidence for the API to read
+        evidence = alert.get("match_evidence", {})
+        evidence["direction"] = alert.get("direction", "neutral")
+        evidence["direction_confidence"] = alert.get("direction_confidence", 0.0)
+        evidence["direction_method"] = alert.get("direction_method", "fallback")
+        evidence["alert_score"] = alert.get("alert_score", 50)
+        alert["match_evidence"] = evidence
+
+        dedupe_key = alert["dedupe_key"]
+
+        if await dedup.is_alert_duplicate(dedupe_key):
+            logger.debug("Skipping duplicate alert: %s", dedupe_key)
+            return 0
+
+        # Semantic event dedup — catches same event with different headlines
+        if await dedup.is_event_duplicate(
+            item.title or "", item.content_text or "",
+        ):
+            logger.info(
+                "  Skipping semantically duplicate event: %s",
+                (item.title or "")[:60],
+            )
+            return 0
+
+        # Optional LLM enrichment
+        llm_enabled = await self._check_llm_enabled(db)
+        if llm_enabled and settings.OPENROUTER_API_KEY:
+            try:
+                llm_result = await self._call_llm(
+                    item.title, item.content_text, db=db,
+                )
+                if llm_result.get("title_fa"):
+                    alert["title"] = llm_result["title_fa"]
+                if llm_result.get("summary_fa"):
+                    alert["summary_fa"] = llm_result["summary_fa"]
+                if llm_result.get("why_important_fa"):
+                    alert["why_important_fa"] = llm_result["why_important_fa"]
+            except Exception:
+                logger.warning(
+                    "LLM enrichment failed for item %s",
+                    item.url,
+                    exc_info=True,
+                )
+
+        # Stamp price snapshot and classification on the alert
+        alert["price_xauusd_at_alert"] = self._price_snapshot.get("xauusd")
+        alert["price_usdirr_at_alert"] = self._price_snapshot.get("usdirr")
+        alert["price_coin_at_alert"] = self._price_snapshot.get("coin")
+        alert["price_18k_at_alert"] = self._price_snapshot.get("gold_18k")
+
+        news_type, event_category = classify_alert(
+            alert.get("matched_rule_ids", [])
+        )
+        alert["news_type"] = news_type
+        alert["event_category"] = event_category
+
+        await self._store_alert(db, alert)
+        await dedup.mark_alert(dedupe_key)
+        await dedup.mark_event(item.title or "", item.content_text or "")
+        return 1
+
+    async def _match_and_alert_fallback(
+        self,
+        item: RawItem,
+        raw_item_id: str,
+        content_hash: str,
+        source: dict[str, Any],
+        db,
+        dedup: DedupChecker,
+    ) -> int:
+        """Fallback path: dict-based rules with simple keyword matching."""
+        matched_rules = _fallback_match_rules(item, self._rules)
         if not matched_rules:
             return 0
 
         logger.debug(
-            "Item %s matched %d rule(s)", item.url, len(matched_rules)
+            "Item %s matched %d rule(s) (fallback)", item.url, len(matched_rules),
         )
 
-        # Check once whether LLM enrichment is enabled
         llm_enabled = await self._check_llm_enabled(db)
-
         alerts_created = 0
+
         for rule in matched_rules:
-            severity = _determine_severity_dispatch(rule, item)
-            alert = _build_alert_dispatch(rule, item, severity, raw_item_id)
+            severity = _fallback_determine_severity(rule)
+            alert = _fallback_build_alert(rule, item, severity, raw_item_id)
             dedupe_key = alert.get(
                 "dedupe_key",
                 f"{rule.get('id', 'unknown')}:{content_hash}",
             )
             alert["dedupe_key"] = dedupe_key
 
-            # Dedup check
             if await dedup.is_alert_duplicate(dedupe_key):
                 logger.debug("Skipping duplicate alert: %s", dedupe_key)
                 continue
 
-            # Optional LLM enrichment
             if llm_enabled and settings.OPENROUTER_API_KEY:
                 try:
                     llm_result = await self._call_llm(
-                        item.title, item.content_text
+                        item.title, item.content_text, db=db,
                     )
-                    alert["summary_fa"] = llm_result.get("summary_fa")
-                    alert["why_important_fa"] = llm_result.get(
-                        "why_important_fa"
-                    )
+                    if llm_result.get("title_fa"):
+                        alert["title"] = llm_result["title_fa"]
+                    if llm_result.get("summary_fa"):
+                        alert["summary_fa"] = llm_result["summary_fa"]
+                    if llm_result.get("why_important_fa"):
+                        alert["why_important_fa"] = llm_result["why_important_fa"]
                 except Exception:
                     logger.warning(
                         "LLM enrichment failed for item %s",
@@ -468,7 +691,6 @@ class Worker:
                         exc_info=True,
                     )
 
-            # Persist
             await self._store_alert(db, alert)
             await dedup.mark_alert(dedupe_key)
             alerts_created += 1
@@ -484,23 +706,30 @@ class Worker:
                 "   matched_rule_ids, summary_fa, why_important_fa, "
                 "   expected_impact, severity, time_horizon, confidence, "
                 "   follow_up_questions, dedupe_key, raw_item_id, "
-                "   match_evidence, created_at) "
+                "   match_evidence, "
+                "   price_xauusd_at_alert, price_usdirr_at_alert, "
+                "   price_coin_at_alert, price_18k_at_alert, "
+                "   news_type, event_category, "
+                "   created_at) "
                 "VALUES "
                 "  (:id, :title, :ts, :source_name, :source_url, "
-                "   :rule_ids::jsonb, :summary_fa, :why_important_fa, "
-                "   :impact::jsonb, :severity, :time_horizon, :confidence, "
-                "   :questions::jsonb, :dedupe_key, :raw_item_id, "
-                "   :evidence::jsonb, :now)"
+                "   CAST(:rule_ids AS jsonb), :summary_fa, :why_important_fa, "
+                "   CAST(:impact AS jsonb), :severity, :time_horizon, :confidence, "
+                "   CAST(:questions AS jsonb), :dedupe_key, :raw_item_id, "
+                "   CAST(:evidence AS jsonb), "
+                "   :p_xauusd, :p_usdirr, :p_coin, :p_18k, "
+                "   :news_type, :event_category, "
+                "   :now)"
             ),
             {
                 "id": alert_id,
                 "title": alert.get("title", ""),
-                "ts": alert.get("timestamp_utc", datetime.now(timezone.utc).isoformat()),
+                "ts": _ensure_datetime(alert.get("timestamp_utc")),
                 "source_name": alert.get("source_name", ""),
                 "source_url": alert.get("source_url", ""),
                 "rule_ids": json.dumps(alert.get("matched_rule_ids", []), default=str),
-                "summary_fa": alert.get("summary_fa", ""),
-                "why_important_fa": alert.get("why_important_fa", ""),
+                "summary_fa": _ensure_str(alert.get("summary_fa", "")),
+                "why_important_fa": _ensure_str(alert.get("why_important_fa", "")),
                 "impact": json.dumps(alert.get("expected_impact", {}), default=str),
                 "severity": alert.get("severity", "medium"),
                 "time_horizon": alert.get("time_horizon", "short"),
@@ -509,6 +738,12 @@ class Worker:
                 "dedupe_key": alert.get("dedupe_key", ""),
                 "raw_item_id": alert.get("raw_item_id"),
                 "evidence": json.dumps(alert.get("match_evidence", {}), default=str),
+                "p_xauusd": alert.get("price_xauusd_at_alert"),
+                "p_usdirr": alert.get("price_usdirr_at_alert"),
+                "p_coin": alert.get("price_coin_at_alert"),
+                "p_18k": alert.get("price_18k_at_alert"),
+                "news_type": alert.get("news_type"),
+                "event_category": alert.get("event_category"),
                 "now": datetime.now(timezone.utc),
             },
         )
@@ -523,7 +758,7 @@ class Worker:
             result = await db.execute(
                 text(
                     "SELECT value FROM settings "
-                    "WHERE key = 'llm_enabled' LIMIT 1"
+                    "WHERE key = 'enable_llm' LIMIT 1"
                 )
             )
             row = result.scalar_one_or_none()
@@ -535,23 +770,103 @@ class Worker:
             )
         return False
 
-    async def _call_llm(
-        self, title: str, content: str
-    ) -> dict[str, str | None]:
-        """Call OpenRouter to generate Farsi summary and importance note."""
+    async def _llm_relevance_check(
+        self, title: str, content: str, db=None,
+    ) -> bool:
+        """Quick LLM check: is this article relevant to gold/financial markets?
+
+        Uses a minimal prompt (~100 tokens) to verify borderline matches.
+        Returns True if relevant, True on any error (fail-open).
+        """
+        text = title
+        if content:
+            text += "\n" + content[:500]
+
+        model = await self._get_llm_model(db) if db else "anthropic/claude-sonnet-4"
+
         prompt = (
-            "You are a gold-market analyst assistant. Given the following news "
-            "item, provide:\n"
-            "1. A concise summary in Farsi (summary_fa)\n"
-            "2. A brief explanation of why this is important for gold market "
-            "participants in Farsi (why_important_fa)\n\n"
-            f"Title: {title}\n\n"
-            f"Content: {content[:3000]}\n\n"
-            "Respond in JSON with keys: summary_fa, why_important_fa"
+            "Is this news article relevant to ANY of these topics? "
+            "Gold/precious metals, currency/forex, interest rates, "
+            "central bank policy, economic data, geopolitics affecting markets, "
+            "Iranian economy, stock market crisis.\n\n"
+            f"Article: {text[:600]}\n\n"
+            "Reply with ONLY 'YES' or 'NO'."
         )
 
         payload = {
-            "model": "openai/gpt-4o-mini",
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0,
+            "max_tokens": 5,
+        }
+        headers = {
+            "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+            "Content-Type": "application/json",
+        }
+
+        try:
+            async with self._http_session.post(  # type: ignore[union-attr]
+                "https://openrouter.ai/api/v1/chat/completions",
+                json=payload,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                resp.raise_for_status()
+                data = await resp.json()
+
+            reply = (
+                data.get("choices", [{}])[0]
+                .get("message", {})
+                .get("content", "")
+                .strip()
+                .upper()
+            )
+            is_relevant = reply.startswith("YES")
+            logger.debug(
+                "LLM relevance check: %s → %s",
+                title[:60] if title else "?",
+                "YES" if is_relevant else "NO",
+            )
+            return is_relevant
+        except Exception:
+            logger.debug("LLM relevance check failed, assuming relevant", exc_info=True)
+            return True  # Fail-open: let it through on error
+
+    async def _get_llm_model(self, db) -> str:
+        """Read the configured LLM model from settings, with fallback."""
+        try:
+            result = await db.execute(
+                text("SELECT value FROM settings WHERE key = 'openrouter_model' LIMIT 1")
+            )
+            row = result.scalar_one_or_none()
+            if row and isinstance(row, str):
+                cleaned = row.strip().strip('"')
+                if cleaned:
+                    return cleaned
+        except Exception:
+            pass
+        return "anthropic/claude-sonnet-4"
+
+    async def _call_llm(
+        self, title: str, content: str, db=None,
+    ) -> dict[str, str | None]:
+        """Call OpenRouter to generate Persian title, summary, and importance note."""
+        model = await self._get_llm_model(db) if db else "anthropic/claude-sonnet-4"
+
+        prompt = (
+            "You are a Persian-language gold-market analyst. Given the following news "
+            "item, generate text in Persian (فارسی). Respond ONLY with a valid JSON object.\n\n"
+            "Required JSON keys:\n"
+            '- "title_fa": A short Persian headline (max 80 chars) capturing the main point\n'
+            '- "summary_fa": A concise summary in Persian (2-3 sentences)\n'
+            '- "why_important_fa": Why this matters for the gold market in Persian (2-3 bullet points with "- " prefix)\n\n'
+            f"Title: {title}\n\n"
+            f"Content: {content[:3000]}\n\n"
+            "Respond with ONLY the JSON object. No extra text."
+        )
+
+        payload = {
+            "model": model,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.3,
             "max_tokens": 1024,
@@ -576,15 +891,33 @@ class Worker:
             .get("content", "")
         )
 
+        # Strip markdown fences if present
+        text_content = reply.strip()
+        if text_content.startswith("```"):
+            first_nl = text_content.find("\n")
+            if first_nl != -1:
+                text_content = text_content[first_nl + 1:]
+            if text_content.endswith("```"):
+                text_content = text_content[:-3]
+            text_content = text_content.strip()
+
         # Try to parse as JSON; fall back to raw text.
         try:
-            parsed = json.loads(reply)
+            parsed = json.loads(text_content)
+            # Ensure text fields are strings (LLM sometimes returns lists)
+            why_fa = parsed.get("why_important_fa")
+            if isinstance(why_fa, list):
+                why_fa = "\n".join(str(x) for x in why_fa)
+            summary_fa = parsed.get("summary_fa")
+            if isinstance(summary_fa, list):
+                summary_fa = "\n".join(str(x) for x in summary_fa)
             return {
-                "summary_fa": parsed.get("summary_fa"),
-                "why_important_fa": parsed.get("why_important_fa"),
+                "title_fa": parsed.get("title_fa"),
+                "summary_fa": summary_fa,
+                "why_important_fa": why_fa,
             }
         except (json.JSONDecodeError, TypeError):
-            return {"summary_fa": reply, "why_important_fa": None}
+            return {"title_fa": None, "summary_fa": reply, "why_important_fa": None}
 
     # ------------------------------------------------------------------
     # Source status updates
@@ -689,39 +1022,6 @@ class Worker:
 
 
 # ===================================================================
-# Rule-engine dispatch (with built-in fallback)
-# ===================================================================
-
-def _match_rules_dispatch(
-    item: RawItem, rules: list[dict[str, Any]]
-) -> list[dict[str, Any]]:
-    """Use the real rule_engine if available, otherwise fall back to
-    simple keyword matching."""
-    if _rule_engine_available:
-        return _re_match_rules(item, rules)  # type: ignore[arg-type]
-    return _fallback_match_rules(item, rules)
-
-
-def _determine_severity_dispatch(
-    rule: dict[str, Any], item: RawItem
-) -> str:
-    if _rule_engine_available:
-        return _re_determine_severity(rule, item)  # type: ignore[arg-type]
-    return _fallback_determine_severity(rule)
-
-
-def _build_alert_dispatch(
-    rule: dict[str, Any],
-    item: RawItem,
-    severity: str,
-    raw_item_id: str,
-) -> dict[str, Any]:
-    if _rule_engine_available:
-        return _re_build_alert(rule, item, severity, raw_item_id)  # type: ignore[arg-type]
-    return _fallback_build_alert(rule, item, severity, raw_item_id)
-
-
-# ===================================================================
 # Built-in fallback rule matching (used when rule_engine is absent)
 # ===================================================================
 
@@ -754,15 +1054,19 @@ def _fallback_build_alert(
     return {
         "id": str(uuid.uuid4()),
         "raw_item_id": raw_item_id,
-        "rule_id": rule_id,
-        "rule_name": rule.get("name", "Unknown Rule"),
+        "matched_rule_ids": [rule_id],
         "severity": severity,
+        "time_horizon": rule.get("horizon", "short"),
+        "confidence": 0.5,
         "dedupe_key": f"{rule_id}:{item.url}",
-        "title": item.title,
-        "source_url": item.url,
-        "summary_fa": None,
-        "why_important_fa": None,
-        "metadata": {},
+        "title": item.title or "",
+        "source_name": "",
+        "source_url": item.url or "",
+        "summary_fa": (item.content_text or "")[:200],
+        "why_important_fa": rule.get("why_important", ""),
+        "expected_impact": [],
+        "follow_up_questions": [],
+        "match_evidence": {},
     }
 
 
@@ -785,6 +1089,31 @@ def _load_rules(yaml_path: str) -> list[dict[str, Any]]:
     except Exception:
         logger.exception("Failed to load rules from %s", path)
         return []
+
+
+def _ensure_str(value: Any) -> str:
+    """Coerce *value* to a string. Lists are joined with newlines."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return "\n".join(str(x) for x in value)
+    return str(value) if value is not None else ""
+
+
+def _ensure_datetime(value: Any) -> datetime:
+    """Convert *value* to a ``datetime`` object.
+
+    asyncpg requires native datetime objects for ``timestamptz`` columns — it
+    does not accept ISO-format strings.
+    """
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value)
+        except (ValueError, TypeError):
+            pass
+    return datetime.now(timezone.utc)
 
 
 def _compute_content_hash(item: RawItem) -> str:

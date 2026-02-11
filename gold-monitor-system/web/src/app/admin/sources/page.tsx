@@ -19,7 +19,7 @@ interface SourceFormData {
   type: string;
   base_url: string;
   enabled: boolean;
-  poll_interval: number;
+  poll_interval_seconds: number;
 }
 
 const emptyForm: SourceFormData = {
@@ -27,7 +27,7 @@ const emptyForm: SourceFormData = {
   type: "rss",
   base_url: "",
   enabled: true,
-  poll_interval: 300,
+  poll_interval_seconds: 300,
 };
 
 export default function AdminSourcesPage() {
@@ -73,7 +73,7 @@ export default function AdminSourcesPage() {
       type: source.type,
       base_url: source.base_url,
       enabled: source.enabled,
-      poll_interval: source.poll_interval,
+      poll_interval_seconds: source.poll_interval_seconds,
     });
     setEditingId(source.id);
     setShowForm(true);
@@ -188,9 +188,8 @@ export default function AdminSourcesPage() {
                   className="select-field"
                 >
                   <option value="rss">RSS</option>
-                  <option value="api">API</option>
-                  <option value="scraper">Scraper</option>
-                  <option value="telegram">Telegram</option>
+                  <option value="html">HTML</option>
+                  <option value="json_api">JSON API</option>
                 </select>
               </div>
               <div className="sm:col-span-2">
@@ -214,11 +213,11 @@ export default function AdminSourcesPage() {
                 </label>
                 <input
                   type="number"
-                  value={form.poll_interval}
+                  value={form.poll_interval_seconds}
                   onChange={(e) =>
                     setForm({
                       ...form,
-                      poll_interval: parseInt(e.target.value) || 300,
+                      poll_interval_seconds: parseInt(e.target.value) || 300,
                     })
                   }
                   min={60}
@@ -291,7 +290,7 @@ export default function AdminSourcesPage() {
                       {source.base_url}
                     </p>
                     <p className="mt-1 text-xs text-gray-400">
-                      نوع: {source.type} | فاصله: {source.poll_interval} ثانیه
+                      نوع: {source.type} | فاصله: {source.poll_interval_seconds} ثانیه
                     </p>
                   </div>
                   <div className="flex flex-wrap gap-2">
@@ -364,9 +363,9 @@ export default function AdminSourcesPage() {
                                   {log.status}
                                 </span>
                               </td>
-                              <td className="py-1">{log.items_fetched}</td>
+                              <td className="py-1">{log.items_fetched_count}</td>
                               <td className="py-1 text-red-500">
-                                {log.error || "-"}
+                                {log.error_message || "-"}
                               </td>
                             </tr>
                           ))}

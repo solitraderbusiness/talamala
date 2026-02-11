@@ -7,13 +7,21 @@ Uses ``aiohttp`` to download the feed and ``feedparser`` to parse it.
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
+from html import unescape as html_unescape
 from typing import Any
 
 import feedparser
 
 from api.worker.fetchers.base import BaseFetcher, RawItem
+
+# Maximum entries to process per feed (Google News returns 100; cap to avoid
+# flooding the pipeline on every cycle).
+MAX_ENTRIES_PER_FEED = 30
+
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
 
 logger = logging.getLogger(__name__)
 
@@ -52,8 +60,8 @@ class RSSFetcher(BaseFetcher):
             )
 
         items: list[RawItem] = []
-        for entry in feed.entries:
-            title = entry.get("title", "").strip()
+        for entry in feed.entries[:MAX_ENTRIES_PER_FEED]:
+            title = _strip_html(entry.get("title", "")).strip()
             link = entry.get("link", url).strip()
             content_text = _extract_content(entry)
             published_at = _parse_date(entry)
@@ -101,18 +109,30 @@ def _normalise_endpoints(endpoints: Any) -> list[str]:
     return []
 
 
+def _strip_html(html: str) -> str:
+    """Strip HTML tags and decode entities to get plain text."""
+    if not html:
+        return ""
+    text = _HTML_TAG_RE.sub(" ", html)
+    text = html_unescape(text)
+    # Collapse whitespace
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
 def _extract_content(entry: dict) -> str:
     """Pull the best available text from an RSS/Atom entry."""
+    raw = ""
     # Prefer content (Atom full content), then summary, then description
     if entry.get("content"):
         parts = entry["content"]
         if isinstance(parts, list) and parts:
-            return parts[0].get("value", "").strip()
-    if entry.get("summary"):
-        return entry["summary"].strip()
-    if entry.get("description"):
-        return entry["description"].strip()
-    return ""
+            raw = parts[0].get("value", "").strip()
+    if not raw and entry.get("summary"):
+        raw = entry["summary"].strip()
+    if not raw and entry.get("description"):
+        raw = entry["description"].strip()
+    return _strip_html(raw)
 
 
 def _parse_date(entry: dict) -> datetime | None:
