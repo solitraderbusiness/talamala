@@ -1,859 +1,106 @@
-# CLAUDE.md — Gold Monitor System
+# Talamala - Gold Market Monitor (سامانه رصد طلا)
 
-## 1. Project Overview
+## What This Is
+Real-time gold market intelligence system for Persian (Farsi) users. Monitors news sources (RSS, HTML, JSON APIs), matches against YAML-based rules, generates severity-rated alerts with optional Persian LLM summaries. Two sub-projects: `gold-monitor-system/` (production) and `gold-monitor/` (legacy prototype with mock data).
 
-**Gold Monitor** (سامانه رصد طلا) is a real-time gold market intelligence and alerting system built for **Persian (Farsi) users**. It monitors news sources (RSS, HTML, JSON APIs) for gold-market-relevant content, matches items against a deterministic YAML-based rule engine, and generates alerts with severity levels and optional Persian-language LLM summaries.
+## Tech Stack
+- **Frontend:** Next.js 14, React 18, TypeScript 5, Tailwind CSS 3, Vazirmatn font (Persian RTL)
+- **Backend:** Python 3.12, FastAPI, SQLAlchemy 2.0 (asyncpg), Pydantic v2
+- **Database:** PostgreSQL 16, Redis 7 (cache + dedup + worker lock)
+- **Deployment:** Docker Compose (5 services: db, redis, api, worker, web)
+- **AI/LLM:** OpenRouter API (Claude Sonnet 4) — text generation only, never classification
 
-**Key goals:**
-- Automated monitoring of global and Iranian gold market news
-- Deterministic rule-based alert classification (no LLM for severity/scoring)
-- Persian RTL dashboard for market analysts
-- Admin panel for managing sources and LLM settings
-- Deduplication via Redis (fast) + PostgreSQL (durable)
-
-The repo contains two sub-projects:
-- **`gold-monitor-system/`** — The full-stack production system (API + Worker + Web + Docker)
-- **`gold-monitor/`** — An earlier standalone Next.js prototype with mock data (no backend)
-
-## 2. Tech Stack
-
-### Backend (Python 3.12)
-- **FastAPI** — REST API framework with async support
-- **SQLAlchemy 2.0** — Async ORM (`asyncpg` driver) + sync engine (`psycopg2`) for Alembic
-- **Alembic** — Database migrations
-- **Pydantic v2 / pydantic-settings** — Request/response schemas and config
-- **Redis (async)** — Deduplication cache, worker distributed lock
-- **aiohttp** — HTTP client for worker fetchers
-- **feedparser** — RSS/Atom feed parsing
-- **BeautifulSoup4 + lxml** — HTML content extraction
-- **PyYAML** — Rule file parsing
-- **python-jose** — JWT authentication (HS256)
-- **passlib + bcrypt** — Password hashing
-- **httpx** — OpenRouter API client
-- **hazm** — Persian NLP library (installed but not yet heavily used)
-- **pytest + pytest-asyncio** — Testing
-
-### Frontend (TypeScript)
-- **Next.js 14** (App Router) — React framework
-- **React 18** — UI library
-- **TypeScript 5** — Type safety
-- **Tailwind CSS 3** — Utility-first styling
-- **Vazirmatn** — Persian font (loaded via CDN)
-
-### Infrastructure
-- **PostgreSQL 16** (Alpine) — Primary data store
-- **Redis 7** (Alpine) — Cache and worker coordination
-- **Docker Compose** — 5-service orchestration
-- **Node 22** (Alpine) — Web container base image
-
-### External Services
-- **OpenRouter API** — LLM text generation (optional; default model: `anthropic/claude-sonnet-4`)
-
-## 3. Architecture
-
-```
-┌─────────────────┐     ┌──────────────────┐     ┌──────────────────┐
-│   Next.js Web   │────▶│   FastAPI API     │     │   Worker         │
-│   :3000         │     │   :8000           │     │   (60s loop)     │
-│   (RTL/Persian) │     │   REST endpoints  │     │   fetch→match→   │
-└─────────────────┘     └────────┬──────────┘     │   alert pipeline │
-       │                         │                 └────────┬─────────┘
-       │ /api/* rewrite          │                          │
-       └─────────────────────────┘                          │
-                                 │                          │
-                          ┌──────▼──────────────────────────▼──────┐
-                          │        PostgreSQL 16 + Redis 7         │
-                          │        :5432              :6379        │
-                          └────────────────────────────────────────┘
-                                                    │
-                                           ┌────────▼────────┐
-                                           │  OpenRouter API  │
-                                           │  (optional LLM)  │
-                                           └─────────────────┘
-```
-
-### Service Roles
-
-| Service | Image / Build | Port | Purpose |
-|---------|---------------|------|---------|
-| `db` | `postgres:16-alpine` | 5432 | Primary data store (10 tables) |
-| `redis` | `redis:7-alpine` | 6379 | Dedup cache, worker lock |
-| `api` | `api/Dockerfile` (Python 3.12) | 8000 | FastAPI REST API + startup migrations |
-| `worker` | Same image as `api` | — | Periodic fetch-match-alert pipeline (60s cycle) |
-| `web` | `web/Dockerfile` (Node 22) | 3000 | Next.js frontend (proxies `/api/*` to API) |
-
-### Data Flow (every 60 seconds)
-1. Worker acquires Redis distributed lock (`worker:lock`, 55s TTL)
-2. Fetches current price snapshot (Redis cache → BrsAPI → TGJU fallback)
-3. Queries enabled sources whose `poll_interval_seconds` has elapsed
-4. Fetches content via appropriate fetcher (RSS/HTML/JSON)
-5. Deduplicates raw items by SHA-256 content hash (Redis 24h TTL → DB fallback)
-6. Matches items against YAML rules (keyword + signal substring matching)
-7. Determines severity deterministically from `importance_criteria`
-8. Classifies alert: `news_type` (price_report/causal_event/mixed/commentary) + `event_category` (fed_policy/geopolitics/iran_forex/etc.)
-9. Stamps 4 market prices at alert creation time (XAUUSD, USD/IRR, Emami coin, 18K gold)
-10. Optionally enriches with LLM-generated Persian text (OpenRouter)
-11. Persists alerts and fetch log entries
-
-### Background Jobs (API process)
-- **Calendar sync** (`calendar_sync.py`): Fetches economic events from JBlanked + Finnhub every 6 hours
-- **Price outcome tracker** (`price_tracker.py`): Every 15 minutes, checks prices 1h/4h/24h after each alert to verify directional accuracy. Results stored in `alert_price_outcomes` table.
-
-### API Proxy
-The Next.js frontend uses `next.config.js` rewrites to proxy `/api/*` requests to the FastAPI backend (`INTERNAL_API_URL`, default `http://api:8000`). The web client's `api.ts` uses relative paths (empty `API_URL`).
-
-## 4. Folder Structure
-
-```
-talamala/
-├── CLAUDE.md                                    ← This file
-├── README.md                                    ← Repo root readme
-├── gold-monitor-system/                         ← Production full-stack system
-│   ├── docker-compose.yml                       ← 5 services: db, redis, api, worker, web
-│   ├── .env.example                             ← Environment variable template
-│   ├── .gitignore
-│   ├── README.md                                ← Detailed project documentation
-│   ├── gold_monitor_rules_fa.yaml               ← 32+ monitoring rules (Persian)
-│   ├── api/                                     ← Python backend
-│   │   ├── Dockerfile                           ← Python 3.12 slim
-│   │   ├── requirements.txt                     ← Python dependencies
-│   │   ├── __init__.py
-│   │   ├── main.py                              ← FastAPI app factory + startup lifecycle
-│   │   ├── config.py                            ← Pydantic settings (env vars)
-│   │   ├── database.py                          ← SQLAlchemy async/sync engines
-│   │   ├── models.py                            ← ORM models (10 tables)
-│   │   ├── schemas.py                           ← Pydantic request/response schemas
-│   │   ├── auth.py                              ← JWT + bcrypt authentication
-│   │   ├── seed.py                              ← Standalone data seeder script
-│   │   ├── price_snapshot.py                    ← Shared price fetcher (Redis→BrsAPI→TGJU)
-│   │   ├── alert_classify.py                    ← Rule ID → news_type + event_category mapping
-│   │   ├── alembic.ini                          ← Alembic configuration
-│   │   ├── alembic/
-│   │   │   ├── env.py
-│   │   │   ├── script.py.mako
-│   │   │   └── versions/
-│   │   │       ├── 001_initial_schema.py        ← Initial migration (7 tables + seeds)
-│   │   │       ├── 002_add_economic_events.py   ← Economic events table
-│   │   │       └── 003_add_price_tracking.py    ← Price tracking columns + outcomes table
-│   │   ├── routers/
-│   │   │   ├── __init__.py
-│   │   │   ├── alerts.py                        ← GET /api/alerts, /stats/today, /{id}
-│   │   │   ├── sources.py                       ← CRUD + fetch-now + logs (admin-only)
-│   │   │   ├── admin.py                         ← Login, settings, user info
-│   │   │   ├── rules.py                         ← Rule library + single rule
-│   │   │   ├── prices.py                        ← Real-time prices via TGJU API
-│   │   │   ├── sentiment.py                     ← Multi-timeframe sentiment analysis + history
-│   │   │   ├── calendar.py                      ← Economic event calendar API
-│   │   │   └── health.py                        ← Health check (DB + Redis + rules)
-│   │   ├── rule_engine/
-│   │   │   ├── __init__.py                      ← Public API re-exports
-│   │   │   ├── load_rules.py                    ← YAML parser → Rule dataclasses (cached)
-│   │   │   ├── matcher.py                       ← Persian-aware keyword/signal matching
-│   │   │   ├── severity.py                      ← Deterministic severity from criteria
-│   │   │   ├── direction.py                     ← 3-stage direction detection (regex→lexicon→LLM)
-│   │   │   └── alert_builder.py                 ← Alert dict assembly + dedupe key
-│   │   ├── calendar_config.py                    ← Event translations, asset mappings, gold impact notes
-│   │   ├── worker/
-│   │   │   ├── __init__.py
-│   │   │   ├── main.py                          ← Worker loop (60s cycle) + pipeline
-│   │   │   ├── calendar_sync.py                 ← Calendar sync (JBlanked + Finnhub, 6h interval)
-│   │   │   ├── price_tracker.py                 ← Background price outcome tracker (15min loop)
-│   │   │   ├── dedup.py                         ← Redis + DB deduplication checker
-│   │   │   └── fetchers/
-│   │   │       ├── __init__.py                  ← Fetcher registry (get_fetcher)
-│   │   │       ├── base.py                      ← BaseFetcher ABC + RawItem dataclass
-│   │   │       ├── rss_fetcher.py               ← RSS/Atom via feedparser
-│   │   │       ├── html_fetcher.py              ← HTML via BeautifulSoup
-│   │   │       └── json_fetcher.py              ← JSON API with configurable field mapping
-│   │   ├── llm/
-│   │   │   ├── __init__.py
-│   │   │   └── openrouter_client.py             ← Persian text generation (summary, why_important)
-│   │   └── tests/
-│   │       ├── __init__.py
-│   │       ├── test_matcher.py                  ← Rule matching tests
-│   │       ├── test_severity.py                 ← Severity determination tests
-│   │       └── test_alert_builder.py            ← Alert building tests
-│   └── web/                                     ← Next.js frontend
-│       ├── Dockerfile                           ← Multi-stage Node 22 build
-│       ├── package.json
-│       ├── package-lock.json
-│       ├── next.config.js                       ← API proxy rewrites
-│       ├── tsconfig.json
-│       ├── tailwind.config.ts                   ← Gold color palette, Vazirmatn font
-│       ├── postcss.config.js
-│       ├── next-env.d.ts
-│       ├── public/.gitkeep
-│       └── src/
-│           ├── app/
-│           │   ├── globals.css                  ← Tailwind + component classes + dark mode
-│           │   ├── layout.tsx                   ← Root layout (RTL, lang="fa", Vazirmatn)
-│           │   ├── page.tsx                     ← Dashboard (stats, risk gauge, alert feed)
-│           │   ├── not-found.tsx                ← 404 page
-│           │   ├── alert/[id]/page.tsx          ← Alert detail view
-│           │   ├── calendar/page.tsx            ← Economic event calendar (list/week views)
-│           │   ├── prices/page.tsx              ← Price history & details page
-│           │   ├── library/page.tsx             ← Rule library browser
-│           │   └── admin/
-│           │       ├── layout.tsx               ← Admin auth guard + tab navigation
-│           │       ├── login/page.tsx           ← Admin login form
-│           │       ├── sources/page.tsx         ← Source CRUD + fetch logs
-│           │       └── settings/page.tsx        ← LLM settings management
-│           ├── components/
-│           │   ├── TopBar.tsx                   ← Navigation bar + links
-│           │   ├── AlertCard.tsx                ← Alert summary card
-│           │   ├── RiskGauge.tsx                ← SVG half-circle sentiment gauge (0-100)
-│           │   ├── SentimentChart.tsx            ← SVG sentiment history line chart
-│           │   └── SeverityBadge.tsx            ← Colored severity label
-│           └── lib/
-│               ├── api.ts                       ← API client + TypeScript types
-│               ├── auth.ts                      ← localStorage JWT token management
-│               └── utils.ts                     ← Persian formatters + helpers
-│
-└── gold-monitor/                                ← Earlier standalone prototype (mock data)
-    ├── README.md
-    ├── DESIGN_NOTES.md
-    ├── PROGRESS.md                              ← Detailed implementation tracker
-    ├── package.json                             ← Next.js 16 + Tailwind v4
-    ├── gold_monitor_rules_fa.yaml               ← Subset of rules
-    └── src/
-        ├── app/                                 ← 4 pages: dashboard, market, alert, library
-        ├── components/                          ← 17 UI components (layout, ui, dashboard)
-        ├── context/AppContext.tsx               ← Central state management
-        ├── data/                                ← Mock alerts (18), markets (4), rules (32)
-        ├── lib/                                 ← Constants + utils
-        └── types/index.ts                       ← TypeScript types
-```
-
-## 5. Setup & Deployment
-
-### Prerequisites
-- Docker and Docker Compose
-
-### Quick Start
+## Key Commands
 ```bash
-cd gold-monitor-system
-cp .env.example .env
-# Edit .env — set OPENROUTER_API_KEY if you want LLM summaries
-docker compose up -d
+# Start everything
+cd gold-monitor-system && docker compose up -d
+
+# Rebuild and restart
+docker compose up -d --build
+
+# View logs
+docker compose logs -f worker    # Worker fetch cycles
+docker compose logs -f api       # API logs
+docker compose logs -f web       # Next.js
+
+# Restart specific service
+docker compose restart worker
+
+# Run tests
+cd gold-monitor-system && pip install -r api/requirements.txt && python -m pytest api/tests/ -v
+
+# Database access
+docker compose exec db psql -U goldmon -d goldmonitor
+
+# Health check
+curl http://localhost:8000/api/health
 ```
 
-### Access Points
+## Services & Architecture
+Five Docker services: **PostgreSQL** (port 5432, 10 tables), **Redis** (6379, dedup cache + worker lock), **FastAPI API** (8000, REST endpoints + auto-migrations on startup), **Worker** (same image as API, 60s fetch-match-alert pipeline), **Next.js Web** (3000, RTL Persian dashboard, proxies `/api/*` to API). Worker acquires Redis distributed lock (55s TTL), fetches enabled sources, deduplicates via SHA-256 content hash, matches against YAML rules, determines severity deterministically, optionally enriches with LLM Persian text, persists alerts. Background jobs: calendar sync (6h), price outcome tracker (15min).
+
+## Code Conventions
+- **Async-first**: all DB ops use `AsyncSession` via asyncpg; worker uses aiohttp for HTTP
+- **Python**: snake_case files/functions/vars, PascalCase classes; routers in `api/routers/`, fetchers in `api/worker/fetchers/`
+- **TypeScript**: camelCase functions/vars, PascalCase components; pages in `src/app/`, components in `src/components/`
+- **API routes**: `/api/{resource}` with kebab-case multi-word paths
+- **Rule IDs**: `SECTION_DESCRIPTIVE_NAME` (e.g., `GLOB_RATE_DECISION`, `IR_FX_USD`)
+- **Pydantic v2**: `ConfigDict(from_attributes=True, populate_by_name=True)`, Persian field aliases
+- **UUID PKs** and **UTC timestamps** everywhere
+- **LLM never classifies** — severity/confidence/time_horizon are always deterministic from rules
+- **Compound keywords** in rules (multi-word like "gold price") to prevent false positives
+- **RTL layout**: `<html lang="fa" dir="rtl">`, Vazirmatn font, gold color palette
+
+## Active Work (update each session)
+- [ ] Fix news source reliability (English feeds, negative keywords, LLM relevance filter)
+- [ ] Impact matrix per alert (data exists in YAML, not displayed)
+- [ ] Per-market pages (`/market/[marketId]`)
+
+## Known Issues
+- CORS fully permissive (`allow_origins=["*"]`) — restrict for production
+- `fetchSourceNow` calls `/api/sources/{id}/fetch` but API route is `/fetch-now`
+- Older alerts lack `direction`/`alert_score` in `match_evidence` (default to neutral)
+- Older alerts lack price stamps (only after migration 003)
+- `news_type`/`event_category` only populated after migration 003
+- Gold fund rules exist in YAML but no data sources feed them (TSETMC disabled)
+- Passwords truncated to 72 bytes for bcrypt (`auth.py:_truncate_for_bcrypt`)
+
+## Environment Variables
+Key vars in `gold-monitor-system/.env` (see `.env.example`):
+- `DATABASE_URL` / `DATABASE_URL_SYNC` — PostgreSQL connection strings
+- `REDIS_URL` — Redis connection
+- `OPENROUTER_API_KEY` — LLM text generation (optional)
+- `BRSAPI_KEY` — BrsAPI market data (optional, TGJU fallback)
+- `SECRET_KEY` — JWT signing secret
+- `ADMIN_EMAIL` / `ADMIN_PASSWORD` — Default: `admin@goldmonitor.ir` / `admin123`
+- `INTERNAL_API_URL` — API URL for Next.js proxy (default: `http://api:8000`)
+
+## Access Points
 | Service | URL |
 |---------|-----|
 | Frontend | http://localhost:3000 |
-| Admin panel | http://localhost:3000/admin/login |
-| API docs (Swagger) | http://localhost:8000/docs |
-| API health | http://localhost:8000/api/health |
-
-### Default Admin Credentials
-- Email: `admin@goldmonitor.ir`
-- Password: `admin123`
-
-### Environment Variables (.env)
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `POSTGRES_USER` | PostgreSQL username | `goldmon` |
-| `POSTGRES_PASSWORD` | PostgreSQL password | `goldmon_secret` |
-| `POSTGRES_DB` | Database name | `goldmonitor` |
-| `DATABASE_URL` | Async DB connection (asyncpg) | `postgresql+asyncpg://...@db:5432/goldmonitor` |
-| `DATABASE_URL_SYNC` | Sync DB connection (psycopg2) | `postgresql://...@db:5432/goldmonitor` |
-| `REDIS_URL` | Redis connection | `redis://redis:6379/0` |
-| `OPENROUTER_API_KEY` | OpenRouter API key (optional) | empty |
-| `BRSAPI_KEY` | BrsAPI market data key (brsapi.ir) | empty |
-| `SECRET_KEY` | JWT signing secret | `change-me-to-a-random-string` |
-| `ADMIN_EMAIL` | Default admin email | `admin@goldmonitor.ir` |
-| `ADMIN_PASSWORD` | Default admin password | `admin123` |
-| `NEXT_PUBLIC_API_URL` | API URL for client-side (unused in Docker; proxy handles it) | `http://localhost:8000` |
-| `INTERNAL_API_URL` | API URL for server-side Next.js proxy | `http://api:8000` |
-
-### Startup Sequence
-1. API runs Alembic migrations (`upgrade head`)
-2. Seeds default admin user if not exists
-3. Creates `sentiment_scores` table if not exists (via `checkfirst=True`)
-4. Takes a snapshot of the YAML rules file
-5. Runs one-time dedup flush (versioned marker `v10`) to reset Redis dedup after rule changes
-6. Worker starts 60-second fetch cycle
-
-### Running Tests
-```bash
-cd gold-monitor-system
-pip install -r api/requirements.txt
-python -m pytest api/tests/ -v
-```
-
-## 6. API Endpoints
-
-### Public Endpoints
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/alerts` | List alerts (filterable: severity, time_horizon, asset, q, from_date, to_date; paginated: limit, offset) |
-| `GET` | `/api/alerts/stats/today` | Today's stats: sentiment score, severity counts, top 3 alerts, sections |
-| `GET` | `/api/alerts/{id}` | Single alert detail |
-| `GET` | `/api/prices` | Real-time gold, USD, coin prices via TGJU (30s cache) |
-| `GET` | `/api/sentiment` | Multi-timeframe sentiment analysis (1h, 4h, 24h) with numeric scores |
-| `GET` | `/api/sentiment/history` | Historical sentiment scores for charting (params: timeframe, hours) |
-| `GET` | `/api/rules/library` | All rules grouped by section |
-| `GET` | `/api/rules/{rule_id}` | Single rule with full metadata |
-| `GET` | `/api/health` | Health check: DB, Redis, rules count, last worker run |
-| `GET` | `/api/calendar` | Economic events calendar (filterable: from, to, asset, impact) |
-| `GET` | `/api/calendar/upcoming` | Next upcoming high-impact events (params: limit, impact) |
-| `GET` | `/api/calendar/sync-status` | Calendar sync status (last synced, total events) |
-| `POST` | `/api/calendar/sync` | Trigger manual calendar sync |
-
-### Admin Endpoints (JWT required)
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/api/admin/login` | Authenticate, returns JWT access token |
-| `GET` | `/api/admin/me` | Current admin profile |
-| `GET` | `/api/admin/settings` | List all key-value settings |
-| `PUT` | `/api/admin/settings/{key}` | Create/update a setting |
-| `GET` | `/api/sources` | List all sources (alphabetical) |
-| `GET` | `/api/sources/{id}` | Single source detail |
-| `POST` | `/api/sources` | Create a new source |
-| `PUT` | `/api/sources/{id}` | Partial update a source |
-| `DELETE` | `/api/sources/{id}` | Delete source + cascade |
-| `POST` | `/api/sources/{id}/fetch-now` | Trigger immediate fetch |
-| `GET` | `/api/sources/{id}/logs` | Fetch logs (last 50) |
-| `GET` | `/api/sources/{id}/raw-items` | Raw items (last 50, searchable) |
-
-### Sentiment Score (3-Layer Weighted Formula)
-The dashboard's sentiment gauge shows a 0-100 numeric score per timeframe (1h, 4h, 24h), computed deterministically:
-
-**Layer 1 — Per-alert signal:** `RSS_i = Polarity × Confidence`
-- Polarity: +1 (bullish) / -1 (bearish) / 0 (neutral), from per-alert direction detection
-- Neutral polarity = 0 (contributes nothing to directional signal)
-
-**Layer 2 — Importance weighting:** `WS_i = RSS_i × W_imp`
-- Weights: critical=4.0, high=2.0, medium=1.0, low=0.5
-
-**Layer 3 — Exponential time decay:** `W_time = e^(-λ × hours_ago)`
-- λ: 1h=2.0, 4h=0.5, 24h=0.1
-
-**Aggregation:**
-- `raw = Σ(WS_i × W_time_i) / Σ(|W_imp_i × W_time_i|) × 100` → [-100, +100]
-- Volume dampening: `min(1.0, n / threshold)` where thresholds are 1h=10, 4h=20, 24h=30
-- **Directional ratio dampening**: If most alerts are neutral (no clear direction), the score is pulled toward 50. `directional_ratio = directional_alerts / total_alerts`; raw score is multiplied by this ratio before final mapping.
-- Final: `50 + dampened / 2` clamped to [0, 100]
-
-**Score → Category mapping:**
-- 80+ = very_bullish (بسیار صعودی), 65-79 = bullish (صعودی), 55-64 = slightly_bullish (نسبتا صعودی), 45-54 = neutral (خنثی), 35-44 = slightly_bearish (نسبتا نزولی), 20-34 = bearish (نزولی), <20 = very_bearish (بسیار نزولی)
-
-The LLM is used ONLY for generating text (summary, key_drivers, outlook). The numeric score is always deterministic.
-- Scores persist to `sentiment_scores` table on each API call
-- `/api/alerts/stats/today` returns the latest 4h score as `risk_score`
-- Historical scores via `/api/sentiment/history?timeframe=4h&hours=48`
-
-### Prices API
-Real-time prices with 60-second Redis cache:
-- **Primary**: BrsAPI (`brsapi.ir/Api/Market/Gold_Currency.php`) — requires `BRSAPI_KEY` env var. Prices already in Toman.
-- **Fallback**: TGJU (`call4.tgju.org/ajax.json`) — used when BrsAPI key not set. Prices in Rial (÷10 for Toman).
-- Returns: gold_global (USD/oz), gold_18k (toman/gram), usd (toman), emami_coin (toman)
-- Each price includes: `value`, `formatted`, `change`, `change_pct`, `direction` (up/down/flat)
-
-## 7. Data Sources
-
-### Fetcher Types
-| Type | Class | Method |
-|------|-------|--------|
-| `rss` | `RSSFetcher` | feedparser-based RSS/Atom parsing |
-| `html` | `HTMLFetcher` | BeautifulSoup text extraction (supports CSS selectors via `metadata.css_selector`) |
-| `json` | `JSONFetcher` | Configurable field mapping via `metadata` (`title_field`, `url_field`, `content_field`, `date_field`, `items_path`) |
-
-### Configured News Sources
-The worker fetches from these RSS sources (via Google News and direct feeds):
-
-**International (English):**
-1. **Reuters Gold** (RSS) — `news.google.com/rss/search?q=gold+price+reuters` — poll: 120s
-2. **Kitco Gold** (RSS) — `news.google.com/rss/search?q=gold+kitco+price` — poll: 120s
-3. **Bloomberg Commodities** (RSS) — `news.google.com/rss/search?q=gold+commodities+bloomberg` — poll: 180s
-4. **CNBC Gold** (RSS) — `news.google.com/rss/search?q=gold+cnbc+market` — poll: 180s
-5. **Investing.com Gold** (RSS) — `news.google.com/rss/search?q=gold+investing.com+price` — poll: 120s
-6. **Goldbroker** (RSS) — `goldbroker.com/feed` — poll: 300s
-7. **GoodReturns Gold** (RSS) — `news.google.com/rss/search?q=gold+price+good+returns` — poll: 300s
-8. **Commodity-TV Gold** (RSS) — `news.google.com/rss/search?q=gold+commodity-tv` — poll: 300s
-9. **DailyForex Gold** (RSS) — `news.google.com/rss/search?q=gold+dailyforex` — poll: 300s
-
-**Iranian/Persian:**
-10. **خبر فارسی - طلا** (RSS) — `khabarfarsi.com/rss/gold` — poll: 180s
-
-**Note:** Persian Google News feeds were disabled (migration v6) as they return zero items from outside Iran. All Persian gold news now comes via international sources that mention gold-related Persian keywords.
-
-### External APIs
-- **OpenRouter** (`https://openrouter.ai/api/v1/chat/completions`) — Persian text generation for alert summaries and sentiment analysis. Only called when `OPENROUTER_API_KEY` is set.
-- **BrsAPI** (`https://brsapi.ir/Api/Market/Gold_Currency.php`) — Primary price data source for gold, currency, and coins. Requires `BRSAPI_KEY`. Prices in Toman.
-- **TGJU** (`https://call4.tgju.org/ajax.json`) — Fallback price data when BrsAPI is unavailable. No API key required. Prices in Rial.
-
-## 8. Database Schema
-
-**10 tables**, all using UUID primary keys and UTC timestamps.
-
-### sources
-Configurable data sources for the worker to fetch.
-| Column | Type | Notes |
-|--------|------|-------|
-| `id` | UUID | PK |
-| `name` | VARCHAR(255) | Display name |
-| `type` | VARCHAR(20) | `rss`, `html`, `json_api`, `websocket`, `file`, `custom` |
-| `base_url` | VARCHAR(2048) | Root URL |
-| `endpoints` | JSONB | List of paths to fetch |
-| `method` | VARCHAR(10) | HTTP method (default: GET) |
-| `headers` | JSONB | Custom HTTP headers |
-| `auth_config` | JSONB | Auth configuration |
-| `parser` | VARCHAR(255) | Parser identifier |
-| `enabled` | BOOLEAN | Whether worker should fetch |
-| `poll_interval_seconds` | INTEGER | Fetch frequency (default: 60) |
-| `categories` | JSONB | Category tags |
-| `rule_bindings` | JSONB | Which rules to match against |
-| `reliability_score` | FLOAT | Source reliability (0-1) |
-| `last_fetched_at` | TIMESTAMPTZ | Last fetch attempt |
-| `last_success_at` | TIMESTAMPTZ | Last successful fetch |
-| `last_error` | TEXT | Last error message |
-
-### raw_items
-Fetched news items, deduplicated by content hash.
-| Column | Type | Notes |
-|--------|------|-------|
-| `id` | UUID | PK |
-| `source_id` | UUID | FK → sources (CASCADE) |
-| `title` | VARCHAR(1024) | |
-| `url` | VARCHAR(2048) | |
-| `published_at` | TIMESTAMPTZ | Original publish date |
-| `fetched_at` | TIMESTAMPTZ | When worker fetched it |
-| `content_text` | TEXT | Extracted content |
-| `content_hash` | VARCHAR(64) | SHA-256 for dedup (indexed) |
-| `metadata` | JSONB | Extra fields |
-
-### alerts
-Generated alerts with severity, impact, and Persian text.
-| Column | Type | Notes |
-|--------|------|-------|
-| `id` | UUID | PK |
-| `title` | VARCHAR(1024) | |
-| `timestamp_utc` | TIMESTAMPTZ | |
-| `source_name` | VARCHAR(255) | |
-| `source_url` | VARCHAR(2048) | |
-| `matched_rule_ids` | JSONB | List of rule IDs that matched |
-| `summary_fa` | TEXT | Persian summary (LLM or truncated content) |
-| `why_important_fa` | TEXT | Persian importance explanation |
-| `expected_impact` | JSONB | Impact on assets [{asset, direction, mechanism}] |
-| `severity` | VARCHAR(10) | `critical`, `high`, `medium`, `low` (deterministic) |
-| `time_horizon` | VARCHAR(20) | `immediate`, `short`, `medium`, `long` |
-| `confidence` | FLOAT | 0.3–0.95 (from match score) |
-| `follow_up_questions` | JSONB | List of Persian follow-up questions |
-| `dedupe_key` | VARCHAR(255) | Unique constraint for dedup |
-| `raw_item_id` | UUID | FK → raw_items (SET NULL) |
-| `match_evidence` | JSONB | {rule_id: {keywords: [], signals: []}, direction, direction_confidence, direction_method, alert_score} |
-| `price_xauusd_at_alert` | FLOAT | Gold price (USD/oz) at alert creation (nullable) |
-| `price_usdirr_at_alert` | FLOAT | USD/IRR rate at alert creation (nullable) |
-| `price_coin_at_alert` | FLOAT | Emami coin price (Toman) at alert creation (nullable) |
-| `price_18k_at_alert` | FLOAT | 18K gold price (Toman/gram) at alert creation (nullable) |
-| `news_type` | VARCHAR(50) | `price_report`, `causal_event`, `mixed`, `commentary` (nullable) |
-| `event_category` | VARCHAR(50) | `fed_policy`, `geopolitics`, `iran_forex`, `gold_price`, etc. (nullable) |
-
-### fetch_logs
-Per-source fetch history with timing and error tracking.
-| Column | Type | Notes |
-|--------|------|-------|
-| `id` | UUID | PK |
-| `source_id` | UUID | FK → sources (CASCADE) |
-| `started_at` | TIMESTAMPTZ | |
-| `finished_at` | TIMESTAMPTZ | |
-| `status` | VARCHAR(20) | `success` or `error` |
-| `items_fetched_count` | INTEGER | |
-| `error_message` | TEXT | |
-| `duration_ms` | INTEGER | |
-
-### settings
-Key-value configuration store.
-| Column | Type | Notes |
-|--------|------|-------|
-| `key` | VARCHAR(255) | PK |
-| `value` | JSONB | |
-| `updated_at` | TIMESTAMPTZ | |
-
-Default settings: `openrouter_model`, `temperature`, `max_tokens`, `enable_llm`, `dedupe_window_hours`
-
-### admin_users
-Admin credentials with bcrypt-hashed passwords.
-| Column | Type | Notes |
-|--------|------|-------|
-| `id` | UUID | PK |
-| `email` | VARCHAR(320) | Unique |
-| `password_hash` | VARCHAR(255) | bcrypt |
-| `role` | VARCHAR(50) | Default: `admin` |
-
-### rules_snapshot
-YAML version tracking (SHA-256 hash of content).
-| Column | Type | Notes |
-|--------|------|-------|
-| `id` | UUID | PK |
-| `version` | VARCHAR(100) | SHA-256 prefix (12 chars) |
-| `yaml_content` | TEXT | Full YAML content |
-| `loaded_at` | TIMESTAMPTZ | |
-
-### sentiment_scores
-Historical sentiment scores for charting (created by sentiment API on each call).
-| Column | Type | Notes |
-|--------|------|-------|
-| `id` | UUID | PK |
-| `timeframe` | VARCHAR(10) | `1h`, `4h`, `24h` |
-| `score` | INTEGER | 0-100 numeric score |
-| `sentiment` | VARCHAR(20) | `very_bullish`, `bullish`, `slightly_bullish`, `neutral`, `slightly_bearish`, `bearish`, `very_bearish` |
-| `sentiment_label` | VARCHAR(50) | Persian label (e.g., صعودی) |
-| `alert_count` | INTEGER | Number of alerts in that window |
-| `created_at` | TIMESTAMPTZ | Auto-set to now() |
-
-Indexed on `(timeframe, created_at)` for efficient history queries.
-
-### economic_events
-Cached economic calendar events from external APIs (JBlanked / Finnhub).
-| Column | Type | Notes |
-|--------|------|-------|
-| `id` | UUID | PK |
-| `event_name` | VARCHAR(512) | English event name |
-| `event_name_fa` | VARCHAR(512) | Persian translation |
-| `country` | VARCHAR(10) | Country code (US, EU, JP, etc.) |
-| `currency` | VARCHAR(10) | Currency code (USD, EUR, JPY, etc.) |
-| `category` | VARCHAR(50) | Event category |
-| `datetime_utc` | TIMESTAMPTZ | Event date/time in UTC |
-| `impact` | VARCHAR(10) | `high`, `medium`, `low` |
-| `actual` | VARCHAR(100) | Actual value (nullable, filled after release) |
-| `forecast` | VARCHAR(100) | Market consensus forecast (nullable) |
-| `previous` | VARCHAR(100) | Previous period value (nullable) |
-| `source` | VARCHAR(50) | `mql5`, `finnhub` |
-| `affected_assets` | JSONB | Array of affected asset IDs |
-| `created_at` | TIMESTAMPTZ | |
-| `updated_at` | TIMESTAMPTZ | |
-
-Unique constraint on `(event_name, datetime_utc)` for upsert dedup.
-Indexed on `datetime_utc`, `impact`, `currency`.
-
-### alert_price_outcomes
-Price changes tracked at 1h/4h/24h after each alert for directional accuracy analysis.
-| Column | Type | Notes |
-|--------|------|-------|
-| `id` | UUID | PK |
-| `alert_id` | UUID | FK → alerts (CASCADE) |
-| `check_interval` | VARCHAR(10) | `1h`, `4h`, `24h` |
-| `checked_at` | TIMESTAMPTZ | When the price check ran |
-| `price_xauusd` | FLOAT | Gold price at check time (nullable) |
-| `price_usdirr` | FLOAT | USD/IRR at check time (nullable) |
-| `price_coin` | FLOAT | Emami coin at check time (nullable) |
-| `price_18k` | FLOAT | 18K gold at check time (nullable) |
-| `change_pct_xauusd` | FLOAT | % change from alert time (nullable) |
-| `change_pct_usdirr` | FLOAT | % change from alert time (nullable) |
-| `change_pct_coin` | FLOAT | % change from alert time (nullable) |
-| `change_pct_18k` | FLOAT | % change from alert time (nullable) |
-| `direction_correct` | BOOLEAN | Did price move in predicted direction? (nullable) |
-
-Unique constraint on `(alert_id, check_interval)`.
-
-### Relationships
-- `sources` → `raw_items` (one-to-many, CASCADE delete)
-- `sources` → `fetch_logs` (one-to-many, CASCADE delete)
-- `raw_items` → `alerts` (one-to-one optional, SET NULL on delete)
-- `alerts` → `alert_price_outcomes` (one-to-many, CASCADE delete)
-
-## 9. Key Conventions
-
-### Code Patterns
-- **Async-first**: All DB operations use `AsyncSession` via `asyncpg`. Worker uses `aiohttp` for HTTP.
-- **Dependency injection**: FastAPI `Depends()` for DB sessions and auth guards.
-- **Pydantic v2**: All request/response schemas use `model_config = ConfigDict(from_attributes=True, populate_by_name=True)`.
-- **Persian field aliases**: Schema fields have Persian aliases (e.g., `Field(..., alias="عنوان")`) for bilingual API responses.
-- **UUID primary keys**: All tables use `uuid.uuid4()` as default.
-- **UTC timestamps**: All `datetime` fields use `timezone.utc`.
-
-### Rule Engine Design (Critical)
-- **LLM is NEVER used for classification.** Severity, time horizon, and confidence are always deterministic.
-- The LLM (OpenRouter) generates Persian text (`summary_fa`, `why_important_fa`, `follow_up_questions`) and serves as a last-resort fallback for direction detection (Stage 3).
-- Rules are defined in `gold_monitor_rules_fa.yaml` with 4 sections: `global_gold`, `iran_gold`, `coin`, `gold_funds`.
-- Matching uses Persian-normalized substring matching (`matcher.py:normalize_text`): NFC normalization, diacritic stripping, Arabic→Persian character mapping (yaa, kaf), ZWNJ→space, lowercase.
-- **Compound keywords**: Catch-all rules use multi-word keywords like "gold price", "قیمت طلا" instead of bare "gold", "طلا" to prevent false positives from non-market articles (sports medals, land supply, etc.).
-- Match score: 60% keyword ratio + 40% signal ratio (when rule has both; pure ratio when only one type).
-- **Severity**: Event-type classification with 4 levels: `critical`, `high`, `medium`, `low`. Critical-level events detected via regex patterns (war/conflict, Fed rate decisions, sanctions, currency crises, etc.). Remaining levels use `importance_criteria` conditions checked in priority order `high_if → medium_if → low_if`, with score-based fallback (high: score >= 0.35 or >= 0.25 for immediate-horizon rules; low: score < 0.15; medium: everything else).
-- Confidence: linear map from match_score to [0.3, 0.95].
-
-### Per-Alert Direction Detection
-3-stage pipeline in `direction.py` to determine market direction for each alert:
-
-**Stage 1 — Regex patterns** (catches ~60%): Flexible word-order patterns with `.{0,N}` gaps match explicit directional phrases (e.g., "gold rises", "prices fall", "rate cut"). High confidence (0.7-0.9).
-
-**Stage 2 — Lexicon scoring** (catches ~20% more): Gold-domain word weights (bullish/bearish terms) are summed across title + content. Net score above threshold determines direction. Medium confidence (0.5-0.6).
-
-**Stage 3 — LLM fallback** (last resort): If Stages 1-2 return neutral/low-confidence, the alert is queued for LLM batch direction detection via OpenRouter. Returns direction with LLM-reported confidence.
-
-**Output per alert:** `direction` (bullish/bearish/neutral), `direction_confidence` (0.0-1.0), `direction_method` (regex/lexicon/llm).
-
-### Per-Alert Score
-Each alert receives a computed score (0-100) stored in `match_evidence` JSONB:
-
-**Formula:** `alert_score = 50 + sign × swing × severity_multiplier`
-- `sign`: +1 (bullish), -1 (bearish), 0 (neutral → score always 50)
-- `swing`: `15 + (confidence - 0.3) × (30 / 0.7)` — maps confidence [0.3, 1.0] to swing [15, 45]
-- `severity_multiplier`: critical=1.0, high=0.8, medium=0.6, low=0.35
-
-Result is clamped to [0, 100]. Bullish critical alerts with high confidence score near 95; bearish ones near 5.
-
-### Deduplication
-- **Raw items**: SHA-256 of `title|url|content_text`. Redis key `raw_items:hash:<hash>` with 24h TTL. DB fallback.
-- **Alerts**: `dedupe_key` = SHA-256 of sorted rule IDs + normalized title (source intentionally excluded for cross-source dedup — same story from IRNA/Mehr/ISNA produces same key). Redis key `alert:dedup:<key>` with configurable window (default 6h from settings table).
-- **Semantic event fingerprinting**: Extracts entities (instruments, organizations, events, numbers) from title + content to build an event fingerprint. Same underlying event with different headlines produces the same fingerprint, preventing duplicate alerts across sources. Redis key `event:fp:<fingerprint>` with 4h TTL.
-
-### Frontend Patterns
-- **RTL layout**: `<html lang="fa" dir="rtl">` in root layout.
-- **Vazirmatn font**: Loaded via CDN, applied globally.
-- **Component CSS classes**: Defined in `globals.css` using `@layer components` (`.card`, `.btn-primary`, `.btn-secondary`, `.input-field`, `.select-field`).
-- **Gold color palette**: Custom `gold-50` through `gold-900` in Tailwind config.
-- **Dark mode**: Class-based (`darkMode: "class"` in Tailwind).
-- **Auth**: JWT token stored in `localStorage` under key `gold_monitor_token`.
-- **API client**: Centralized in `lib/api.ts` with typed functions. Uses Next.js rewrites for API proxy.
-
-### Naming
-- Python: snake_case for files, functions, variables. PascalCase for classes.
-- TypeScript: camelCase for functions/variables, PascalCase for components/interfaces.
-- API routes: `/api/{resource}` pattern with kebab-case for multi-word paths.
-- Rule IDs: `SECTION_DESCRIPTIVE_NAME` (e.g., `GLOB_RATE_DECISION`, `IR_FX_USD`).
-
-### File Organization
-- Backend routers go in `api/routers/`. Each has its own `APIRouter` with tags.
-- Worker fetchers go in `api/worker/fetchers/`. Each extends `BaseFetcher`.
-- Frontend pages use Next.js App Router (`src/app/`). Components in `src/components/`.
-- Shared types and API client in `src/lib/`.
-
-## 10. Current Status
-
-### Working
-- Full Docker Compose orchestration (5 services with health checks)
-- API with all endpoints (alerts, sources, admin, rules, health, prices, sentiment, calendar)
-- Database schema with Alembic migrations (3 versions) + startup table creation
-- Worker pipeline: fetch → dedup → match → classify → stamp prices → alert (60s cycle)
-- Three fetcher types (RSS, HTML, JSON)
-- Deterministic rule engine with 32+ rules (compound keywords + signals to prevent false positives)
-- Event-type severity classification with 4 levels including "critical" (regex patterns for war, Fed decisions, sanctions, etc.)
-- 3-stage direction detection per alert (regex patterns → lexicon scoring → LLM fallback)
-- Per-alert direction and sentiment score (server-computed, stored in match_evidence)
-- Semantic event deduplication (entity fingerprinting prevents same event with different headlines)
-- Persian text normalization for matching
-- JWT authentication for admin endpoints
-- Web dashboard with:
-  - Real-time price cards (gold, USD, coin) with change % and directional colors
-  - Multi-timeframe sentiment gauge (1h/4h/Daily) with chart toggle
-  - Categorized alert sections (global_gold, iran_gold, coin, gold_funds)
-  - Alert feed with severity/time-horizon filters and pagination
-  - Smart auto-refresh: 60s for data, sentiment refreshes on new alert detection (2min fallback)
-  - Smooth CSS transitions for sentiment updates
-- Admin panel (sources CRUD, settings, login)
-- Alert detail page with:
-  - Expected impact table (handles both array and dict formats)
-  - Clean source URL display with "مشاهده منبع" button
-  - Bullet-point rendering for why_important_fa
-  - English title detection with Persian fallback
-- Rule library browser
-- Cross-source deduplication (same news from IRNA/Mehr/ISNA produces one alert)
-- OpenRouter LLM integration for text generation (summary, key_drivers, outlook)
-- **Deterministic 3-layer weighted sentiment scoring** (polarity × confidence × importance × time decay × volume dampening × directional ratio dampening)
-- Sentiment scoring system (0-100) with historical persistence
-- 16 RSS sources (9 international, 1 Persian, 6 disabled)
-- Worker LLM type safety (_ensure_str helper prevents list-to-str crashes)
-- Rule engine unit tests (matcher, severity, alert_builder, direction) — 136 tests passing
-- **Economic Event Calendar** — JBlanked + Finnhub APIs, 6h auto-sync, ~120 Persian translations, gold impact notes, asset/impact filters, list/week views, dashboard widget
-- **Price tracking at alert time** — 4 market prices (XAUUSD, USD/IRR, coin, 18K gold) stamped on every new alert
-- **Alert classification** — news_type (price_report/causal_event/mixed/commentary) + event_category (fed_policy/geopolitics/iran_forex/etc.) auto-assigned from rule IDs
-- **Price outcome tracking** — background job checks prices 1h/4h/24h after each alert, stores change %, verifies directional accuracy
-
-### Known Issues
-- CORS is fully permissive (`allow_origins=["*"]`) — needs restriction for production
-- Passwords are truncated to 72 bytes for bcrypt compatibility (`auth.py:_truncate_for_bcrypt`)
-- Web frontend's `fetchSourceNow` calls `/api/sources/{id}/fetch` but the API route is `/api/sources/{id}/fetch-now`
-- The `gold-monitor/` prototype uses mock data only; not connected to the backend
-- Older alerts lack `direction`/`alert_score` in `match_evidence` — polarity defaults to neutral for sentiment calculation
-- Older alerts lack price stamps (`price_xauusd_at_alert` etc.) — price outcome tracking only works for alerts created after migration 003
-- `news_type`/`event_category` only populated for alerts created after migration 003
-
-## 11. Common Tasks
-
-### Add a New Data Source
-1. Log in to admin: `http://localhost:3000/admin/login`
-2. Go to Sources tab, click "Add Source"
-3. Fill in: name, type (rss/html/json_api), base_url, endpoints (JSON array), poll_interval, categories, rule_bindings
-4. Toggle enabled, click Save
-5. Use "Fetch Now" to test
-
-### Add a New Rule
-1. Edit `gold-monitor-system/gold_monitor_rules_fa.yaml`
-2. Add a new rule entry under the appropriate section with: `id`, `section`, `title`, `what_it_is`, `watch_for.keywords`, `watch_for.signals`, `why_important`, `importance_criteria` (high_if/medium_if/low_if), `impact_hypothesis`, `horizon`
-3. Restart the API and worker to reload rules: `docker compose restart api worker`
-
-### Update the Frontend UI
-1. Edit files in `gold-monitor-system/web/src/`
-2. For new pages: add under `src/app/` (Next.js App Router)
-3. For new components: add under `src/components/`
-4. Rebuild: `docker compose build web && docker compose up -d web`
-
-### Restart Services
-```bash
-cd gold-monitor-system
-docker compose restart           # Restart all
-docker compose restart worker    # Restart just the worker
-docker compose up -d --build     # Rebuild and restart
-```
-
-### Check Logs
-```bash
-docker compose logs -f api       # API logs
-docker compose logs -f worker    # Worker logs (fetch cycles)
-docker compose logs -f web       # Next.js logs
-docker compose logs -f db        # PostgreSQL logs
-```
-
-### Run Database Migrations
-Migrations run automatically on API startup. To run manually:
-```bash
-docker compose exec api alembic -c api/alembic.ini upgrade head
-```
-
-### Run the Seed Script
-```bash
-docker compose exec api python -m api.seed
-```
-
-### Run Tests
-```bash
-cd gold-monitor-system
-pip install -r api/requirements.txt
-python -m pytest api/tests/ -v
-```
-
-### Enable LLM Summaries
-1. Set `OPENROUTER_API_KEY` in `.env`
-2. Log in to admin panel → Settings
-3. Set `enable_llm` to `true`
-4. Optionally change `openrouter_model`, `temperature`, `max_tokens`
-5. Restart worker: `docker compose restart worker`
-
-### Access the Database Directly
-```bash
-docker compose exec db psql -U goldmon -d goldmonitor
-```
-
-### Useful SQL Queries
-```sql
--- Count alerts by severity
-SELECT severity, COUNT(*) FROM alerts GROUP BY severity;
-
--- Recent alerts
-SELECT title, severity, created_at FROM alerts ORDER BY created_at DESC LIMIT 10;
-
--- Check sentiment scores
-SELECT timeframe, score, sentiment_label, alert_count, created_at
-FROM sentiment_scores ORDER BY created_at DESC LIMIT 20;
-
--- Check source fetch status
-SELECT name, type, enabled, last_fetched_at, last_success_at, last_error
-FROM sources ORDER BY name;
-
--- Count raw items per source
-SELECT s.name, COUNT(r.id) as items
-FROM sources s LEFT JOIN raw_items r ON s.id = r.source_id
-GROUP BY s.name ORDER BY items DESC;
-
--- Clear dedup cache (forces re-processing of all items)
--- Run in Redis: FLUSHDB
--- Or bump the dedup flush version in api/main.py
-```
-
-## 12. Server & Deployment
-
-### Production Server
-The system runs on a server accessible at the configured domain. All services run via Docker Compose.
-
-### Deploying Updates
-After pushing code changes to the git branch:
-```bash
-# SSH into server, then:
-cd ~/projects/talamala
-git pull origin claude/analyze-project-structure-m8YuH
-cd gold-monitor-system
-docker compose up -d --build
-```
-
-This rebuilds all changed images and restarts containers. The API automatically runs migrations and seeds on startup.
-
-### Monitoring
-```bash
-# Check all services are running
-docker compose ps
-
-# Watch worker cycles in real-time
-docker compose logs -f worker
-
-# Check API health
-curl http://localhost:8000/api/health
-
-# Check recent fetch logs
-docker compose exec db psql -U goldmon -d goldmonitor -c \
-  "SELECT s.name, f.status, f.items_fetched_count, f.started_at FROM fetch_logs f JOIN sources s ON f.source_id = s.id ORDER BY f.started_at DESC LIMIT 20;"
-```
-
-### Troubleshooting
-
-**No alerts appearing:**
-- Check worker logs: `docker compose logs -f worker`
-- Verify sources are enabled: Admin panel → Sources
-- Check MIN_MATCH_SCORE threshold (currently 0.15 in `worker/main.py`)
-- Redis dedup might be blocking: bump dedup flush version in `api/main.py` and restart
-
-**Prices not updating:**
-- Primary source is BrsAPI (`brsapi.ir`) — requires `BRSAPI_KEY` in `.env`
-- Fallback is TGJU (`call4.tgju.org/ajax.json`) — used when BrsAPI key not set
-- Some prices (دلار, سکه, طلای ۱۸ عیار) only update during Iran market hours (~9 AM to 6 PM IRST)
-- طلای جهانی (global gold) updates 24/7
-- Cache TTL is 60 seconds
-
-**Sentiment score stuck at 50 (neutral):**
-- Sentiment requires alerts to exist — if no alerts, fallback is neutral
-- LLM sentiment analysis requires `OPENROUTER_API_KEY` to be set
-- Without LLM, rule-based fallback is used (less nuanced)
-- Check: `docker compose logs api | grep -i sentiment`
-
-**Docker disk space:**
-```bash
-docker system prune -f           # Clean unused images/containers
-docker volume ls                 # List volumes
-```
-
-## 13. Critical Rules for Development
-
-### NEVER Do These
-1. **NEVER add `DELETE FROM alerts` or `DELETE FROM raw_items` to migrations** — this wipes all user data on deploy. Migrations run on every startup.
-2. **NEVER change matching rules and expect old alerts to update** — old alerts stay as-is. Only new items will match with new rules.
-3. **NEVER force-push to the main branch** without explicit permission.
-
-### Safe Operations
-- **Redis FLUSHDB** is safe — it only clears dedup cache, causing items to be re-fetched and re-processed (no data loss)
-- **Bumping dedup flush version** in `api/main.py` triggers a one-time Redis flush on next startup
-- **Adding new columns** to existing tables should use `checkfirst=True` pattern (see `_create_sentiment_scores_table` in `main.py`)
-
-### Match Score Tuning
-- `MIN_MATCH_SCORE = 0.15` in `worker/main.py` — controls minimum threshold for alerts
-- Match score = 60% keyword ratio + 40% signal ratio (when both present)
-- If rule has only keywords (no signals): score = keyword_matches / total_keywords
-- If rule has only signals (no keywords): score = signal_matches / total_signals
-- **Compound keyword strategy**: Use multi-word keywords ("gold price", "قیمت طلا") instead of single words ("gold", "طلا") to prevent false positives from non-market articles (sports medals, land supply, etc.)
-- Example with 5 keywords + 10 signals: 1 kw match alone = 0.6 × 0.2 = 0.12 → FAILS; 1 kw + 2 signals = 0.20 → PASSES; 2 kw = 0.24 → PASSES
-- **GLOB_GOLD_PRICE** and **IR_GOLD_COIN_PRICE** are the broadest catch-all rules — they use 5 compound keywords + 8-10 signals each
-- Other specialized rules have 4-9 keywords making single-match false positives impossible (1/9 = 0.067 → FAILS)
-- Lowering MIN_MATCH_SCORE → spam alerts; raising too high → missed alerts
-
-### Sentiment Score Tuning
-- Formula parameters in `api/routers/sentiment.py`
-- **Neutral polarity = 0** — alerts without detected direction contribute nothing to directional signal
-- **Importance weights** (`_IMPORTANCE_WEIGHT`): critical=4.0, high=2.0, medium=1.0, low=0.5
-- **Decay λ** (`_DECAY_LAMBDA`): 1h=2.0, 4h=0.5, 24h=0.1
-- **Volume thresholds** (`_VOLUME_THRESHOLD`): 1h=10, 4h=20, 24h=30
-- **Directional ratio dampening**: If most alerts are neutral, score stays near 50 regardless of the few directional ones
-- **Score ranges**: 80+ very_bullish, 65-79 bullish, 55-64 slightly_bullish, 45-54 neutral, 35-44 slightly_bearish, 20-34 bearish, <20 very_bearish
-- With many neutral alerts (no direction data): score = 50.0 (neutral) — neutral alerts contribute zero directional signal
+| Admin | http://localhost:3000/admin/login |
+| Swagger | http://localhost:8000/docs |
+| Health | http://localhost:8000/api/health |
+
+## Reference Docs
+When you need detailed information, read these files:
+- `docs/architecture.md` — Full system architecture, folder structure, service details
+- `docs/progress.md` — What's done, what's in progress, roadmap
+- `docs/api-reference.md` — All API endpoints with parameters
+- `docs/schema.md` — Database tables, columns, relationships
+- `docs/sentiment-scoring.md` — Sentiment formula, scoring logic, all thresholds
+- `docs/system-logic.md` — Rule matching, severity, dedup, price tracking formulas
+
+Only read these when the current task specifically requires that info. Do NOT read all of them at session start.
+
+## Rules
+- Always read only the docs/ files relevant to the current task
+- Run `python -m pytest api/tests/ -v` before committing backend changes
+- Never add `DELETE FROM alerts` or `DELETE FROM raw_items` to migrations (runs on every startup)
+- Never use LLM for classification — severity/confidence/horizon must be deterministic
+- Use compound keywords in rules to prevent false positives
+- Redis FLUSHDB is safe (only clears dedup cache, no data loss)
+- New columns should use `checkfirst=True` pattern
+- `MIN_MATCH_SCORE = 0.15` in `worker/main.py` — don't change without understanding implications
+- Safe checkpoint tag: `safe-checkpoint-2026-02-09`
