@@ -18,6 +18,7 @@ Routers
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import time
@@ -121,21 +122,41 @@ async def _snapshot_rules() -> None:
 
 # ── Lifespan ────────────────────────────────────────────────────────────
 
+_staleness_shutdown = asyncio.Event()
+_staleness_task: asyncio.Task | None = None
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     """Application startup / shutdown lifecycle."""
-    global _STARTUP_TIME  # noqa: PLW0603
+    global _STARTUP_TIME, _staleness_task  # noqa: PLW0603
     _STARTUP_TIME = time.time()
 
     logger.info("Starting Gold Monitor API ...")
     _run_migrations()
     await _seed_admin()
     await _snapshot_rules()
+
+    # Start staleness checker background task
+    from api.worker.staleness_checker import run_staleness_checker
+    _staleness_task = asyncio.create_task(
+        run_staleness_checker(_staleness_shutdown),
+    )
+    logger.info("Staleness checker background task started.")
+
     logger.info("Startup complete.")
 
     yield  # application is running
 
     logger.info("Shutting down Gold Monitor API ...")
+    _staleness_shutdown.set()
+    if _staleness_task is not None:
+        _staleness_task.cancel()
+        try:
+            await _staleness_task
+        except asyncio.CancelledError:
+            pass
+    logger.info("Staleness checker stopped.")
 
 
 # ── Application factory ────────────────────────────────────────────────
@@ -163,12 +184,14 @@ def create_app() -> FastAPI:
     from api.routers.admin import router as admin_router
     from api.routers.alerts import router as alerts_router
     from api.routers.health import router as health_router
+    from api.routers.monitoring import router as monitoring_router
     from api.routers.rules import router as rules_router
     from api.routers.sources import router as sources_router
 
     app.include_router(alerts_router, prefix="/api/alerts")
     app.include_router(sources_router, prefix="/api/sources")
     app.include_router(admin_router, prefix="/api/admin")
+    app.include_router(monitoring_router, prefix="/api/admin")
     app.include_router(rules_router, prefix="/api/rules")
     app.include_router(health_router, prefix="/api/health")
 

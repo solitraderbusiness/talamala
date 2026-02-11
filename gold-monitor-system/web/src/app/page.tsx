@@ -4,12 +4,15 @@ import { useState, useEffect, useCallback } from "react";
 import {
   getAlerts,
   getAlertStats,
+  getDataFreshness,
   type Alert,
   type AlertStats,
+  type DataFreshness,
 } from "@/lib/api";
 import AlertCard from "@/components/AlertCard";
 import RiskGauge from "@/components/RiskGauge";
 import SeverityBadge from "@/components/SeverityBadge";
+import { timeAgo, cn } from "@/lib/utils";
 
 const marketCards = [
   { label: "طلای جهانی", unit: "USD/oz", icon: "🌍" },
@@ -24,6 +27,7 @@ export default function DashboardPage() {
   const [totalAlerts, setTotalAlerts] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [freshness, setFreshness] = useState<DataFreshness | null>(null);
 
   // Filters
   const [severity, setSeverity] = useState("");
@@ -53,12 +57,16 @@ export default function DashboardPage() {
       setLoading(true);
       setError(null);
       try {
-        const [statsData] = await Promise.allSettled([
+        const [statsData, , freshnessData] = await Promise.allSettled([
           getAlertStats(),
           fetchAlerts(),
+          getDataFreshness(),
         ]);
         if (statsData.status === "fulfilled") {
           setStats(statsData.value);
+        }
+        if (freshnessData.status === "fulfilled") {
+          setFreshness(freshnessData.value);
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : "خطا در بارگذاری");
@@ -117,6 +125,9 @@ export default function DashboardPage() {
           </div>
         ))}
       </div>
+
+      {/* Data Freshness Indicators */}
+      {freshness && <FreshnessBar freshness={freshness} />}
 
       {/* Stats + Risk Gauge row */}
       <div className="grid gap-4 md:grid-cols-3">
@@ -257,4 +268,56 @@ export default function DashboardPage() {
       </div>
     </div>
   );
+}
+
+/* ────────────────────────────────────────────────────────────────────── */
+/*  Data Freshness Bar                                                    */
+/* ────────────────────────────────────────────────────────────────────── */
+
+function FreshnessBar({ freshness }: { freshness: DataFreshness }) {
+  const items = [
+    { label: "اخبار", timestamp: freshness.last_news_fetch },
+    { label: "قیمت", timestamp: freshness.last_price_update },
+    { label: "احساسات", timestamp: freshness.last_sentiment_update },
+    { label: "ورکر", timestamp: freshness.last_worker_run },
+  ].filter((item) => item.timestamp);
+
+  if (items.length === 0) return null;
+
+  return (
+    <div className="flex flex-wrap items-center gap-4 rounded-lg bg-gray-50 px-4 py-2 text-xs dark:bg-gray-800/50">
+      <span className="font-medium text-gray-500 dark:text-gray-400">
+        آخرین بروزرسانی:
+      </span>
+      {items.map((item) => {
+        const ageClass = getFreshnessColor(item.timestamp!);
+        return (
+          <span key={item.label} className="flex items-center gap-1">
+            <span
+              className={cn(
+                "inline-block h-2 w-2 rounded-full",
+                ageClass
+              )}
+            />
+            <span className="text-gray-600 dark:text-gray-400">
+              {item.label}:
+            </span>
+            <span className="text-gray-500 dark:text-gray-400">
+              {timeAgo(item.timestamp!)}
+            </span>
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+function getFreshnessColor(timestamp: string): string {
+  const now = new Date();
+  const ts = new Date(timestamp);
+  const diffMinutes = (now.getTime() - ts.getTime()) / 60000;
+
+  if (diffMinutes <= 15) return "bg-emerald-500"; // fresh (green)
+  if (diffMinutes <= 60) return "bg-amber-500"; // slightly stale (yellow)
+  return "bg-red-500"; // stale (red)
 }

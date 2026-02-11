@@ -318,3 +318,102 @@ class RulesSnapshot(Base):
 
     def __repr__(self) -> str:
         return f"<RulesSnapshot v{self.version!r}>"
+
+
+# ── System Jobs (Operations Monitoring) ───────────────────────────────
+
+class SystemJob(Base):
+    __tablename__ = "system_jobs"
+    __table_args__ = (
+        UniqueConstraint("job_name", name="uq_system_jobs_job_name"),
+        Index("ix_system_jobs_status", "status"),
+        Index("ix_system_jobs_job_category", "job_category"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=_new_uuid,
+    )
+    job_name: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    job_label_fa: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    job_category: Mapped[str] = mapped_column(
+        String(50), nullable=False, default="general", server_default="general",
+    )
+    schedule: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    last_run_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+    )
+    last_success_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+    )
+    last_failure_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+    )
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    items_processed: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, default=0, server_default="0",
+    )
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="healthy", server_default="healthy",
+    )
+    expected_interval_minutes: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=5, server_default="5",
+    )
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default="now()",
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, server_default="now()",
+    )
+
+    # Relationships
+    runs: Mapped[list[JobRun]] = relationship(
+        "JobRun", back_populates="job", lazy="selectin",
+    )
+
+    def __repr__(self) -> str:
+        return f"<SystemJob {self.job_name!r} [{self.status}]>"
+
+
+class JobRun(Base):
+    __tablename__ = "job_runs"
+    __table_args__ = (
+        Index("ix_job_runs_job_id", "job_id"),
+        Index("ix_job_runs_started_at", "started_at"),
+        Index("ix_job_runs_status", "status"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=_new_uuid,
+    )
+    job_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("system_jobs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+    )
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="success", server_default="success",
+    )
+    items_processed: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, default=0, server_default="0",
+    )
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    metadata_: Mapped[Any] = mapped_column(
+        "metadata_", JSONB, default=dict, server_default="{}",
+    )
+
+    # Relationships
+    job: Mapped[SystemJob] = relationship("SystemJob", back_populates="runs")
+
+    def __repr__(self) -> str:
+        return f"<JobRun {self.status} job={self.job_id}>"

@@ -229,3 +229,71 @@ class HealthResponse(_CamelBase):
     redis: str
     version: str
     uptime_seconds: float
+
+
+# =====================================================================
+#  Operations Monitoring
+# =====================================================================
+
+class SystemJobResponse(_CamelBase):
+    id: uuid.UUID
+    job_name: str
+    job_label_fa: str | None = None
+    job_category: str
+    schedule: str | None = None
+    last_run_at: datetime | None = None
+    last_success_at: datetime | None = None
+    last_failure_at: datetime | None = None
+    last_error: str | None = None
+    last_duration_ms: int | None = None
+    items_processed: int | None = 0
+    status: str
+    expected_interval_minutes: int
+    enabled: bool
+    success_rate_24h: float | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class JobRunResponse(_CamelBase):
+    id: uuid.UUID
+    job_id: uuid.UUID
+    job_name: str | None = None
+    started_at: datetime
+    finished_at: datetime | None = None
+    status: str
+    items_processed: int | None = 0
+    error_message: str | None = None
+    duration_ms: int | None = None
+    metadata_: dict[str, Any] = Field(default_factory=dict, alias="metadata")
+
+
+class MonitoringOverview(_CamelBase):
+    jobs_healthy: int = 0
+    jobs_warning: int = 0
+    jobs_error: int = 0
+    jobs_stale: int = 0
+    total_jobs: int = 0
+    total_runs_24h: int = 0
+    success_rate_24h: float = 0.0
+    last_check_at: datetime | None = None
+
+
+class SystemHealthExternalResponse(_CamelBase):
+    """Response for GET /api/admin/health — external monitoring."""
+
+    status: str  # "healthy" | "degraded" | "down"
+    jobs_healthy: int = 0
+    jobs_warning: int = 0
+    jobs_error: int = 0
+    oldest_stale_job: str | None = None
+    timestamp: datetime
+
+
+class DataFreshnessResponse(_CamelBase):
+    """Public endpoint for data freshness indicators."""
+
+    last_news_fetch: datetime | None = None
+    last_price_update: datetime | None = None
+    last_sentiment_update: datetime | None = None
+    last_worker_run: datetime | None = None

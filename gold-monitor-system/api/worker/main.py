@@ -43,6 +43,7 @@ from api.database import AsyncSessionLocal
 from api.worker.dedup import DedupChecker
 from api.worker.fetchers import get_fetcher
 from api.worker.fetchers.base import RawItem
+from api.worker.job_tracker import track_job
 
 # ---------------------------------------------------------------------------
 # Optional rule-engine integration (may not be deployed yet)
@@ -180,29 +181,51 @@ class Worker:
 
     async def _run_cycle(self) -> None:
         logger.info("=== Cycle start ===")
-        async with AsyncSessionLocal() as db:
-            sources = await self._get_due_sources(db)
-            if not sources:
-                logger.debug("No sources due for fetching")
-                return
+        async with track_job(
+            job_name="worker_fetch_cycle",
+            category="news_scraping",
+            expected_interval_minutes=max(1, CYCLE_INTERVAL // 60),
+            label_fa="چرخه اصلی دریافت و پردازش",
+            schedule=f"every {CYCLE_INTERVAL}s",
+        ) as job_logger:
+            total_fetched = 0
+            total_alerts = 0
 
-            logger.info("Sources due for fetching: %d", len(sources))
-            dedup = DedupChecker(self._redis, db)  # type: ignore[arg-type]
+            async with AsyncSessionLocal() as db:
+                sources = await self._get_due_sources(db)
+                if not sources:
+                    logger.debug("No sources due for fetching")
+                    job_logger.add_metadata({"sources_due": 0})
+                    return
 
-            for source in sources:
-                try:
-                    await self._process_source(source, db, dedup)
-                except Exception:
-                    logger.exception(
-                        "Error processing source %s (id=%s)",
-                        source.get("name"),
-                        source.get("id"),
-                    )
-                    await self._record_source_error(
-                        db,
-                        source,
-                        error_msg=_format_exc(),
-                    )
+                logger.info("Sources due for fetching: %d", len(sources))
+                dedup = DedupChecker(self._redis, db)  # type: ignore[arg-type]
+
+                for source in sources:
+                    try:
+                        fetched, matched = await self._process_source_tracked(
+                            source, db, dedup
+                        )
+                        total_fetched += fetched
+                        total_alerts += matched
+                    except Exception:
+                        logger.exception(
+                            "Error processing source %s (id=%s)",
+                            source.get("name"),
+                            source.get("id"),
+                        )
+                        await self._record_source_error(
+                            db,
+                            source,
+                            error_msg=_format_exc(),
+                        )
+
+            job_logger.set_items_processed(total_fetched)
+            job_logger.add_metadata({
+                "sources_due": len(sources),
+                "total_fetched": total_fetched,
+                "alerts_created": total_alerts,
+            })
 
         logger.info("=== Cycle end ===")
 
@@ -230,15 +253,43 @@ class Worker:
         return [dict(r) for r in rows]
 
     # ------------------------------------------------------------------
-    # Per-source pipeline
+    # Per-source pipeline (with tracking)
     # ------------------------------------------------------------------
+
+    async def _process_source_tracked(
+        self,
+        source: dict[str, Any],
+        db,
+        dedup: DedupChecker,
+    ) -> tuple[int, int]:
+        """Wrap _process_source with per-source job tracking.
+        Returns (items_fetched, alerts_created)."""
+        source_name = source.get("name", str(source.get("id", "unknown")))
+        job_name = f"source_{source_name}".replace(" ", "_").lower()
+        poll_seconds = source.get("poll_interval_seconds", 60)
+
+        async with track_job(
+            job_name=job_name,
+            category="news_scraping",
+            expected_interval_minutes=max(1, poll_seconds // 60),
+            label_fa=f"دریافت از {source_name}",
+            schedule=f"every {poll_seconds}s",
+        ) as src_logger:
+            fetched, matched = await self._process_source(source, db, dedup)
+            src_logger.set_items_processed(fetched)
+            src_logger.add_metadata({
+                "source_name": source_name,
+                "source_type": source.get("type"),
+                "alerts_created": matched,
+            })
+            return fetched, matched
 
     async def _process_source(
         self,
         source: dict[str, Any],
         db,
         dedup: DedupChecker,
-    ) -> None:
+    ) -> tuple[int, int]:
         source_id = source["id"]
         source_name = source.get("name", source_id)
         started_at = datetime.now(timezone.utc)
@@ -319,6 +370,7 @@ class Worker:
             new_count,
             matched_count,
         )
+        return len(raw_items), matched_count
 
     # ------------------------------------------------------------------
     # Item storage

@@ -264,3 +264,162 @@ export function updateAdminSettings(
     body: JSON.stringify(data),
   });
 }
+
+/* ---------- Monitoring types ---------- */
+
+export interface MonitoringOverview {
+  jobs_healthy: number;
+  jobs_warning: number;
+  jobs_error: number;
+  jobs_stale: number;
+  total_jobs: number;
+  total_runs_24h: number;
+  success_rate_24h: number;
+  last_check_at: string;
+}
+
+export interface SystemJob {
+  id: string;
+  job_name: string;
+  job_label_fa: string | null;
+  job_category: string;
+  schedule: string | null;
+  last_run_at: string | null;
+  last_success_at: string | null;
+  last_failure_at: string | null;
+  last_error: string | null;
+  last_duration_ms: number | null;
+  items_processed: number;
+  status: "healthy" | "warning" | "error" | "stale";
+  expected_interval_minutes: number;
+  enabled: boolean;
+  success_rate_24h: number | null;
+  runs_24h: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface JobRun {
+  id: string;
+  job_id: string;
+  job_name: string | null;
+  started_at: string;
+  finished_at: string | null;
+  status: "success" | "failure" | "timeout";
+  items_processed: number;
+  error_message: string | null;
+  duration_ms: number | null;
+  metadata: Record<string, unknown>;
+}
+
+export interface FailedRun {
+  id: string;
+  job_id: string;
+  job_name: string;
+  job_label_fa: string | null;
+  started_at: string;
+  finished_at: string | null;
+  error_message: string | null;
+  duration_ms: number | null;
+  items_processed: number;
+}
+
+export interface ActivityEntry {
+  id: string;
+  job_id: string;
+  job_name: string;
+  job_label_fa: string | null;
+  job_category: string;
+  started_at: string;
+  finished_at: string | null;
+  status: "success" | "failure" | "timeout";
+  items_processed: number;
+  duration_ms: number | null;
+  error_message: string | null;
+}
+
+export interface SystemHealthExternal {
+  status: "healthy" | "degraded" | "down";
+  jobs_healthy: number;
+  jobs_warning: number;
+  jobs_error: number;
+  oldest_stale_job: string | null;
+  timestamp: string;
+}
+
+export interface DataFreshness {
+  last_news_fetch: string | null;
+  last_price_update: string | null;
+  last_sentiment_update: string | null;
+  last_worker_run: string | null;
+}
+
+/* ---------- Monitoring API ---------- */
+
+export function getMonitoringOverview(
+  token: string
+): Promise<MonitoringOverview> {
+  return authRequest<MonitoringOverview>(
+    "/api/admin/monitoring/overview",
+    token
+  );
+}
+
+export function getMonitoringJobs(token: string): Promise<SystemJob[]> {
+  return authRequest<SystemJob[]>("/api/admin/monitoring/jobs", token);
+}
+
+export function getJobRuns(
+  token: string,
+  jobId: string,
+  limit: number = 50
+): Promise<JobRun[]> {
+  return authRequest<JobRun[]>(
+    `/api/admin/monitoring/jobs/${jobId}/runs?limit=${limit}`,
+    token
+  );
+}
+
+export function toggleJob(
+  token: string,
+  jobId: string
+): Promise<{ id: string; enabled: boolean }> {
+  return authRequest<{ id: string; enabled: boolean }>(
+    `/api/admin/monitoring/jobs/${jobId}/toggle`,
+    token,
+    { method: "PUT" }
+  );
+}
+
+export function getRecentFailures(
+  token: string,
+  limit: number = 20
+): Promise<FailedRun[]> {
+  return authRequest<FailedRun[]>(
+    `/api/admin/monitoring/recent-failures?limit=${limit}`,
+    token
+  );
+}
+
+export function getActivityTimeline(
+  token: string,
+  hours: number = 24,
+  category?: string
+): Promise<ActivityEntry[]> {
+  const params = new URLSearchParams({ hours: String(hours) });
+  if (category) params.set("category", category);
+  return authRequest<ActivityEntry[]>(
+    `/api/admin/monitoring/activity?${params}`,
+    token
+  );
+}
+
+export function getSystemHealthExternal(
+  token: string
+): Promise<SystemHealthExternal> {
+  return authRequest<SystemHealthExternal>("/api/admin/health", token);
+}
+
+export function getDataFreshness(): Promise<DataFreshness> {
+  return request<DataFreshness>("/api/admin/data-freshness");
+}
