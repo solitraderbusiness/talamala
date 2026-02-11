@@ -248,7 +248,7 @@ async def get_chat_settings(
     """Get current chat settings."""
     defaults = {
         "enabled": "true",
-        "model": "anthropic/claude-sonnet-4-20250514",
+        "model": "anthropic/claude-sonnet-4",
         "rate_limit_ip": "30",
         "rate_limit_global": "1000",
         "welcome_message": "سلام! من دستیار هوشمند طلامالا هستم. هر سوالی درباره اخبار، قیمت‌ها، تقویم اقتصادی و تحلیل بازار طلا دارید، بپرسید!",

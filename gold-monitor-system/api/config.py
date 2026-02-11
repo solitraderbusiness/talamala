@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     YAML_PATH: str = "/app/gold_monitor_rules_fa.yaml"
 
     # ── Chat AI Widget ───────────────────────────────────────────────────
-    CHAT_MODEL: str = "anthropic/claude-sonnet-4-20250514"
+    CHAT_MODEL: str = "anthropic/claude-sonnet-4"
     CHAT_ENABLED: bool = True
     CHAT_RATE_LIMIT_IP: int = 30
     CHAT_RATE_LIMIT_GLOBAL: int = 1000
