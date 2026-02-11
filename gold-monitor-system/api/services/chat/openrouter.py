@@ -149,6 +149,7 @@ class ChatOpenRouterClient:
             "model": model or settings.CHAT_MODEL,
             "messages": messages,
             "stream": True,
+            "max_tokens": 800,
         }
 
         async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=120.0, write=10.0, pool=10.0)) as client:
