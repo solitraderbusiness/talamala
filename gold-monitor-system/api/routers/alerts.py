@@ -177,6 +177,7 @@ async def list_alerts(
     asset: str | None = Query(None),
     severity: str | None = Query(None),
     time_horizon: str | None = Query(None),
+    section: str | None = Query(None),
     q: str | None = Query(None),
     from_date: datetime.datetime | None = Query(None),
     to_date: datetime.datetime | None = Query(None),
@@ -188,6 +189,28 @@ async def list_alerts(
         base, asset=asset, severity=severity, time_horizon=time_horizon,
         q=q, from_date=from_date, to_date=to_date,
     )
+
+    # Section filter: match alerts by their rule ID prefix
+    if section is not None:
+        # Reverse lookup: section → rule ID prefixes
+        _SECTION_TO_PREFIXES: dict[str, list[str]] = {
+            "global_gold": ["GLOB"],
+            "iran_gold": ["IR"],
+            "coin": ["COIN"],
+            "gold_funds": ["FUNDS"],
+        }
+        if section == "geopolitics":
+            # Geopolitics alerts match specific rule IDs
+            geo_patterns = [f'%"{rid}"%' for rid in _GEOPOLITICS_RULES]
+            base = base.where(
+                or_(*(cast(Alert.matched_rule_ids, String).like(p) for p in geo_patterns))
+            )
+        elif section in _SECTION_TO_PREFIXES:
+            prefixes = _SECTION_TO_PREFIXES[section]
+            prefix_patterns = [f'%"{p}_%' for p in prefixes]
+            base = base.where(
+                or_(*(cast(Alert.matched_rule_ids, String).like(p) for p in prefix_patterns))
+            )
 
     count_stmt = select(func.count()).select_from(base.subquery())
     total: int = (await db.execute(count_stmt)).scalar_one()

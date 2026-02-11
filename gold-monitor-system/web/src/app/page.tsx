@@ -101,6 +101,7 @@ export default function DashboardPage() {
       const params: Record<string, string | number | undefined> = {
         time_horizon: timeHorizon || undefined,
         q: search || undefined,
+        section: activeSection || undefined,
         limit,
         offset: page * limit,
       };
@@ -122,7 +123,7 @@ export default function DashboardPage() {
     } catch {
       // Alert list may fail independently
     }
-  }, [severity, timeHorizon, search, page]);
+  }, [severity, timeHorizon, search, page, activeSection]);
 
   const fetchSentiment = useCallback(async () => {
     try {
@@ -625,7 +626,7 @@ export default function DashboardPage() {
           {/* Section filter tabs */}
           <div className="mb-4 flex flex-wrap gap-2">
             <button
-              onClick={() => setActiveSection(null)}
+              onClick={() => { setActiveSection(null); setPage(0); }}
               className={`rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${
                 activeSection === null
                   ? "bg-gold-600 text-white shadow-sm"
@@ -637,7 +638,7 @@ export default function DashboardPage() {
             {sections.map((sec) => (
               <button
                 key={sec.id}
-                onClick={() => setActiveSection(sec.id === activeSection ? null : sec.id)}
+                onClick={() => { setActiveSection(sec.id === activeSection ? null : sec.id); setPage(0); }}
                 className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${
                   activeSection === sec.id
                     ? "bg-gold-600 text-white shadow-sm"
@@ -719,9 +720,24 @@ export default function DashboardPage() {
 
       {/* ─── Full Alert Feed ─── */}
       <div id="alert-feed">
-        <h2 className="mb-4 text-lg font-bold text-gray-900 dark:text-gray-100">
-          فید هشدارها
-        </h2>
+        <div className="mb-4 flex items-center gap-3">
+          <h2 className="text-lg font-bold text-gray-900 dark:text-gray-100">
+            فید هشدارها
+          </h2>
+          {activeSection && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-gold-100 px-3 py-1 text-xs font-medium text-gold-800 dark:bg-gold-900/30 dark:text-gold-300">
+              {sections.find((s) => s.id === activeSection)?.icon}{" "}
+              {sections.find((s) => s.id === activeSection)?.label}
+              <button
+                onClick={() => { setActiveSection(null); setPage(0); }}
+                className="mr-1 text-gold-600 hover:text-gold-800 dark:text-gold-400"
+                title="حذف فیلتر"
+              >
+                ✕
+              </button>
+            </span>
+          )}
+        </div>
 
         {/* Filters */}
         <div className="mb-4 flex flex-wrap gap-3">

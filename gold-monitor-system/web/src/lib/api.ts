@@ -269,6 +269,7 @@ export interface LoginResponse {
 export function getAlerts(params?: {
   severity?: string;
   time_horizon?: string;
+  section?: string;
   q?: string;
   asset?: string;
   from_date?: string;

@@ -56,6 +56,7 @@ export default function MonitoringPage() {
   const [expandedJobId, setExpandedJobId] = useState<string | null>(null);
   const [jobRuns, setJobRuns] = useState<JobRun[]>([]);
   const [runsLoading, setRunsLoading] = useState(false);
+  const [diagnosticJob, setDiagnosticJob] = useState<SystemJob | null>(null);
 
   const token = getToken() || "";
 
@@ -192,6 +193,7 @@ export default function MonitoringPage() {
           runsLoading={runsLoading}
           onToggle={handleToggleJob}
           onViewRuns={handleViewRuns}
+          onDiagnose={setDiagnosticJob}
         />
       )}
 
@@ -204,6 +206,14 @@ export default function MonitoringPage() {
           activity={filteredActivity}
           categoryFilter={categoryFilter}
           onCategoryChange={setCategoryFilter}
+        />
+      )}
+
+      {/* Diagnostic Prompt Modal */}
+      {diagnosticJob && (
+        <DiagnosticModal
+          job={diagnosticJob}
+          onClose={() => setDiagnosticJob(null)}
         />
       )}
     </div>
@@ -239,16 +249,16 @@ function HealthOverview({ overview }: { overview: MonitoringOverview }) {
         bgColor="bg-red-50 dark:bg-red-900/20"
       />
       <StatusCard
-        icon="\u{1F4CA}"
-        label="اجراها (۲۴ ساعت)"
+        icon="📊"
+        label="تعداد اجراها (۲۴ ساعت)"
         value={overview.total_runs_24h}
         color="text-blue-600"
         bgColor="bg-blue-50 dark:bg-blue-900/20"
         subtitle={`نرخ موفقیت: ${overview.success_rate_24h}%`}
       />
       <StatusCard
-        icon="\u{2699}\u{FE0F}"
-        label="کل وظایف"
+        icon="⚙️"
+        label="تعداد کل وظایف"
         value={overview.total_jobs}
         color="text-gray-600 dark:text-gray-400"
         bgColor="bg-gray-50 dark:bg-gray-800"
@@ -302,6 +312,7 @@ function JobsTable({
   runsLoading,
   onToggle,
   onViewRuns,
+  onDiagnose,
 }: {
   jobs: SystemJob[];
   expandedJobId: string | null;
@@ -309,6 +320,7 @@ function JobsTable({
   runsLoading: boolean;
   onToggle: (id: string) => void;
   onViewRuns: (id: string) => void;
+  onDiagnose: (job: SystemJob) => void;
 }) {
   if (jobs.length === 0) {
     return (
@@ -395,6 +407,15 @@ function JobsTable({
 
             {/* Actions */}
             <div className="flex gap-2">
+              {(job.status === "error" || job.status === "warning" || job.status === "stale" || !job.last_run_at) && (
+                <button
+                  onClick={() => onDiagnose(job)}
+                  className="rounded bg-amber-50 px-3 py-1 text-xs font-medium text-amber-700 transition-colors hover:bg-amber-100 dark:bg-amber-900/20 dark:text-amber-400 dark:hover:bg-amber-900/40"
+                  title="تشخیص مشکل"
+                >
+                  🔍 تشخیص
+                </button>
+              )}
               <button
                 onClick={() => onViewRuns(job.id)}
                 className="btn-secondary text-xs"
@@ -628,4 +649,177 @@ function formatDuration(ms: number): string {
   const minutes = Math.floor(seconds / 60);
   const remainingSeconds = Math.round(seconds % 60);
   return `${minutes}m ${remainingSeconds}s`;
+}
+
+/* ────────────────────────────────────────────────────────────────────── */
+/*  Diagnostic Modal                                                      */
+/* ────────────────────────────────────────────────────────────────────── */
+
+function generateDiagnosticPrompt(job: SystemJob): string {
+  const lines: string[] = [];
+  lines.push(`## Job Diagnostic Report`);
+  lines.push(``);
+  lines.push(`**Job:** ${job.job_label_fa || job.job_name} (\`${job.job_name}\`)`);
+  lines.push(`**Category:** ${CATEGORY_LABELS[job.job_category] || job.job_category} (\`${job.job_category}\`)`);
+  lines.push(`**Status:** ${job.status}`);
+  lines.push(`**Enabled:** ${job.enabled ? "Yes" : "No"}`);
+  lines.push(`**Expected Interval:** ${job.expected_interval_minutes} minutes`);
+  lines.push(`**Schedule:** ${job.schedule || "N/A"}`);
+  lines.push(`**Last Run:** ${job.last_run_at || "NEVER"}`);
+  lines.push(`**Last Success:** ${job.last_success_at || "NEVER"}`);
+  lines.push(`**Last Failure:** ${job.last_failure_at || "NEVER"}`);
+  if (job.last_error) {
+    lines.push(`**Last Error:** ${job.last_error}`);
+  }
+  lines.push(``);
+
+  // Problem analysis
+  lines.push(`## Problem`);
+  lines.push(``);
+
+  if (!job.last_run_at) {
+    lines.push(
+      `This job (\`${job.job_name}\`) has **NEVER** executed. ` +
+      `It was registered in the system_jobs table but no job_runs records exist for it.`
+    );
+    lines.push(``);
+    lines.push(`Possible causes:`);
+    lines.push(`1. The background task that runs this job is not starting`);
+    lines.push(`2. The \`track_job\` context manager in the worker code is not wrapping this task`);
+    lines.push(`3. The database tables (system_jobs, job_runs) were created after the worker started`);
+    lines.push(``);
+    lines.push(`## Fix Request`);
+    lines.push(``);
+    lines.push(
+      `Please investigate why the job \`${job.job_name}\` (category: \`${job.job_category}\`) ` +
+      `has never run. Check the worker logs with \`docker compose logs -f worker\` and ` +
+      `API logs with \`docker compose logs -f api\`. ` +
+      `Ensure the job's background loop uses \`track_job\` from \`api/worker/job_tracker.py\`. ` +
+      `After fixing, restart the services with \`cd gold-monitor-system && docker compose restart api worker\`.`
+    );
+  } else if (job.status === "error") {
+    lines.push(
+      `This job (\`${job.job_name}\`) is in **ERROR** state.`
+    );
+    if (job.last_error) {
+      lines.push(`The last error was: \`${job.last_error}\``);
+    }
+    lines.push(``);
+    lines.push(`## Fix Request`);
+    lines.push(``);
+    lines.push(
+      `Please investigate and fix the error in job \`${job.job_name}\`. ` +
+      `Check the worker/API logs: \`docker compose logs -f worker api | grep -i "${job.job_name}"\`. ` +
+      (job.last_error
+        ? `The error message is: "${job.last_error}". Find the root cause and fix it.`
+        : `Check the job_runs table for error details.`)
+    );
+  } else if (job.status === "warning" || job.status === "stale") {
+    const expectedMinutes = job.expected_interval_minutes || 5;
+    lines.push(
+      `This job (\`${job.job_name}\`) is **${job.status.toUpperCase()}** — ` +
+      `it should run every ${expectedMinutes} minute(s) but hasn't run recently. ` +
+      `Last run: ${job.last_run_at}.`
+    );
+    lines.push(``);
+    lines.push(`## Fix Request`);
+    lines.push(``);
+    lines.push(
+      `Please investigate why \`${job.job_name}\` has gone stale. ` +
+      `Check if the worker/API process is running: \`docker compose ps\`. ` +
+      `Check logs: \`docker compose logs --tail=50 worker api\`. ` +
+      `Restart if needed: \`cd gold-monitor-system && docker compose restart api worker\`.`
+    );
+  }
+
+  return lines.join("\n");
+}
+
+function DiagnosticModal({
+  job,
+  onClose,
+}: {
+  job: SystemJob;
+  onClose: () => void;
+}) {
+  const [copied, setCopied] = useState(false);
+  const prompt = generateDiagnosticPrompt(job);
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(prompt);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Fallback: select the text
+      const el = document.getElementById("diagnostic-prompt");
+      if (el) {
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        const sel = window.getSelection();
+        sel?.removeAllRanges();
+        sel?.addRange(range);
+      }
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="max-h-[80vh] w-full max-w-2xl overflow-hidden rounded-xl bg-white shadow-2xl dark:bg-gray-900">
+        {/* Header */}
+        <div className="flex items-center justify-between border-b border-gray-200 px-6 py-4 dark:border-gray-700">
+          <div>
+            <h3 className="text-lg font-bold text-gray-900 dark:text-gray-100">
+              تشخیص مشکل
+            </h3>
+            <p className="mt-0.5 text-sm text-gray-500">
+              {job.job_label_fa || job.job_name}
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            className="rounded-lg p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-800"
+          >
+            ✕
+          </button>
+        </div>
+
+        {/* Problem summary */}
+        <div className="border-b border-gray-200 bg-amber-50 px-6 py-3 dark:border-gray-700 dark:bg-amber-900/20">
+          <p className="text-sm text-amber-800 dark:text-amber-300">
+            {!job.last_run_at && "این وظیفه هرگز اجرا نشده است. پرامپت زیر را کپی و به Claude Code بدهید تا مشکل را بررسی و رفع کند."}
+            {job.last_run_at && job.status === "error" && "این وظیفه با خطا مواجه شده. پرامپت زیر را کپی و به Claude Code بدهید تا مشکل را بررسی و رفع کند."}
+            {job.last_run_at && (job.status === "warning" || job.status === "stale") && "این وظیفه به موقع اجرا نشده. پرامپت زیر را کپی و به Claude Code بدهید تا مشکل را بررسی و رفع کند."}
+          </p>
+        </div>
+
+        {/* Prompt content */}
+        <div className="max-h-[45vh] overflow-y-auto px-6 py-4">
+          <pre
+            id="diagnostic-prompt"
+            dir="ltr"
+            className="whitespace-pre-wrap rounded-lg bg-gray-100 p-4 text-xs leading-relaxed text-gray-800 dark:bg-gray-800 dark:text-gray-200"
+          >
+            {prompt}
+          </pre>
+        </div>
+
+        {/* Footer */}
+        <div className="flex items-center justify-end gap-3 border-t border-gray-200 px-6 py-4 dark:border-gray-700">
+          <button
+            onClick={onClose}
+            className="btn-secondary text-sm"
+          >
+            بستن
+          </button>
+          <button
+            onClick={handleCopy}
+            className="rounded-lg bg-gold-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-gold-700"
+          >
+            {copied ? "کپی شد!" : "کپی پرامپت"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }

@@ -35,7 +35,7 @@ from sqlalchemy import select, text
 from api.auth import get_password_hash
 from api.config import settings
 from api.database import AsyncSessionLocal, sync_engine
-from api.models import AdminUser, Base, EconomicEvent, RulesSnapshot, SentimentScore, Source
+from api.models import AdminUser, Base, EconomicEvent, JobRun, RulesSnapshot, SentimentScore, Source, SystemJob
 
 logger = logging.getLogger("gold_monitor")
 
@@ -1410,6 +1410,26 @@ async def _create_price_outcomes_table() -> None:
         logger.warning("Could not create alert_price_outcomes table", exc_info=True)
 
 
+async def _create_monitoring_tables() -> None:
+    """Create system_jobs and job_runs tables if they don't exist.
+
+    These tables are needed by the job_tracker module for operations
+    monitoring.  A migration exists (002_monitoring_tables) but it may
+    conflict with 002_add_economic_events (duplicate revision IDs),
+    so we ensure the tables exist here as a safety net.
+    """
+    try:
+        SystemJob.__table__.create(bind=sync_engine, checkfirst=True)
+        logger.info("system_jobs table ensured.")
+    except Exception:
+        logger.warning("Could not create system_jobs table", exc_info=True)
+    try:
+        JobRun.__table__.create(bind=sync_engine, checkfirst=True)
+        logger.info("job_runs table ensured.")
+    except Exception:
+        logger.warning("Could not create job_runs table", exc_info=True)
+
+
 async def _start_calendar_sync() -> None:
     """Start the calendar sync background task."""
     try:
@@ -1478,6 +1498,7 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     await _migrate_sources_v9()
     await _migrate_sources_v10()
     await _migrate_sources_v11()
+    await _create_monitoring_tables()
     await _create_sentiment_scores_table()
     await _create_economic_events_table()
     await _create_price_outcomes_table()

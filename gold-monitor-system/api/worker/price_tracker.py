@@ -233,6 +233,8 @@ async def _process_interval(
 
 async def price_tracker_loop() -> None:
     """Background loop that runs every 15 minutes to track price outcomes."""
+    from api.worker.job_tracker import track_job
+
     logger.info(
         "Price tracker started (interval=%ds, checks=%s)",
         TRACKER_INTERVAL,
@@ -242,15 +244,24 @@ async def price_tracker_loop() -> None:
     while True:
         await asyncio.sleep(TRACKER_INTERVAL)
         try:
-            results = await _track_outcomes()
-            total = sum(results.values())
-            if total > 0:
-                logger.info(
-                    "Price tracker: recorded %d outcomes (%s)",
-                    total,
-                    ", ".join(f"{k}={v}" for k, v in results.items() if v),
-                )
-            else:
-                logger.debug("Price tracker: no alerts to track this cycle")
+            async with track_job(
+                job_name="price_outcome_tracker",
+                category="price_tracking",
+                expected_interval_minutes=max(1, TRACKER_INTERVAL // 60),
+                label_fa="پیگیری نتایج قیمتی هشدارها",
+                schedule=f"every {TRACKER_INTERVAL}s",
+            ) as jl:
+                results = await _track_outcomes()
+                total = sum(results.values())
+                jl.set_items_processed(total)
+                jl.add_metadata(results)
+                if total > 0:
+                    logger.info(
+                        "Price tracker: recorded %d outcomes (%s)",
+                        total,
+                        ", ".join(f"{k}={v}" for k, v in results.items() if v),
+                    )
+                else:
+                    logger.debug("Price tracker: no alerts to track this cycle")
         except Exception:
             logger.warning("Price tracker cycle failed", exc_info=True)

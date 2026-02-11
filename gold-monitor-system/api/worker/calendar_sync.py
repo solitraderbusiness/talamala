@@ -773,13 +773,25 @@ async def calendar_sync_loop() -> None:
 
     Intended to be run as an asyncio task from the worker or API startup.
     """
+    from api.worker.job_tracker import track_job
+
     interval = settings.CALENDAR_SYNC_INTERVAL
     logger.info("Calendar sync loop started (interval=%ds).", interval)
 
     while True:
         try:
-            result = await sync_calendar()
-            logger.info("Calendar sync result: %s", result)
+            async with track_job(
+                job_name="calendar_sync",
+                category="calendar",
+                expected_interval_minutes=max(1, interval // 60),
+                label_fa="همگام‌سازی تقویم اقتصادی",
+                schedule=f"every {interval}s",
+            ) as jl:
+                result = await sync_calendar()
+                upserted = result.get("upserted", 0)
+                jl.set_items_processed(upserted)
+                jl.add_metadata(result)
+                logger.info("Calendar sync result: %s", result)
         except Exception:
             logger.error("Calendar sync failed", exc_info=True)
         await asyncio.sleep(interval)
