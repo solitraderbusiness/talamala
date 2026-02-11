@@ -19,7 +19,7 @@ import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -75,6 +75,14 @@ def _get_client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+def _error_json(message: str, error: str = "error", status: int = 200) -> JSONResponse:
+    """Return a consistent JSON error response."""
+    return JSONResponse(
+        content={"error": error, "message": message},
+        status_code=status,
+    )
+
+
 async def _fetch_prices_for_tool() -> dict[str, Any] | None:
     """Fetch current prices using the prices router logic."""
     try:
@@ -102,7 +110,6 @@ async def _generate_sse(
             history = await get_conversation_history(db, session_id)
 
             # 2. Build system prompt
-            # Try to load custom prompt from chat_settings
             custom_prompt = None
             try:
                 from api.models import ChatSetting
@@ -131,6 +138,7 @@ async def _generate_sse(
             await db.commit()
 
             # 5. First LLM call (may return tool_calls)
+            logger.info("Sending chat request to OpenRouter (model=%s)", settings.CHAT_MODEL)
             response_data = await client.chat_completion(
                 messages=messages,
                 tools=TOOL_DEFINITIONS,
@@ -157,7 +165,6 @@ async def _generate_sse(
 
                     logger.info("Executing tool: %s with args: %s", tool_name, tool_args)
 
-                    # Create a prices fetcher for price tool
                     prices_fetcher = _fetch_prices_for_tool if tool_name == "get_price_data" else None
 
                     tool_result = await execute_tool(
@@ -170,7 +177,6 @@ async def _generate_sse(
                         "result_preview": tool_result[:200],
                     })
 
-                    # Add tool result message
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tc["id"],
@@ -195,9 +201,6 @@ async def _generate_sse(
                 # No tool calls — check if there's direct content
                 content = client.extract_content(response_data)
                 if content:
-                    # Stream the content character by character for typing effect
-                    # (In practice, we got it all at once from non-streaming call)
-                    # Split into reasonable chunks
                     chunk_size = 10
                     for i in range(0, len(content), chunk_size):
                         chunk = content[i:i + chunk_size]
@@ -216,7 +219,7 @@ async def _generate_sse(
             yield f"data: {json.dumps({'type': 'done', 'session_id': str(session_id)}, ensure_ascii=False)}\n\n"
 
         except Exception as e:
-            logger.exception("Chat SSE error")
+            logger.exception("Chat SSE error: %s", e)
             error_msg = "متأسفانه خطایی رخ داد. لطفاً دوباره تلاش کنید."
             yield f"data: {json.dumps({'type': 'error', 'content': error_msg}, ensure_ascii=False)}\n\n"
 
@@ -233,43 +236,51 @@ async def chat(
 
     # Check if chat is enabled
     if not settings.CHAT_ENABLED:
-        return {"error": "disabled", "message": "سرویس چت غیرفعال است."}
+        return _error_json("سرویس چت غیرفعال است.", "disabled")
 
     # Check API key
     if not settings.OPENROUTER_API_KEY:
-        return {"error": "not_configured", "message": "سرویس چت پیکربندی نشده است."}
+        return _error_json("سرویس چت پیکربندی نشده است.", "not_configured")
 
     ip_address = _get_client_ip(request)
 
     # Rate limiting
     allowed, error_msg = await rate_limiter.check_rate_limit(ip_address)
     if not allowed:
-        return {"error": "rate_limited", "message": error_msg}
+        return _error_json(error_msg or "محدودیت ارسال", "rate_limited", 429)
 
-    # Get or create session
-    session, is_new = await get_or_create_session(
-        db, chat_request.session_id, ip_address
-    )
+    # Get or create session — wrapped in try/except for DB errors
+    try:
+        session, is_new = await get_or_create_session(
+            db, chat_request.session_id, ip_address
+        )
+    except Exception as e:
+        logger.exception("Failed to create chat session: %s", e)
+        return _error_json("خطا در ایجاد نشست. لطفاً دوباره تلاش کنید.", "session_error", 500)
 
     # Check session message limit
     if is_session_message_limit_reached(session):
-        return {
-            "error": "session_limit",
-            "message": "تعداد پیام‌های این مکالمه به حد مجاز رسیده. لطفاً مکالمه جدیدی شروع کنید.",
-        }
+        return _error_json(
+            "تعداد پیام‌های این مکالمه به حد مجاز رسیده. لطفاً مکالمه جدیدی شروع کنید.",
+            "session_limit",
+        )
 
     # Sanitize input
     user_message = chat_request.messages[0]
     sanitized_content = _sanitize_input(user_message.content)
 
     if not sanitized_content:
-        return {"error": "empty_message", "message": "پیام خالی است."}
+        return _error_json("پیام خالی است.", "empty_message")
 
     # Increment rate limit
     await rate_limiter.increment(ip_address)
 
     # Commit the session creation
-    await db.commit()
+    try:
+        await db.commit()
+    except Exception as e:
+        logger.exception("Failed to commit session: %s", e)
+        return _error_json("خطای دیتابیس. لطفاً دوباره تلاش کنید.", "db_error", 500)
 
     # Return SSE stream
     return StreamingResponse(

@@ -34,7 +34,10 @@ export default function ChatWidget() {
 
     // Check chat status
     fetch("/api/chat/status")
-      .then((res) => res.json())
+      .then((res) => {
+        if (!res.ok) throw new Error("status check failed");
+        return res.json();
+      })
       .then((data) => {
         setEnabled(data.enabled);
         if (data.welcome_message) {
@@ -42,7 +45,7 @@ export default function ChatWidget() {
         }
       })
       .catch(() => {
-        // If status check fails, still show widget but disable sending
+        // If status check fails, still show widget
       });
   }, []);
 
@@ -52,6 +55,16 @@ export default function ChatWidget() {
       localStorage.setItem(SESSION_STORAGE_KEY, sessionId);
     }
   }, [sessionId]);
+
+  const addErrorMessage = useCallback((text: string) => {
+    const errorMsg: Message = {
+      id: `error-${Date.now()}`,
+      role: "assistant",
+      content: text,
+    };
+    setMessages((prev) => [...prev, errorMsg]);
+    setStreamingContent("");
+  }, []);
 
   const handleSend = useCallback(
     async (content: string) => {
@@ -83,16 +96,28 @@ export default function ChatWidget() {
           signal: controller.signal,
         });
 
-        // Check for non-SSE error responses
+        // Handle HTTP errors first
+        if (!response.ok) {
+          // Try to parse JSON error body
+          try {
+            const errorData = await response.json();
+            addErrorMessage(
+              errorData.message || errorData.detail || "خطایی رخ داد. لطفاً دوباره تلاش کنید."
+            );
+          } catch {
+            addErrorMessage("خطایی رخ داد. لطفاً دوباره تلاش کنید.");
+          }
+          setIsLoading(false);
+          return;
+        }
+
+        // Check for JSON error responses (200 status but JSON body = not SSE)
         const contentType = response.headers.get("content-type") || "";
         if (contentType.includes("application/json")) {
           const errorData = await response.json();
-          const errorMsg: Message = {
-            id: `error-${Date.now()}`,
-            role: "assistant",
-            content: errorData.message || "خطایی رخ داد. لطفاً دوباره تلاش کنید.",
-          };
-          setMessages((prev) => [...prev, errorMsg]);
+          addErrorMessage(
+            errorData.message || "خطایی رخ داد. لطفاً دوباره تلاش کنید."
+          );
           setIsLoading(false);
           return;
         }
@@ -106,18 +131,25 @@ export default function ChatWidget() {
         // Process SSE stream
         const reader = response.body?.getReader();
         if (!reader) {
-          throw new Error("No response body");
+          addErrorMessage("خطا در دریافت پاسخ.");
+          setIsLoading(false);
+          return;
         }
 
         const decoder = new TextDecoder();
         let accumulated = "";
+        let buffer = ""; // Buffer for incomplete SSE lines
 
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
 
-          const chunk = decoder.decode(value, { stream: true });
-          const lines = chunk.split("\n");
+          buffer += decoder.decode(value, { stream: true });
+
+          // Process complete lines from buffer
+          const lines = buffer.split("\n");
+          // Keep the last potentially incomplete line in buffer
+          buffer = lines.pop() || "";
 
           for (const line of lines) {
             if (!line.startsWith("data: ")) continue;
@@ -129,7 +161,6 @@ export default function ChatWidget() {
                 accumulated += data.content;
                 setStreamingContent(accumulated);
               } else if (data.type === "done") {
-                // Streaming complete — finalize message
                 if (accumulated) {
                   const assistantMsg: Message = {
                     id: `assistant-${Date.now()}`,
@@ -139,42 +170,40 @@ export default function ChatWidget() {
                   setMessages((prev) => [...prev, assistantMsg]);
                 }
                 setStreamingContent("");
-
-                // Update session ID if returned
                 if (data.session_id) {
                   setSessionId(data.session_id);
                 }
               } else if (data.type === "error") {
-                const errorMsg: Message = {
-                  id: `error-${Date.now()}`,
-                  role: "assistant",
-                  content: data.content || "خطایی رخ داد.",
-                };
-                setMessages((prev) => [...prev, errorMsg]);
-                setStreamingContent("");
+                addErrorMessage(data.content || "خطایی رخ داد.");
               }
             } catch {
               // Skip malformed SSE lines
             }
           }
         }
+
+        // If stream ended without a 'done' event, finalize any accumulated content
+        if (accumulated && !messages.some((m) => m.content === accumulated)) {
+          const assistantMsg: Message = {
+            id: `assistant-${Date.now()}`,
+            role: "assistant",
+            content: accumulated,
+          };
+          setMessages((prev) => [...prev, assistantMsg]);
+          setStreamingContent("");
+        }
       } catch (err: unknown) {
         if (err instanceof DOMException && err.name === "AbortError") {
           // Request was aborted, ignore
         } else {
-          const errorMsg: Message = {
-            id: `error-${Date.now()}`,
-            role: "assistant",
-            content: "متأسفانه سرویس در دسترس نیست. لطفاً بعداً تلاش کنید.",
-          };
-          setMessages((prev) => [...prev, errorMsg]);
-          setStreamingContent("");
+          console.error("Chat error:", err);
+          addErrorMessage("متأسفانه سرویس در دسترس نیست. لطفاً بعداً تلاش کنید.");
         }
       } finally {
         setIsLoading(false);
       }
     },
-    [isLoading, sessionId]
+    [isLoading, sessionId, addErrorMessage, messages]
   );
 
   const handleClear = useCallback(() => {
