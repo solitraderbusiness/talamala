@@ -328,7 +328,7 @@ export default function ChatInsightsPage() {
                           <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
                         ))}
                       </Pie>
-                      <Tooltip formatter={(v: number) => v.toLocaleString("fa-IR")} />
+                      <Tooltip formatter={(v) => typeof v === "number" ? v.toLocaleString("fa-IR") : v} />
                     </PieChart>
                   </ResponsiveContainer>
                 </div>
@@ -346,7 +346,7 @@ export default function ChatInsightsPage() {
                     <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
                     <XAxis type="number" fontSize={11} />
                     <YAxis type="category" dataKey="label" width={120} fontSize={11} />
-                    <Tooltip formatter={(v: number) => v.toLocaleString("fa-IR")} />
+                    <Tooltip formatter={(v) => typeof v === "number" ? v.toLocaleString("fa-IR") : v} />
                     <Bar dataKey="count" fill="#d4a017" radius={[0, 4, 4, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
@@ -365,7 +365,7 @@ export default function ChatInsightsPage() {
                   <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
                   <XAxis type="number" fontSize={11} />
                   <YAxis type="category" dataKey="topic" width={130} fontSize={12} />
-                  <Tooltip formatter={(v: number) => v.toLocaleString("fa-IR")} />
+                  <Tooltip formatter={(v) => typeof v === "number" ? v.toLocaleString("fa-IR") : v} />
                   <Bar dataKey="count" fill="#e6b422" radius={[0, 4, 4, 0]} />
                 </BarChart>
               </ResponsiveContainer>
@@ -440,7 +440,7 @@ export default function ChatInsightsPage() {
                     <XAxis dataKey="bucket" fontSize={12} />
                     <YAxis fontSize={11} />
                     <Tooltip
-                      formatter={(v: number) => v.toLocaleString("fa-IR")}
+                      formatter={(v) => typeof v === "number" ? v.toLocaleString("fa-IR") : v}
                       labelFormatter={(l) => `${l} پیام`}
                     />
                     <Bar dataKey="count" fill="#c4951a" radius={[4, 4, 0, 0]} />
