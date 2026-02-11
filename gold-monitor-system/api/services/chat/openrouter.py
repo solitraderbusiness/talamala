@@ -30,7 +30,7 @@ def _load_system_prompt() -> str:
     except FileNotFoundError:
         logger.warning("System prompt file not found at %s", _PROMPT_PATH)
         return (
-            "You are the AI assistant for Talamala (طلامالا), a gold market analysis platform. "
+            "You are the AI assistant for Talamala (طلاملا), a gold market analysis platform. "
             "Always respond in Persian. Use the available tools to query our database."
         )
 

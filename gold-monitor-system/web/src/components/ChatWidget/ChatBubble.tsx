@@ -13,7 +13,7 @@ export default function ChatBubble({ isOpen, onClick }: ChatBubbleProps) {
         isOpen ? "scale-0 opacity-0" : "scale-100 opacity-100"
       } h-12 w-12 sm:h-14 sm:w-14`}
       aria-label="Open chat"
-      title="با طلامالا حرف بزن"
+      title="با طلاملا حرف بزن"
     >
       <svg
         xmlns="http://www.w3.org/2000/svg"

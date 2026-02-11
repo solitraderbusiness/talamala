@@ -17,10 +17,11 @@ export default function ChatWidget() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [streamingContent, setStreamingContent] = useState("");
+  const [statusText, setStatusText] = useState("");
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [enabled, setEnabled] = useState(true);
   const [welcomeMessage, setWelcomeMessage] = useState(
-    "سلام! من دستیار هوشمند طلامالا هستم. هر سوالی درباره اخبار، قیمت‌ها، تقویم اقتصادی و تحلیل بازار طلا دارید، بپرسید!"
+    "سلام! من دستیار هوشمند طلاملا هستم. هر سوالی درباره اخبار، قیمت‌ها، تقویم اقتصادی و تحلیل بازار طلا دارید، بپرسید!"
   );
 
   const abortRef = useRef<AbortController | null>(null);
@@ -158,7 +159,16 @@ export default function ChatWidget() {
             try {
               const data = JSON.parse(line.slice(6));
 
-              if (data.type === "content") {
+              if (data.type === "status") {
+                // Keep-alive + status update during tool processing
+                const labels: Record<string, string> = {
+                  thinking: "در حال فکر کردن...",
+                  searching: "در حال جستجو...",
+                  generating: "در حال نوشتن پاسخ...",
+                };
+                setStatusText(labels[data.content] || "");
+              } else if (data.type === "content") {
+                setStatusText("");
                 accumulated += data.content;
                 setStreamingContent(accumulated);
               } else if (data.type === "done") {
@@ -204,6 +214,7 @@ export default function ChatWidget() {
         }
       } finally {
         setIsLoading(false);
+        setStatusText("");
       }
     },
     [isLoading, sessionId, addErrorMessage, messages]
@@ -228,6 +239,7 @@ export default function ChatWidget() {
         messages={messages}
         isLoading={isLoading}
         streamingContent={streamingContent}
+        statusText={statusText}
         onSend={handleSend}
         welcomeMessage={welcomeMessage}
         onClear={handleClear}

@@ -17,6 +17,7 @@ interface ChatPanelProps {
   messages: Message[];
   isLoading: boolean;
   streamingContent: string;
+  statusText?: string;
   onSend: (message: string) => void;
   welcomeMessage: string;
   onClear: () => void;
@@ -38,6 +39,7 @@ export default function ChatPanel({
   onSend,
   welcomeMessage,
   onClear,
+  statusText,
 }: ChatPanelProps) {
   const [input, setInput] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -117,7 +119,7 @@ export default function ChatPanel({
           )}
         </div>
         <div className="flex items-center gap-2 text-sm font-medium text-gray-200">
-          <span>با طلامالا حرف بزن</span>
+          <span>با طلاملا حرف بزن</span>
           <span className="text-lg">🤖</span>
         </div>
       </div>
@@ -153,8 +155,10 @@ export default function ChatPanel({
           <MessageBubble role="assistant" content={streamingContent} />
         )}
 
-        {/* Typing indicator */}
-        {isLoading && !streamingContent && <TypingIndicator />}
+        {/* Typing indicator with status */}
+        {isLoading && !streamingContent && (
+          <TypingIndicator statusText={statusText} />
+        )}
 
         <div ref={messagesEndRef} />
       </div>

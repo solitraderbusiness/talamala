@@ -139,6 +139,7 @@ async def _generate_sse(
 
             # 5. First LLM call (may return tool_calls)
             logger.info("Sending chat request to OpenRouter (model=%s)", settings.CHAT_MODEL)
+            yield f"data: {json.dumps({'type': 'status', 'content': 'thinking'}, ensure_ascii=False)}\n\n"
             response_data = await client.chat_completion(
                 messages=messages,
                 tools=TOOL_DEFINITIONS,
@@ -155,6 +156,8 @@ async def _generate_sse(
                 # Add assistant's tool_calls message
                 assistant_tc_msg = response_data["choices"][0]["message"]
                 messages.append(assistant_tc_msg)
+
+                yield f"data: {json.dumps({'type': 'status', 'content': 'searching'}, ensure_ascii=False)}\n\n"
 
                 for tc in tool_calls:
                     tool_name = tc["function"]["name"]
@@ -184,6 +187,7 @@ async def _generate_sse(
                     })
 
                 # 7. Second LLM call — stream the final response
+                yield f"data: {json.dumps({'type': 'status', 'content': 'generating'}, ensure_ascii=False)}\n\n"
                 full_response = ""
                 async for chunk in client.chat_completion_stream(messages=messages):
                     full_response += chunk
@@ -300,7 +304,7 @@ async def chat_status():
     """Check if chat is enabled and return welcome message."""
     enabled = settings.CHAT_ENABLED and bool(settings.OPENROUTER_API_KEY)
 
-    welcome = "سلام! من دستیار هوشمند طلامالا هستم. هر سوالی درباره اخبار، قیمت‌ها، تقویم اقتصادی و تحلیل بازار طلا دارید، بپرسید!"
+    welcome = "سلام! من دستیار هوشمند طلاملا هستم. هر سوالی درباره اخبار، قیمت‌ها، تقویم اقتصادی و تحلیل بازار طلا دارید، بپرسید!"
 
     # Try to load custom welcome from DB
     try:
