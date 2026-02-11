@@ -76,7 +76,7 @@ The repo contains two sub-projects:
 
 | Service | Image / Build | Port | Purpose |
 |---------|---------------|------|---------|
-| `db` | `postgres:16-alpine` | 5432 | Primary data store (8 tables) |
+| `db` | `postgres:16-alpine` | 5432 | Primary data store (10 tables) |
 | `redis` | `redis:7-alpine` | 6379 | Dedup cache, worker lock |
 | `api` | `api/Dockerfile` (Python 3.12) | 8000 | FastAPI REST API + startup migrations |
 | `worker` | Same image as `api` | — | Periodic fetch-match-alert pipeline (60s cycle) |
@@ -84,13 +84,20 @@ The repo contains two sub-projects:
 
 ### Data Flow (every 60 seconds)
 1. Worker acquires Redis distributed lock (`worker:lock`, 55s TTL)
-2. Queries enabled sources whose `poll_interval_seconds` has elapsed
-3. Fetches content via appropriate fetcher (RSS/HTML/JSON)
-4. Deduplicates raw items by SHA-256 content hash (Redis 24h TTL → DB fallback)
-5. Matches items against YAML rules (keyword + signal substring matching)
-6. Determines severity deterministically from `importance_criteria`
-7. Optionally enriches with LLM-generated Persian text (OpenRouter)
-8. Persists alerts and fetch log entries
+2. Fetches current price snapshot (Redis cache → BrsAPI → TGJU fallback)
+3. Queries enabled sources whose `poll_interval_seconds` has elapsed
+4. Fetches content via appropriate fetcher (RSS/HTML/JSON)
+5. Deduplicates raw items by SHA-256 content hash (Redis 24h TTL → DB fallback)
+6. Matches items against YAML rules (keyword + signal substring matching)
+7. Determines severity deterministically from `importance_criteria`
+8. Classifies alert: `news_type` (price_report/causal_event/mixed/commentary) + `event_category` (fed_policy/geopolitics/iran_forex/etc.)
+9. Stamps 4 market prices at alert creation time (XAUUSD, USD/IRR, Emami coin, 18K gold)
+10. Optionally enriches with LLM-generated Persian text (OpenRouter)
+11. Persists alerts and fetch log entries
+
+### Background Jobs (API process)
+- **Calendar sync** (`calendar_sync.py`): Fetches economic events from JBlanked + Finnhub every 6 hours
+- **Price outcome tracker** (`price_tracker.py`): Every 15 minutes, checks prices 1h/4h/24h after each alert to verify directional accuracy. Results stored in `alert_price_outcomes` table.
 
 ### API Proxy
 The Next.js frontend uses `next.config.js` rewrites to proxy `/api/*` requests to the FastAPI backend (`INTERNAL_API_URL`, default `http://api:8000`). The web client's `api.ts` uses relative paths (empty `API_URL`).
@@ -114,16 +121,20 @@ talamala/
 │   │   ├── main.py                              ← FastAPI app factory + startup lifecycle
 │   │   ├── config.py                            ← Pydantic settings (env vars)
 │   │   ├── database.py                          ← SQLAlchemy async/sync engines
-│   │   ├── models.py                            ← ORM models (8 tables)
+│   │   ├── models.py                            ← ORM models (10 tables)
 │   │   ├── schemas.py                           ← Pydantic request/response schemas
 │   │   ├── auth.py                              ← JWT + bcrypt authentication
 │   │   ├── seed.py                              ← Standalone data seeder script
+│   │   ├── price_snapshot.py                    ← Shared price fetcher (Redis→BrsAPI→TGJU)
+│   │   ├── alert_classify.py                    ← Rule ID → news_type + event_category mapping
 │   │   ├── alembic.ini                          ← Alembic configuration
 │   │   ├── alembic/
 │   │   │   ├── env.py
 │   │   │   ├── script.py.mako
 │   │   │   └── versions/
-│   │   │       └── 001_initial_schema.py        ← Initial migration (7 tables + seeds)
+│   │   │       ├── 001_initial_schema.py        ← Initial migration (7 tables + seeds)
+│   │   │       ├── 002_add_economic_events.py   ← Economic events table
+│   │   │       └── 003_add_price_tracking.py    ← Price tracking columns + outcomes table
 │   │   ├── routers/
 │   │   │   ├── __init__.py
 │   │   │   ├── alerts.py                        ← GET /api/alerts, /stats/today, /{id}
@@ -146,6 +157,7 @@ talamala/
 │   │   │   ├── __init__.py
 │   │   │   ├── main.py                          ← Worker loop (60s cycle) + pipeline
 │   │   │   ├── calendar_sync.py                 ← Calendar sync (JBlanked + Finnhub, 6h interval)
+│   │   │   ├── price_tracker.py                 ← Background price outcome tracker (15min loop)
 │   │   │   ├── dedup.py                         ← Redis + DB deduplication checker
 │   │   │   └── fetchers/
 │   │   │       ├── __init__.py                  ← Fetcher registry (get_fetcher)
@@ -179,6 +191,7 @@ talamala/
 │           │   ├── not-found.tsx                ← 404 page
 │           │   ├── alert/[id]/page.tsx          ← Alert detail view
 │           │   ├── calendar/page.tsx            ← Economic event calendar (list/week views)
+│           │   ├── prices/page.tsx              ← Price history & details page
 │           │   ├── library/page.tsx             ← Rule library browser
 │           │   └── admin/
 │           │       ├── layout.tsx               ← Admin auth guard + tab navigation
@@ -374,7 +387,7 @@ The worker fetches from these RSS sources (via Google News and direct feeds):
 
 ## 8. Database Schema
 
-**8 tables**, all using UUID primary keys and UTC timestamps.
+**10 tables**, all using UUID primary keys and UTC timestamps.
 
 ### sources
 Configurable data sources for the worker to fetch.
@@ -432,6 +445,12 @@ Generated alerts with severity, impact, and Persian text.
 | `dedupe_key` | VARCHAR(255) | Unique constraint for dedup |
 | `raw_item_id` | UUID | FK → raw_items (SET NULL) |
 | `match_evidence` | JSONB | {rule_id: {keywords: [], signals: []}, direction, direction_confidence, direction_method, alert_score} |
+| `price_xauusd_at_alert` | FLOAT | Gold price (USD/oz) at alert creation (nullable) |
+| `price_usdirr_at_alert` | FLOAT | USD/IRR rate at alert creation (nullable) |
+| `price_coin_at_alert` | FLOAT | Emami coin price (Toman) at alert creation (nullable) |
+| `price_18k_at_alert` | FLOAT | 18K gold price (Toman/gram) at alert creation (nullable) |
+| `news_type` | VARCHAR(50) | `price_report`, `causal_event`, `mixed`, `commentary` (nullable) |
+| `event_category` | VARCHAR(50) | `fed_policy`, `geopolitics`, `iran_forex`, `gold_price`, etc. (nullable) |
 
 ### fetch_logs
 Per-source fetch history with timing and error tracking.
@@ -511,10 +530,31 @@ Cached economic calendar events from external APIs (JBlanked / Finnhub).
 Unique constraint on `(event_name, datetime_utc)` for upsert dedup.
 Indexed on `datetime_utc`, `impact`, `currency`.
 
+### alert_price_outcomes
+Price changes tracked at 1h/4h/24h after each alert for directional accuracy analysis.
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | UUID | PK |
+| `alert_id` | UUID | FK → alerts (CASCADE) |
+| `check_interval` | VARCHAR(10) | `1h`, `4h`, `24h` |
+| `checked_at` | TIMESTAMPTZ | When the price check ran |
+| `price_xauusd` | FLOAT | Gold price at check time (nullable) |
+| `price_usdirr` | FLOAT | USD/IRR at check time (nullable) |
+| `price_coin` | FLOAT | Emami coin at check time (nullable) |
+| `price_18k` | FLOAT | 18K gold at check time (nullable) |
+| `change_pct_xauusd` | FLOAT | % change from alert time (nullable) |
+| `change_pct_usdirr` | FLOAT | % change from alert time (nullable) |
+| `change_pct_coin` | FLOAT | % change from alert time (nullable) |
+| `change_pct_18k` | FLOAT | % change from alert time (nullable) |
+| `direction_correct` | BOOLEAN | Did price move in predicted direction? (nullable) |
+
+Unique constraint on `(alert_id, check_interval)`.
+
 ### Relationships
 - `sources` → `raw_items` (one-to-many, CASCADE delete)
 - `sources` → `fetch_logs` (one-to-many, CASCADE delete)
 - `raw_items` → `alerts` (one-to-one optional, SET NULL on delete)
+- `alerts` → `alert_price_outcomes` (one-to-many, CASCADE delete)
 
 ## 9. Key Conventions
 
@@ -587,9 +627,9 @@ Result is clamped to [0, 100]. Bullish critical alerts with high confidence scor
 
 ### Working
 - Full Docker Compose orchestration (5 services with health checks)
-- API with all endpoints (alerts, sources, admin, rules, health, prices, sentiment)
-- Database schema with Alembic migration + startup table creation
-- Worker pipeline: fetch → dedup → match → alert (60s cycle)
+- API with all endpoints (alerts, sources, admin, rules, health, prices, sentiment, calendar)
+- Database schema with Alembic migrations (3 versions) + startup table creation
+- Worker pipeline: fetch → dedup → match → classify → stamp prices → alert (60s cycle)
 - Three fetcher types (RSS, HTML, JSON)
 - Deterministic rule engine with 32+ rules (compound keywords + signals to prevent false positives)
 - Event-type severity classification with 4 levels including "critical" (regex patterns for war, Fed decisions, sanctions, etc.)
@@ -619,6 +659,10 @@ Result is clamped to [0, 100]. Bullish critical alerts with high confidence scor
 - 16 RSS sources (9 international, 1 Persian, 6 disabled)
 - Worker LLM type safety (_ensure_str helper prevents list-to-str crashes)
 - Rule engine unit tests (matcher, severity, alert_builder, direction) — 136 tests passing
+- **Economic Event Calendar** — JBlanked + Finnhub APIs, 6h auto-sync, ~120 Persian translations, gold impact notes, asset/impact filters, list/week views, dashboard widget
+- **Price tracking at alert time** — 4 market prices (XAUUSD, USD/IRR, coin, 18K gold) stamped on every new alert
+- **Alert classification** — news_type (price_report/causal_event/mixed/commentary) + event_category (fed_policy/geopolitics/iran_forex/etc.) auto-assigned from rule IDs
+- **Price outcome tracking** — background job checks prices 1h/4h/24h after each alert, stores change %, verifies directional accuracy
 
 ### Known Issues
 - CORS is fully permissive (`allow_origins=["*"]`) — needs restriction for production
@@ -626,6 +670,8 @@ Result is clamped to [0, 100]. Bullish critical alerts with high confidence scor
 - Web frontend's `fetchSourceNow` calls `/api/sources/{id}/fetch` but the API route is `/api/sources/{id}/fetch-now`
 - The `gold-monitor/` prototype uses mock data only; not connected to the backend
 - Older alerts lack `direction`/`alert_score` in `match_evidence` — polarity defaults to neutral for sentiment calculation
+- Older alerts lack price stamps (`price_xauusd_at_alert` etc.) — price outcome tracking only works for alerts created after migration 003
+- `news_type`/`event_category` only populated for alerts created after migration 003
 
 ## 11. Common Tasks
 

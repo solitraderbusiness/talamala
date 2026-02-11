@@ -29,7 +29,7 @@ Real-time gold market intelligence and alerting system for **Persian (Farsi) use
 
 | Service | Image | Port | Purpose |
 |---------|-------|------|---------|
-| `db` | postgres:16-alpine | 5432 | Primary data store (8 tables) |
+| `db` | postgres:16-alpine | 5432 | Primary data store (10 tables) |
 | `redis` | redis:7-alpine | 6379 | Dedup cache, worker distributed lock |
 | `api` | Python 3.12 (FastAPI) | 8000 | REST API + startup migrations |
 | `worker` | Same as api | — | Periodic fetch-match-alert pipeline |
@@ -71,8 +71,14 @@ docker compose up -d
 6. Each item is matched against **YAML rules** (keyword + signal substring matching)
 7. **Severity** is classified by event type (regex patterns), then YAML criteria, then score fallback
 8. **Direction** detected via 3-stage pipeline: regex patterns → lexicon scoring → LLM fallback
-9. If LLM is enabled, **OpenRouter** generates Persian text (summary, why_important)
-10. **Alerts** are persisted with severity, direction, confidence, and per-alert score
+9. **Classification**: `news_type` + `event_category` auto-assigned from matched rule IDs
+10. **Price snapshot**: 4 market prices (XAUUSD, USD/IRR, coin, 18K gold) stamped on every alert
+11. If LLM is enabled, **OpenRouter** generates Persian text (summary, why_important)
+12. **Alerts** are persisted with severity, direction, confidence, per-alert score, prices, and classification
+
+### Background Jobs (API Process)
+- **Calendar sync** (`calendar_sync.py`): Fetches economic events from JBlanked + Finnhub every 6 hours
+- **Price outcome tracker** (`price_tracker.py`): Every 15 minutes, checks prices 1h/4h/24h after each alert to verify directional accuracy
 
 ### Rule Engine (Deterministic)
 
@@ -191,6 +197,10 @@ Returns: gold_global (USD/oz), gold_18k (toman/gram), usd (toman), emami_coin (t
 | `GET` | `/api/rules/library` | All rules grouped by section |
 | `GET` | `/api/rules/{rule_id}` | Single rule with full metadata |
 | `GET` | `/api/health` | Health check: DB, Redis, rules count, last worker run |
+| `GET` | `/api/calendar` | Economic events calendar (filterable: from, to, asset, impact) |
+| `GET` | `/api/calendar/upcoming` | Next upcoming high-impact events |
+| `GET` | `/api/calendar/sync-status` | Calendar sync status |
+| `POST` | `/api/calendar/sync` | Trigger manual calendar sync |
 
 ### Admin (JWT required)
 
@@ -209,18 +219,20 @@ Returns: gold_global (USD/oz), gold_18k (toman/gram), usd (toman), emami_coin (t
 
 ## Database Schema
 
-**8 tables**, all using UUID primary keys and UTC timestamps.
+**10 tables**, all using UUID primary keys and UTC timestamps.
 
 | Table | Purpose | Key Fields |
 |-------|---------|------------|
 | `sources` | Configurable data sources | name, type (rss/html/json_api), base_url, endpoints, enabled, poll_interval_seconds, categories, rule_bindings |
 | `raw_items` | Fetched news items (deduped) | title, url, content_text, content_hash (SHA-256, indexed), source_id FK |
-| `alerts` | Generated alerts | title, severity, time_horizon, confidence, summary_fa, why_important_fa, expected_impact (JSONB), dedupe_key (unique), matched_rule_ids |
+| `alerts` | Generated alerts | title, severity, time_horizon, confidence, summary_fa, why_important_fa, expected_impact (JSONB), dedupe_key (unique), matched_rule_ids, price_xauusd_at_alert, price_usdirr_at_alert, price_coin_at_alert, price_18k_at_alert, news_type, event_category |
+| `alert_price_outcomes` | Price changes 1h/4h/24h after alert | alert_id FK, check_interval, price columns, change_pct columns, direction_correct |
 | `fetch_logs` | Per-source fetch history | source_id FK, status, items_fetched_count, duration_ms, error_message |
 | `settings` | Key-value config store | key (PK), value (JSONB) |
 | `admin_users` | Admin credentials | email (unique), password_hash (bcrypt), role |
 | `rules_snapshot` | YAML version tracking | version (SHA-256 prefix), yaml_content |
 | `sentiment_scores` | Historical sentiment | timeframe (1h/4h/24h), score (0-100), sentiment, alert_count |
+| `economic_events` | Cached calendar events | event_name, event_name_fa, country, impact, datetime_utc, actual/forecast/previous |
 
 ### Relationships
 - `sources` → `raw_items` (one-to-many, CASCADE delete)
@@ -240,11 +252,14 @@ gold-monitor-system/
 │   ├── main.py                              # FastAPI app + startup lifecycle + migrations
 │   ├── config.py                            # Pydantic settings (env vars)
 │   ├── database.py                          # SQLAlchemy async/sync engines
-│   ├── models.py                            # ORM models (8 tables)
+│   ├── models.py                            # ORM models (10 tables)
 │   ├── schemas.py                           # Pydantic request/response schemas
 │   ├── auth.py                              # JWT + bcrypt authentication
 │   ├── seed.py                              # Standalone data seeder script
-│   ├── alembic.ini + alembic/               # Database migrations
+│   ├── price_snapshot.py                    # Shared price fetcher (Redis→BrsAPI→TGJU)
+│   ├── alert_classify.py                    # Rule ID → news_type + event_category
+│   ├── calendar_config.py                   # Event translations, asset mappings
+│   ├── alembic.ini + alembic/               # Database migrations (3 versions)
 │   ├── routers/
 │   │   ├── alerts.py                        # GET /api/alerts, /stats/today, /{id}
 │   │   ├── sources.py                       # CRUD + fetch-now + logs (admin-only)
@@ -252,6 +267,7 @@ gold-monitor-system/
 │   │   ├── rules.py                         # Rule library + single rule
 │   │   ├── prices.py                        # Real-time prices (BrsAPI + TGJU fallback)
 │   │   ├── sentiment.py                     # Multi-timeframe sentiment + history
+│   │   ├── calendar.py                      # Economic event calendar API
 │   │   └── health.py                        # Health check (DB + Redis + rules)
 │   ├── rule_engine/
 │   │   ├── load_rules.py                    # YAML parser → Rule dataclasses (cached)
@@ -261,6 +277,8 @@ gold-monitor-system/
 │   │   └── alert_builder.py                 # Alert dict assembly + dedupe key
 │   ├── worker/
 │   │   ├── main.py                          # Worker loop (60s cycle) + pipeline
+│   │   ├── calendar_sync.py                 # Calendar sync (JBlanked + Finnhub, 6h)
+│   │   ├── price_tracker.py                 # Price outcome tracker (15min loop)
 │   │   ├── dedup.py                         # Redis + DB deduplication checker
 │   │   └── fetchers/
 │   │       ├── base.py                      # BaseFetcher ABC + RawItem dataclass
@@ -284,6 +302,8 @@ gold-monitor-system/
         │   ├── layout.tsx                   # Root layout (RTL, lang="fa", Vazirmatn)
         │   ├── page.tsx                     # Dashboard (stats, risk gauge, alert feed)
         │   ├── alert/[id]/page.tsx          # Alert detail view
+        │   ├── calendar/page.tsx            # Economic event calendar
+        │   ├── prices/page.tsx              # Price details page
         │   ├── library/page.tsx             # Rule library browser
         │   └── admin/                       # Admin panel (login, sources, settings)
         ├── components/
@@ -312,7 +332,7 @@ gold-monitor-system/
 - **httpx** — OpenRouter + BrsAPI client
 - **python-jose** — JWT (HS256)
 - **passlib + bcrypt** — Password hashing
-- **pytest + pytest-asyncio** — 136 tests
+- **pytest + pytest-asyncio** — Testing (136 tests)
 
 ### Frontend (TypeScript)
 - **Next.js 14** (App Router) — React framework
@@ -396,9 +416,10 @@ On every API container start:
 2. Seed default admin user if not exists
 3. Seed default news sources if none exist
 4. Run one-time data migrations (v1-v8, marker-guarded)
-5. Create `sentiment_scores` table (`checkfirst=True`)
+5. Create dynamic tables (`sentiment_scores`, `economic_events`, `alert_price_outcomes`) via `checkfirst=True`
 6. Flush Redis dedup keys if version changed (triggers re-processing)
 7. Snapshot current YAML rules
+8. Start background jobs: calendar sync (6h) + price outcome tracker (15min)
 
 ## Troubleshooting
 

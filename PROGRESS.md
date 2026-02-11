@@ -20,6 +20,19 @@ These are features that already exist in the design/prototype but are broken or 
 
 ---
 
+## Phase 1.5 — Data Collection for Analytics (جمع‌آوری داده)
+
+Collecting data now for future monetizable features. Every day without this is lost data.
+
+| # | Feature | Description | Status | Notes |
+|---|---------|-------------|--------|-------|
+| A | **Price Snapshot at Alert Time** | Stamp 4 market prices (XAUUSD, USD/IRR, Emami coin, 18K gold) on every new alert at creation time. | ✅ Done | `price_snapshot.py` shared module. Worker stamps prices once per cycle. Tries Redis cache → BrsAPI → TGJU fallback. Migration 003. |
+| B | **Alert Classification** | Auto-assign `news_type` (price_report/causal_event/mixed/commentary) and `event_category` (fed_policy/geopolitics/iran_forex/etc.) from matched rule IDs. | ✅ Done | `alert_classify.py` maps 30+ rule IDs. Worker stamps on every new alert. Migration 003. |
+| C | **Price Outcome Tracking** | Background job checks prices 1h/4h/24h after each alert to verify directional accuracy. | ✅ Done | `price_tracker.py` runs every 15min in API process. `alert_price_outcomes` table with unique constraint on (alert_id, check_interval). Tolerance windows: 1h±15min, 4h±30min, 24h±60min. |
+| D | **User Interaction Tracking** | Track clicks, bookmarks, shares on alerts for recommendation engine. | ⬜ Not Started | `user_alert_interactions` table needed. Lower priority — can be added later. |
+
+---
+
 ## Phase 2 — Complete the Core (تکمیل هسته)
 
 Features that need some new code but complete the existing product.
@@ -56,20 +69,37 @@ Nice-to-have features for future development.
 | 16 | **Technical Analysis — Full** | RSI, MACD, MA200 computation and alerts. | ⬜ Not Started | Depends on #15. |
 | 17 | **Push/Desktop Notifications** | Browser notifications for high-severity alerts. | ⬜ Not Started | |
 | 18 | **Telegram/Email Alerts** | External notification channels. | ⬜ Not Started | |
-| 19 | **CLAUDE.md + README** | Proper project documentation on main branch. | ⬜ Not Started | README is empty. CLAUDE.md only on feature branch. |
+| 19 | **CLAUDE.md + README** | Proper project documentation on main branch. | ✅ Done | CLAUDE.md, PROGRESS.md, SYSTEM_LOGIC.md, README all updated. |
 | 20 | **PWA Support** | Installable on mobile as Progressive Web App. | ⬜ Not Started | |
 
 ---
 
 ## Asset Coverage Summary
 
-| Asset | Price Data | Alerts | Dedicated Page | Special Features | Overall |
-|-------|-----------|--------|---------------|-----------------|---------|
-| طلای جهانی (XAUUSD) | ✅ BrsAPI/TGJU | ⚠️ Unreliable feeds | ⬜ No | ⬜ No technical signals | ⚠️ Partial |
-| طلای ایران (18k) | ✅ BrsAPI/TGJU | ⚠️ Unreliable feeds | ⬜ No | — | ⚠️ Partial |
-| دلار (USD/USDT) | ✅ BrsAPI/TGJU | ⚠️ Unreliable feeds | ⬜ No | — | ⚠️ Partial |
-| سکه امامی | ✅ BrsAPI/TGJU | ⚠️ Unreliable feeds | ⬜ No | ⬜ No حباب calc | ⚠️ Partial |
-| صندوق‌های طلا | ❌ None | ❌ None | ⬜ No | ⬜ No NAV/premium | ❌ Missing |
+| Asset | Price Data | Alerts | Price Tracking | Dedicated Page | Special Features | Overall |
+|-------|-----------|--------|---------------|---------------|-----------------|---------|
+| طلای جهانی (XAUUSD) | ✅ BrsAPI/TGJU | ⚠️ Unreliable feeds | ✅ Stamped + outcomes | ⬜ No | ⬜ No technical signals | ⚠️ Partial |
+| طلای ایران (18k) | ✅ BrsAPI/TGJU | ⚠️ Unreliable feeds | ✅ Stamped + outcomes | ⬜ No | — | ⚠️ Partial |
+| دلار (USD/USDT) | ✅ BrsAPI/TGJU | ⚠️ Unreliable feeds | ✅ Stamped + outcomes | ⬜ No | — | ⚠️ Partial |
+| سکه امامی | ✅ BrsAPI/TGJU | ⚠️ Unreliable feeds | ✅ Stamped + outcomes | ⬜ No | ⬜ No حباب calc | ⚠️ Partial |
+| صندوق‌های طلا | ❌ None | ❌ None | ❌ None | ⬜ No | ⬜ No NAV/premium | ❌ Missing |
+
+---
+
+## Database Tables (10 total)
+
+| Table | Migration | Purpose |
+|-------|-----------|---------|
+| `sources` | 001 | Configurable news data sources |
+| `raw_items` | 001 | Fetched news items (deduped by SHA-256) |
+| `alerts` | 001 + 003 | Generated alerts with prices, classification |
+| `fetch_logs` | 001 | Per-source fetch history |
+| `settings` | 001 | Key-value config store |
+| `admin_users` | 001 | Admin credentials (bcrypt) |
+| `rules_snapshot` | 001 | YAML version tracking |
+| `sentiment_scores` | lifespan | Historical sentiment scores |
+| `economic_events` | 002 | Cached calendar events (JBlanked/Finnhub) |
+| `alert_price_outcomes` | 003 | Price changes 1h/4h/24h after alerts |
 
 ---
 
@@ -77,5 +107,6 @@ Nice-to-have features for future development.
 
 | Date | What Changed |
 |------|-------------|
+| 2026-02-11 | **Price Tracking & Alert Classification**: 4 price columns on alerts (stamped at creation), `news_type` + `event_category` classification (30+ rule mappings), `alert_price_outcomes` table with 1h/4h/24h tracking, background price tracker job (15min loop), `price_snapshot.py` shared module, `alert_classify.py`, migration 003. Dashboard UI/UX improvements (events widget, price card, alert counts). |
 | 2026-02-10 | **Economic Event Calendar**: Full implementation — new model (`EconomicEvent`), calendar sync worker (JBlanked + Finnhub APIs, 6h interval), `/api/calendar` endpoint with asset/impact filtering, `/calendar` frontend page with list/week views, countdown timer, event-asset mapping with gold impact notes, ~120 Persian translations, dashboard upcoming events widget, navigation updated. |
 | 2026-02-09 | Created this progress tracker. Tagged `safe-checkpoint-2026-02-09`. |

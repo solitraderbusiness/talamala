@@ -17,7 +17,9 @@
 8. [Deduplication (حذف تکراری‌ها)](#8-deduplication)
 9. [Price Data (داده‌های قیمت)](#9-price-data)
 10. [News Sources & Fetchers (منابع خبری)](#10-news-sources--fetchers)
-11. [Key Thresholds & Constants (مقادیر ثابت)](#11-key-thresholds--constants)
+11. [Price Tracking & Outcome Verification (ردیابی قیمت)](#11-price-tracking--outcome-verification)
+12. [Alert Classification (دسته‌بندی هشدار)](#12-alert-classification)
+13. [Key Thresholds & Constants (مقادیر ثابت)](#13-key-thresholds--constants)
 
 ---
 
@@ -538,7 +540,105 @@ After 6 hours, the same story can create a new alert (useful if the story develo
 
 ---
 
-## 11. Key Thresholds & Constants
+## 11. Price Tracking & Outcome Verification
+
+**What it does:** Captures market prices at the moment each alert is created, then checks back later to see if the predicted direction was correct.
+
+**Files:** `api/price_snapshot.py`, `api/worker/price_tracker.py`, `api/worker/main.py`
+
+### Price Snapshot at Alert Time
+
+Every worker cycle, before processing sources, fetches current prices once:
+
+```
+Source priority:
+1. Redis cache (key: "prices:latest", 60s TTL) — zero-cost
+2. BrsAPI (brsapi.ir) — requires BRSAPI_KEY
+3. TGJU (call4.tgju.org) — free fallback
+```
+
+4 prices stamped on each alert:
+| Field | What | Unit |
+|-------|------|------|
+| `price_xauusd_at_alert` | Gold spot price | USD/oz |
+| `price_usdirr_at_alert` | USD/IRR exchange rate | Toman |
+| `price_coin_at_alert` | Emami gold coin | Toman |
+| `price_18k_at_alert` | 18K gold per gram | Toman |
+
+TGJU prices are in Rial — divided by 10 for Toman (except XAUUSD which is USD).
+
+### Outcome Tracking (Background Job)
+
+**Runs every 15 minutes** in the API process (same pattern as calendar sync).
+
+For each alert that has `price_xauusd_at_alert` set and is between 45min and 48h old:
+
+```
+Check intervals:
+  1h  → eligible at 45min–1h15min after alert
+  4h  → eligible at 3h30min–4h30min after alert
+  24h → eligible at 23h–25h after alert
+```
+
+For each eligible (alert, interval) pair not already tracked:
+1. Fetch current prices via `get_price_snapshot()`
+2. Calculate `change_pct = (new - old) / old × 100` for each price
+3. Check direction correctness:
+   ```
+   predicted_direction = alert.match_evidence.direction  (bullish/bearish/neutral)
+   actual_movement = sign(current_xauusd - alert_xauusd)
+
+   direction_correct =
+     if predicted == "bullish" and actual > 0 → True
+     if predicted == "bearish" and actual < 0 → True
+     if predicted == "neutral" → None (not evaluated)
+     otherwise → False
+   ```
+4. Store in `alert_price_outcomes` table (unique on alert_id + check_interval)
+
+**Limits:** Max 50 alerts per run. Ignores alerts older than 48h.
+
+---
+
+## 12. Alert Classification
+
+**What it does:** Automatically assigns a `news_type` and `event_category` to each alert based on which rules matched.
+
+**File:** `api/alert_classify.py`
+
+### news_type (4 values)
+
+Determined from matched rule IDs:
+| Type | When | Examples |
+|------|------|---------|
+| `price_report` | Only price-reporting rules matched | GLOB_GOLD_PRICE, IR_GOLD_COIN_PRICE |
+| `causal_event` | Only event/causal rules matched | GLOB_RATE_DECISION, IR_FX_USD |
+| `mixed` | Both price + event rules matched | GLOB_GOLD_PRICE + GLOB_RATE_DECISION |
+| `commentary` | No specific mapping found | Fallback |
+
+### event_category (13 values)
+
+Mapped from rule IDs in priority order (first matched category wins):
+
+| Category | Rule IDs |
+|----------|---------|
+| `fed_policy` | GLOB_RATE_DECISION, GLOB_CENTRAL_BANK |
+| `geopolitics` | GLOB_GEOPOL_RISK |
+| `usd_dxy` | GLOB_USD_DXY |
+| `inflation` | GLOB_CPI_INFLATION |
+| `etf_flows` | GLOB_ETF_FLOWS |
+| `mining_supply` | GLOB_MINING_SUPPLY |
+| `equity_risk` | GLOB_EQUITY_RISK_OFF |
+| `gold_price` | GLOB_GOLD_PRICE |
+| `iran_forex` | IR_FX_USD, IR_FX_HAWALA |
+| `iran_policy` | IR_RESERVES_SANCTIONS, IR_FOREIGN_POLICY, IR_INTERNAL_POL_SOCIAL |
+| `iran_demand` | IR_PHYSICAL_DEMAND, IR_SEASONAL_WEDDING |
+| `coin` | COIN_* rules |
+| `other` | Fallback |
+
+---
+
+## 13. Key Thresholds & Constants
 
 ### Sentiment
 
@@ -590,6 +690,18 @@ After 6 hours, the same story can create a new alert (useful if the story develo
 | Max alerts per source/cycle | 10 |
 | Max article age | 48 hours |
 
+### Price Tracking
+
+| Parameter | Value |
+|-----------|-------|
+| Price tracker interval | 15 minutes |
+| 1h check window | 45min–1h15min |
+| 4h check window | 3h30min–4h30min |
+| 24h check window | 23h–25h |
+| Max alerts per tracker run | 50 |
+| Max alert age for tracking | 48 hours |
+| Price sources | Redis cache → BrsAPI → TGJU |
+
 ---
 
 ## Source Code Reference
@@ -604,7 +716,13 @@ After 6 hours, the same story can create a new alert (useful if the story develo
 | Rule loading from YAML | `api/rule_engine/load_rules.py` |
 | Deduplication | `api/worker/dedup.py` |
 | Worker pipeline | `api/worker/main.py` |
-| Price fetching | `api/routers/prices.py` |
+| Price fetching (API) | `api/routers/prices.py` |
+| Price snapshot (shared) | `api/price_snapshot.py` |
+| Price outcome tracker | `api/worker/price_tracker.py` |
+| Alert classification | `api/alert_classify.py` |
+| Calendar sync | `api/worker/calendar_sync.py` |
+| Calendar config | `api/calendar_config.py` |
+| Calendar API | `api/routers/calendar.py` |
 | RSS fetcher | `api/worker/fetchers/rss_fetcher.py` |
 | HTML fetcher | `api/worker/fetchers/html_fetcher.py` |
 | JSON fetcher | `api/worker/fetchers/json_fetcher.py` |
