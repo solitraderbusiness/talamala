@@ -297,7 +297,43 @@ export default function AIAnalysisPage() {
       const res = await fetch("/api/ai-analysis/consensus/latest");
       if (res.ok) {
         const data = await res.json();
-        setConsensus(data);
+        const consensuses = data.consensuses || [];
+
+        // Transform API consensus snapshots to frontend TimeframeConsensus format
+        const timeframes: TimeframeConsensus[] = consensuses.map((c: Record<string, unknown>) => ({
+          timeframe: c.consensus_view as string,
+          direction: (c.consensus_direction as string) || "NEUTRAL",
+          strength: (c.consensus_strength as number) || 0,
+          entry_price: (c.avg_entry_price ?? c.median_entry_price ?? null) as number | null,
+          stop_loss: (c.avg_stop_loss ?? null) as number | null,
+          take_profit: (c.avg_take_profit ?? null) as number | null,
+          signal_count: (c.signals_count as number) || 0,
+          reasons: (c.dominant_reasons as string[]) || [],
+        }));
+
+        // Compute alignment from directions
+        const directions = timeframes.map(t => t.direction).filter(d => d !== "NEUTRAL");
+        const uniqueDirections = Array.from(new Set(directions));
+        let alignment: "aligned" | "conflict" | "partial" = "partial";
+        let alignment_message = "";
+        if (uniqueDirections.length === 1 && directions.length > 0) {
+          alignment = "aligned";
+          alignment_message = `همه تایم‌فریم‌ها ${uniqueDirections[0] === "BUY" ? "خرید" : "فروش"} هستند`;
+        } else if (uniqueDirections.length > 1) {
+          alignment = "conflict";
+          alignment_message = "تایم‌فریم‌ها در جهات مختلف هستند";
+        } else {
+          alignment_message = "تایم‌فریم‌ها خنثی هستند";
+        }
+
+        setConsensus({
+          timestamp: data.updated_at || new Date().toISOString(),
+          current_price: data.current_price ?? null,
+          timeframes,
+          alignment,
+          alignment_message,
+          active_signals: timeframes.reduce((sum: number, t: TimeframeConsensus) => sum + t.signal_count, 0),
+        });
         if (data.current_price) {
           setCurrentPrice(data.current_price);
         }
@@ -318,12 +354,44 @@ export default function AIAnalysisPage() {
           offset: String(offset),
         });
         if (signalTimeframe !== "all") params.set("timeframe", signalTimeframe);
-        if (signalStatus !== "all") params.set("status", signalStatus);
+        // Map frontend status to API statuses
+        if (signalStatus === "won") {
+          params.set("status", "tp1_hit");  // API uses tp1/tp2/tp3_hit
+        } else if (signalStatus === "lost") {
+          params.set("status", "sl_hit");
+        } else if (signalStatus !== "all") {
+          params.set("status", signalStatus);
+        }
 
         const res = await fetch(`/api/ai-analysis/signals/recent?${params}`);
         if (res.ok) {
           const data = await res.json();
-          const items: Signal[] = data.signals || data.items || [];
+          const rawItems = data.signals || data.items || [];
+          // Map API signal fields to frontend Signal interface
+          const WIN_STATUSES = ["tp1_hit", "tp2_hit", "tp3_hit"];
+          const items: Signal[] = (Array.isArray(rawItems) ? rawItems : []).map(
+            (s: Record<string, unknown>) => {
+              const apiStatus = (s.status as string) || "active";
+              let displayStatus: "active" | "won" | "lost" | "expired" = "active";
+              if (WIN_STATUSES.includes(apiStatus)) displayStatus = "won";
+              else if (apiStatus === "sl_hit") displayStatus = "lost";
+              else if (apiStatus === "expired") displayStatus = "expired";
+
+              return {
+                id: String(s.id),
+                source_name: (s.source_name ?? "Unknown") as string,
+                source_accuracy: (s.source_accuracy ?? 0) as number,
+                direction: (s.direction ?? "NEUTRAL") as "BUY" | "SELL" | "NEUTRAL",
+                entry_price: (s.entry_price ?? null) as number | null,
+                stop_loss: (s.stop_loss ?? null) as number | null,
+                take_profit: (s.take_profit_1 ?? s.take_profit ?? null) as number | null,
+                timeframe: (s.timeframe ?? "unknown") as string,
+                status: displayStatus,
+                created_at: (s.parsed_at ?? s.created_at ?? new Date().toISOString()) as string,
+                pips_result: (s.outcome_pips ?? s.pips_result ?? null) as number | null,
+              };
+            }
+          );
           if (reset) {
             setSignals(items);
             setSignalOffset(items.length);
@@ -352,15 +420,51 @@ export default function AIAnalysisPage() {
 
       if (summaryRes.status === "fulfilled" && summaryRes.value.ok) {
         const data = await summaryRes.value.json();
-        setPerformance(data);
+        // Map API field names to frontend PerformanceSummary interface
+        setPerformance({
+          total_signals: data.total_signals ?? 0,
+          win_rate: data.overall_win_rate ?? data.win_rate ?? 0,
+          net_pips: data.net_pips_all_time ?? data.net_pips ?? 0,
+          profit_factor: data.profit_factor ?? 0,
+          avg_win_pips: data.avg_win_pips ?? Math.max(data.avg_pips_per_signal ?? 0, 0),
+          avg_loss_pips: data.avg_loss_pips ?? Math.abs(data.max_drawdown_pips ?? 0),
+          best_streak: data.best_streak ?? 0,
+          worst_streak: data.worst_streak ?? 0,
+          sharpe_ratio: data.sharpe_ratio ?? 0,
+          equity_curve: data.equity_curve ?? [],
+          win_rate_by_timeframe: data.win_rate_by_timeframe ?? [],
+        });
       }
       if (monthlyRes.status === "fulfilled" && monthlyRes.value.ok) {
         const data = await monthlyRes.value.json();
-        setMonthly(data.months || data || []);
+        const items = data.items || data.months || [];
+        // Map API monthly fields to frontend MonthlyPerformance
+        setMonthly(
+          Array.isArray(items)
+            ? items.map((m: Record<string, unknown>) => ({
+                month: (m.month_label as string) || `${m.year}-${String(m.month).padStart(2, "0")}`,
+                signals: (m.total_signals ?? m.signals ?? 0) as number,
+                wins: (m.winning_signals ?? m.wins ?? 0) as number,
+                losses: (m.losing_signals ?? m.losses ?? 0) as number,
+                win_rate: (m.win_rate ?? 0) as number,
+                net_pips: (m.net_pips ?? 0) as number,
+              }))
+            : []
+        );
       }
       if (dailyRes.status === "fulfilled" && dailyRes.value.ok) {
         const data = await dailyRes.value.json();
-        setDaily(data.days || data || []);
+        const items = data.items || data.days || [];
+        // Map API daily fields to frontend DailyPerformance
+        setDaily(
+          Array.isArray(items)
+            ? items.map((d: Record<string, unknown>) => ({
+                date: d.date as string,
+                net_pips: (d.net_pips ?? 0) as number,
+                signals: (d.total_signals ?? d.signals ?? 0) as number,
+              }))
+            : []
+        );
       }
     } catch {
       // Silent
@@ -374,7 +478,29 @@ export default function AIAnalysisPage() {
       const res = await fetch("/api/ai-analysis/sources/leaderboard");
       if (res.ok) {
         const data = await res.json();
-        setSources(data.sources || data || []);
+        const items = data.items || data.sources || [];
+        // Map API source fields to frontend SourceLeaderboard
+        setSources(
+          Array.isArray(items)
+            ? items.map((s: Record<string, unknown>, idx: number) => {
+                const rawRate = (s.accuracy_rate ?? s.win_rate ?? 0) as number;
+                // accuracy_rate may be 0-1 or 0-100; normalise to 0-100
+                const winRate = rawRate <= 1 && rawRate > 0 ? rawRate * 100 : rawRate;
+                return {
+                  rank: idx + 1,
+                  source_name: (s.name ?? s.source_name ?? "Unknown") as string,
+                  source_type: (s.type ?? s.source_type ?? "unknown") as string,
+                  total_signals: (s.total_signals ?? 0) as number,
+                  win_rate: winRate,
+                  avg_profit_pips: (s.avg_profit_pips ?? 0) as number,
+                  avg_loss_pips: Math.abs((s.avg_loss_pips ?? 0) as number),
+                  profit_factor: (s.profit_factor ?? 0) as number,
+                  weight: (s.current_weight ?? s.weight ?? 0.5) as number,
+                  status: (s.active === true ? "active" : s.active === false ? "inactive" : (s.status ?? "active")) as "active" | "inactive" | "probation",
+                };
+              })
+            : []
+        );
       }
     } catch {
       // Silent
@@ -388,7 +514,21 @@ export default function AIAnalysisPage() {
       const res = await fetch("/api/ai-analysis/journal/recent");
       if (res.ok) {
         const data = await res.json();
-        setJournal(data.entries || data || []);
+        const items = data.items || data.entries || [];
+        // Map API journal fields to frontend JournalEntry
+        setJournal(
+          Array.isArray(items)
+            ? items.map((e: Record<string, unknown>) => ({
+                date: e.date as string,
+                signal_count: (e.total_signals ?? e.signal_count ?? 0) as number,
+                wins: (e.winning_signals ?? e.wins ?? 0) as number,
+                losses: (e.losing_signals ?? e.losses ?? 0) as number,
+                key_observations: (e.key_observations ?? []) as string[],
+                cumulative_pips: (e.cumulative_pips ?? 0) as number,
+                summary: (e.summary ?? "") as string,
+              }))
+            : []
+        );
       }
     } catch {
       // Silent
