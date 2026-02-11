@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import {
   getCalendarEvents,
@@ -406,6 +407,11 @@ function EventCard({
 // ── Main Page ───────────────────────────────────────────────────────
 
 export default function CalendarPage() {
+  const searchParams = useSearchParams();
+  const highlightEventId = searchParams.get("event");
+  const highlightRef = useRef<HTMLDivElement>(null);
+  const didScrollRef = useRef(false);
+
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [counts, setCounts] = useState({ total: 0, high: 0, medium: 0, low: 0 });
   const [loading, setLoading] = useState(true);
@@ -416,9 +422,21 @@ export default function CalendarPage() {
   const [impactFilter, setImpactFilter] = useState("all");
   const [viewMode, setViewMode] = useState<"list" | "week">("list");
   const [weekOffset, setWeekOffset] = useState(0);
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(highlightEventId);
 
   const weekRange = getWeekRange(weekOffset);
+
+  // Auto-scroll to highlighted event once loaded
+  useEffect(() => {
+    if (highlightEventId && !loading && events.length > 0 && !didScrollRef.current) {
+      didScrollRef.current = true;
+      setExpandedId(highlightEventId);
+      // Small delay to allow DOM to render the expanded card
+      setTimeout(() => {
+        highlightRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+      }, 150);
+    }
+  }, [highlightEventId, loading, events]);
 
   const fetchEvents = useCallback(async () => {
     try {
@@ -652,14 +670,18 @@ export default function CalendarPage() {
                   {/* Events for this date */}
                   <div className="space-y-2">
                     {dateEvents.map((event) => (
-                      <EventCard
+                      <div
                         key={event.id}
-                        event={event}
-                        expanded={expandedId === event.id}
-                        onToggle={() =>
-                          setExpandedId(expandedId === event.id ? null : event.id)
-                        }
-                      />
+                        ref={event.id === highlightEventId ? highlightRef : undefined}
+                      >
+                        <EventCard
+                          event={event}
+                          expanded={expandedId === event.id}
+                          onToggle={() =>
+                            setExpandedId(expandedId === event.id ? null : event.id)
+                          }
+                        />
+                      </div>
                     ))}
                   </div>
                 </div>
@@ -685,6 +707,7 @@ export default function CalendarPage() {
                     {dateEvents.map((event) => (
                       <div
                         key={event.id}
+                        ref={event.id === highlightEventId ? highlightRef : undefined}
                         onClick={() =>
                           setExpandedId(expandedId === event.id ? null : event.id)
                         }

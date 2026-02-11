@@ -509,9 +509,10 @@ export default function DashboardPage() {
                   ? event.event_name_fa
                   : event.event_name;
                 return (
-                  <div
+                  <Link
                     key={event.id}
-                    className={`flex items-center gap-3 rounded-lg border-r-[3px] px-3 py-2 transition-colors ${impactBorder} ${impactBg} ${idx === 0 ? "ring-1 ring-gold-500/20" : ""}`}
+                    href={`/calendar?event=${event.id}`}
+                    className={`flex items-center gap-3 rounded-lg border-r-[3px] px-3 py-2 transition-colors hover:bg-gray-50 dark:hover:bg-gray-800/50 ${impactBorder} ${impactBg} ${idx === 0 ? "ring-1 ring-gold-500/20" : ""}`}
                   >
                     <span className="shrink-0 text-sm">
                       {flagMap[event.country] || event.country}
@@ -522,7 +523,7 @@ export default function DashboardPage() {
                     <span className="shrink-0 whitespace-nowrap rounded-md bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-gray-600 dark:bg-gray-800 dark:text-gray-400">
                       {event.time_until}
                     </span>
-                  </div>
+                  </Link>
                 );
               })}
             </div>

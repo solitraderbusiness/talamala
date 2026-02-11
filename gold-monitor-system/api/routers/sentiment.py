@@ -535,6 +535,14 @@ async def get_sentiment(
             if alert_timestamps.get(a["title"]) and alert_timestamps[a["title"]] >= cutoff  # type: ignore[operator]
         ]
 
+        # Count alerts actually within the timeframe window (before adding "still relevant")
+        seen_window: set[str] = set()
+        window_only_count = 0
+        for a in window_alerts:
+            if a["title"] not in seen_window:
+                seen_window.add(a["title"])
+                window_only_count += 1
+
         # Add high-severity alerts from outside window (still relevant)
         if hours < 24:
             for ha in high_severity:
@@ -558,6 +566,7 @@ async def get_sentiment(
         tf_data.append({
             "tf": tf,
             "unique_alerts": unique_alerts,
+            "window_alert_count": window_only_count,
             "score": score,
             "sentiment_key": sentiment_key,
             "sentiment_label": sentiment_label,
@@ -600,7 +609,7 @@ async def get_sentiment(
             "summary": llm_text.get("summary", ""),
             "key_drivers": llm_text.get("key_drivers", []),
             "outlook": llm_text.get("outlook", ""),
-            "alert_count": len(td["unique_alerts"]),
+            "alert_count": td["window_alert_count"],
             "label": tf["label"],
         }
 
