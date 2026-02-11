@@ -139,6 +139,7 @@ export default function ChatWidget() {
         const decoder = new TextDecoder();
         let accumulated = "";
         let buffer = ""; // Buffer for incomplete SSE lines
+        let finalized = false; // Track if message was already added
 
         while (true) {
           const { done, value } = await reader.read();
@@ -161,7 +162,8 @@ export default function ChatWidget() {
                 accumulated += data.content;
                 setStreamingContent(accumulated);
               } else if (data.type === "done") {
-                if (accumulated) {
+                if (accumulated && !finalized) {
+                  finalized = true;
                   const assistantMsg: Message = {
                     id: `assistant-${Date.now()}`,
                     role: "assistant",
@@ -183,7 +185,8 @@ export default function ChatWidget() {
         }
 
         // If stream ended without a 'done' event, finalize any accumulated content
-        if (accumulated && !messages.some((m) => m.content === accumulated)) {
+        if (accumulated && !finalized) {
+          finalized = true;
           const assistantMsg: Message = {
             id: `assistant-${Date.now()}`,
             role: "assistant",
