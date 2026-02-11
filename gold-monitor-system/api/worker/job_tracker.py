@@ -200,7 +200,7 @@ async def _record_run(
                 "   items_processed, error_message, duration_ms, metadata_) "
                 "VALUES "
                 "  (:id, :job_id, :started, :finished, :status, "
-                "   :items, :err, :dur, :meta::jsonb)"
+                "   :items, :err, :dur, CAST(:meta AS jsonb))"
             ),
             {
                 "id": str(uuid.uuid4()),
