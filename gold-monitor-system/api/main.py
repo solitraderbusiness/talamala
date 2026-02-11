@@ -1396,6 +1396,16 @@ async def _create_economic_events_table() -> None:
         logger.warning("Could not create economic_events table", exc_info=True)
 
 
+async def _create_price_outcomes_table() -> None:
+    """Create the alert_price_outcomes table if it doesn't exist."""
+    try:
+        from api.models import AlertPriceOutcome
+        AlertPriceOutcome.__table__.create(bind=sync_engine, checkfirst=True)
+        logger.info("alert_price_outcomes table ensured.")
+    except Exception:
+        logger.warning("Could not create alert_price_outcomes table", exc_info=True)
+
+
 async def _start_calendar_sync() -> None:
     """Start the calendar sync background task."""
     try:
@@ -1466,18 +1476,22 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     await _migrate_sources_v11()
     await _create_sentiment_scores_table()
     await _create_economic_events_table()
+    await _create_price_outcomes_table()
     await _flush_dedup_keys()
     await _snapshot_rules()
     await _start_calendar_sync()
     logger.info("Startup complete.")
 
-    # Start background calendar sync loop
+    # Start background tasks
     import asyncio as _asyncio
     from api.worker.calendar_sync import calendar_sync_loop
+    from api.worker.price_tracker import price_tracker_loop
     _calendar_task = _asyncio.create_task(calendar_sync_loop())
+    _price_tracker_task = _asyncio.create_task(price_tracker_loop())
 
     yield  # application is running
 
+    _price_tracker_task.cancel()
     _calendar_task.cancel()
     logger.info("Shutting down Gold Monitor API ...")
 

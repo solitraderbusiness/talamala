@@ -40,6 +40,8 @@ from sqlalchemy import text
 from api.config import settings
 from api.database import AsyncSessionLocal
 
+from api.alert_classify import classify_alert
+from api.price_snapshot import get_price_snapshot
 from api.worker.dedup import DedupChecker
 from api.worker.fetchers import get_fetcher
 from api.worker.fetchers.base import RawItem
@@ -88,6 +90,9 @@ class Worker:
         self._use_rule_engine: bool = False
         self._shutdown = asyncio.Event()
         self._http_session: aiohttp.ClientSession | None = None
+        self._price_snapshot: dict[str, float | None] = {
+            "xauusd": None, "usdirr": None, "coin": None, "gold_18k": None,
+        }
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -203,6 +208,13 @@ class Worker:
 
     async def _run_cycle(self) -> None:
         logger.info("=== Cycle start ===")
+
+        # Fetch current prices once per cycle for stamping on alerts
+        try:
+            self._price_snapshot = await get_price_snapshot(self._redis)
+        except Exception:
+            logger.debug("Price snapshot fetch failed", exc_info=True)
+
         async with AsyncSessionLocal() as db:
             sources = await self._get_due_sources(db)
             if not sources:
@@ -558,6 +570,18 @@ class Worker:
                     exc_info=True,
                 )
 
+        # Stamp price snapshot and classification on the alert
+        alert["price_xauusd_at_alert"] = self._price_snapshot.get("xauusd")
+        alert["price_usdirr_at_alert"] = self._price_snapshot.get("usdirr")
+        alert["price_coin_at_alert"] = self._price_snapshot.get("coin")
+        alert["price_18k_at_alert"] = self._price_snapshot.get("gold_18k")
+
+        news_type, event_category = classify_alert(
+            alert.get("matched_rule_ids", [])
+        )
+        alert["news_type"] = news_type
+        alert["event_category"] = event_category
+
         await self._store_alert(db, alert)
         await dedup.mark_alert(dedupe_key)
         await dedup.mark_event(item.title or "", item.content_text or "")
@@ -630,13 +654,20 @@ class Worker:
                 "   matched_rule_ids, summary_fa, why_important_fa, "
                 "   expected_impact, severity, time_horizon, confidence, "
                 "   follow_up_questions, dedupe_key, raw_item_id, "
-                "   match_evidence, created_at) "
+                "   match_evidence, "
+                "   price_xauusd_at_alert, price_usdirr_at_alert, "
+                "   price_coin_at_alert, price_18k_at_alert, "
+                "   news_type, event_category, "
+                "   created_at) "
                 "VALUES "
                 "  (:id, :title, :ts, :source_name, :source_url, "
                 "   CAST(:rule_ids AS jsonb), :summary_fa, :why_important_fa, "
                 "   CAST(:impact AS jsonb), :severity, :time_horizon, :confidence, "
                 "   CAST(:questions AS jsonb), :dedupe_key, :raw_item_id, "
-                "   CAST(:evidence AS jsonb), :now)"
+                "   CAST(:evidence AS jsonb), "
+                "   :p_xauusd, :p_usdirr, :p_coin, :p_18k, "
+                "   :news_type, :event_category, "
+                "   :now)"
             ),
             {
                 "id": alert_id,
@@ -655,6 +686,12 @@ class Worker:
                 "dedupe_key": alert.get("dedupe_key", ""),
                 "raw_item_id": alert.get("raw_item_id"),
                 "evidence": json.dumps(alert.get("match_evidence", {}), default=str),
+                "p_xauusd": alert.get("price_xauusd_at_alert"),
+                "p_usdirr": alert.get("price_usdirr_at_alert"),
+                "p_coin": alert.get("price_coin_at_alert"),
+                "p_18k": alert.get("price_18k_at_alert"),
+                "news_type": alert.get("news_type"),
+                "event_category": alert.get("event_category"),
                 "now": datetime.now(timezone.utc),
             },
         )
