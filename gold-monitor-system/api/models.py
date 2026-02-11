@@ -583,3 +583,80 @@ class JobRun(Base):
 
     def __repr__(self) -> str:
         return f"<JobRun {self.status} job={self.job_id}>"
+
+
+# ── Chat Sessions ──────────────────────────────────────────────────────
+
+class ChatSession(Base):
+    """Ephemeral chat sessions for the AI chat widget."""
+    __tablename__ = "chat_sessions"
+    __table_args__ = (
+        Index("ix_chat_sessions_created_at", "created_at"),
+        Index("ix_chat_sessions_last_active_at", "last_active_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=_new_uuid,
+    )
+    ip_address: Mapped[str] = mapped_column(String(45), nullable=False, default="")
+    messages_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    first_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default="now()",
+    )
+    last_active_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, server_default="now()",
+    )
+
+    # Relationships
+    messages: Mapped[list[ChatMessage]] = relationship(
+        "ChatMessage", back_populates="session", lazy="noload",
+        cascade="all, delete-orphan",
+    )
+
+    def __repr__(self) -> str:
+        return f"<ChatSession {self.id} msgs={self.messages_count}>"
+
+
+class ChatMessage(Base):
+    """Individual messages within a chat session."""
+    __tablename__ = "chat_messages"
+    __table_args__ = (
+        Index("ix_chat_messages_session_id", "session_id"),
+        Index("ix_chat_messages_created_at", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=_new_uuid,
+    )
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("chat_sessions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    role: Mapped[str] = mapped_column(
+        String(20), nullable=False,  # 'user' or 'assistant'
+    )
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    tool_calls: Mapped[Any | None] = mapped_column(JSONB, nullable=True)
+    tokens_used: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default="now()",
+    )
+
+    # Relationships
+    session: Mapped[ChatSession] = relationship("ChatSession", back_populates="messages")
+
+    def __repr__(self) -> str:
+        return f"<ChatMessage {self.role} session={self.session_id}>"
+
+
+class ChatSetting(Base):
+    """Key-value settings for the chat feature."""
+    __tablename__ = "chat_settings"
+
+    key: Mapped[str] = mapped_column(String(100), primary_key=True)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, server_default="now()",
+    )

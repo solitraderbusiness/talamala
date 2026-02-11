@@ -35,7 +35,7 @@ from sqlalchemy import select, text
 from api.auth import get_password_hash
 from api.config import settings
 from api.database import AsyncSessionLocal, sync_engine
-from api.models import AdminUser, Base, EconomicEvent, JobRun, RulesSnapshot, SentimentScore, Source, SystemJob
+from api.models import AdminUser, Base, ChatMessage, ChatSession, ChatSetting, EconomicEvent, JobRun, RulesSnapshot, SentimentScore, Source, SystemJob
 
 logger = logging.getLogger("gold_monitor")
 
@@ -1410,6 +1410,37 @@ async def _create_price_outcomes_table() -> None:
         logger.warning("Could not create alert_price_outcomes table", exc_info=True)
 
 
+async def _create_chat_tables() -> None:
+    """Create chat_sessions, chat_messages, and chat_settings tables if they don't exist."""
+    try:
+        ChatSession.__table__.create(bind=sync_engine, checkfirst=True)
+        ChatMessage.__table__.create(bind=sync_engine, checkfirst=True)
+        ChatSetting.__table__.create(bind=sync_engine, checkfirst=True)
+        logger.info("Chat tables ensured.")
+    except Exception:
+        logger.warning("Could not create chat tables", exc_info=True)
+
+
+async def _seed_chat_settings() -> None:
+    """Seed default chat settings if not already present."""
+    defaults = {
+        "enabled": "true",
+        "model": "anthropic/claude-sonnet-4-20250514",
+        "rate_limit_ip": "30",
+        "rate_limit_global": "1000",
+        "welcome_message": "سلام! من دستیار هوشمند طلامالا هستم. هر سوالی درباره اخبار، قیمت‌ها، تقویم اقتصادی و تحلیل بازار طلا دارید، بپرسید!",
+    }
+    async with AsyncSessionLocal() as session:
+        for key, value in defaults.items():
+            result = await session.execute(
+                select(ChatSetting).where(ChatSetting.key == key)
+            )
+            if result.scalar_one_or_none() is None:
+                session.add(ChatSetting(key=key, value=value))
+        await session.commit()
+        logger.info("Chat settings seeded.")
+
+
 async def _create_monitoring_tables() -> None:
     """Create system_jobs and job_runs tables if they don't exist.
 
@@ -1499,6 +1530,8 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     await _migrate_sources_v10()
     await _migrate_sources_v11()
     await _create_monitoring_tables()
+    await _create_chat_tables()
+    await _seed_chat_settings()
     await _create_sentiment_scores_table()
     await _create_economic_events_table()
     await _create_price_outcomes_table()
@@ -1561,6 +1594,8 @@ def create_app() -> FastAPI:
     from api.routers.admin import router as admin_router
     from api.routers.alerts import router as alerts_router
     from api.routers.calendar import router as calendar_router
+    from api.routers.chat import router as chat_router
+    from api.routers.chat_analytics import router as chat_analytics_router
     from api.routers.health import router as health_router
     from api.routers.monitoring import router as monitoring_router
     from api.routers.prices import router as prices_router
@@ -1572,6 +1607,8 @@ def create_app() -> FastAPI:
     app.include_router(sources_router, prefix="/api/sources")
     app.include_router(admin_router, prefix="/api/admin")
     app.include_router(monitoring_router, prefix="/api/admin")
+    app.include_router(chat_router, prefix="/api/chat")
+    app.include_router(chat_analytics_router, prefix="/api/admin")
     app.include_router(rules_router, prefix="/api/rules")
     app.include_router(prices_router, prefix="/api/prices")
     app.include_router(sentiment_router, prefix="/api/sentiment")

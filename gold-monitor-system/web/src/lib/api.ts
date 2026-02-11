@@ -691,3 +691,96 @@ export function getSystemHealthExternal(
 export function getDataFreshness(): Promise<DataFreshness> {
   return request<DataFreshness>("/api/admin/data-freshness");
 }
+
+/* ---------- Chat Analytics types ---------- */
+
+export interface ChatDashboard {
+  messages_today: number;
+  messages_this_week: number;
+  messages_this_month: number;
+  sessions_today: number;
+  avg_messages_per_session: number;
+  total_tokens_today: number;
+  total_sessions: number;
+}
+
+export interface ChatSessionSummary {
+  id: string;
+  messages_count: number;
+  first_message: string | null;
+  ip_address: string;
+  created_at: string;
+  last_active_at: string;
+}
+
+export interface ChatConversation {
+  session: ChatSessionSummary;
+  messages: Array<{
+    id: string;
+    role: string;
+    content: string;
+    tool_calls: unknown;
+    tokens_used: number | null;
+    created_at: string;
+  }>;
+}
+
+export interface ChatSettingsData {
+  enabled: string;
+  model: string;
+  rate_limit_ip: string;
+  rate_limit_global: string;
+  welcome_message: string;
+  system_prompt: string;
+}
+
+/* ---------- Chat Analytics API ---------- */
+
+export function getChatDashboard(token: string): Promise<ChatDashboard> {
+  return authRequest<ChatDashboard>("/api/admin/chat/dashboard", token);
+}
+
+export function getChatSessions(
+  token: string,
+  limit: number = 20,
+  offset: number = 0,
+): Promise<ChatSessionSummary[]> {
+  return authRequest<ChatSessionSummary[]>(
+    `/api/admin/chat/sessions?limit=${limit}&offset=${offset}`,
+    token,
+  );
+}
+
+export function getChatConversation(
+  token: string,
+  sessionId: string,
+): Promise<ChatConversation> {
+  return authRequest<ChatConversation>(
+    `/api/admin/chat/sessions/${sessionId}`,
+    token,
+  );
+}
+
+export function getChatSettings(token: string): Promise<ChatSettingsData> {
+  return authRequest<ChatSettingsData>("/api/admin/chat/settings", token);
+}
+
+export function updateChatSettings(
+  token: string,
+  data: Partial<ChatSettingsData>,
+): Promise<{ status: string }> {
+  return authRequest<{ status: string }>("/api/admin/chat/settings", token, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
+}
+
+export function getPopularQuestions(
+  token: string,
+  limit: number = 10,
+): Promise<Array<{ question: string; count: number }>> {
+  return authRequest<Array<{ question: string; count: number }>>(
+    `/api/admin/chat/popular-questions?limit=${limit}`,
+    token,
+  );
+}

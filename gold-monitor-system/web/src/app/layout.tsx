@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import TopBar from "@/components/TopBar";
+import ChatWidget from "@/components/ChatWidget";
 
 export const metadata: Metadata = {
   title: "طلاملا | Talamala",
@@ -25,6 +26,7 @@ export default function RootLayout({
         <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
           {children}
         </main>
+        <ChatWidget />
       </body>
     </html>
   );
