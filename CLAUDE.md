@@ -8,7 +8,7 @@ Real-time gold market intelligence system for Persian (Farsi) users. Monitors ne
 - **Backend:** Python 3.12, FastAPI, SQLAlchemy 2.0 (asyncpg), Pydantic v2
 - **Database:** PostgreSQL 16, Redis 7 (cache + dedup + worker lock)
 - **Deployment:** Docker Compose (5 services: db, redis, api, worker, web)
-- **AI/LLM:** OpenRouter API (Claude Sonnet 4) — text generation only, never classification
+- **AI/LLM:** OpenRouter API (Claude Sonnet 4) — alert text generation + AI chat assistant
 
 ## Key Commands
 ```bash
@@ -37,11 +37,11 @@ curl http://localhost:8000/api/health
 ```
 
 ## Services & Architecture
-Five Docker services: **PostgreSQL** (port 5432, 10 tables), **Redis** (6379, dedup cache + worker lock), **FastAPI API** (8000, REST endpoints + auto-migrations on startup), **Worker** (same image as API, 60s fetch-match-alert pipeline), **Next.js Web** (3000, RTL Persian dashboard, proxies `/api/*` to API). Worker acquires Redis distributed lock (55s TTL), fetches enabled sources, deduplicates via SHA-256 content hash, matches against YAML rules, determines severity deterministically, optionally enriches with LLM Persian text, persists alerts. Background jobs: calendar sync (6h), price outcome tracker (15min).
+Five Docker services: **PostgreSQL** (port 5432, 14 tables), **Redis** (6379, dedup cache + worker lock + chat rate limiting), **FastAPI API** (8000, REST endpoints + auto-migrations on startup), **Worker** (same image as API, 60s fetch-match-alert pipeline), **Next.js Web** (3000, RTL Persian dashboard + AI chat widget, proxies `/api/*` to API). Worker acquires Redis distributed lock (55s TTL), fetches enabled sources, deduplicates via SHA-256 content hash, matches against YAML rules, determines severity deterministically, optionally enriches with LLM Persian text, persists alerts. Background jobs: calendar sync (6h), price outcome tracker (15min). AI chat widget provides conversational access to alerts, calendar, and prices via SSE streaming with tool-use pattern.
 
 ## Code Conventions
 - **Async-first**: all DB ops use `AsyncSession` via asyncpg; worker uses aiohttp for HTTP
-- **Python**: snake_case files/functions/vars, PascalCase classes; routers in `api/routers/`, fetchers in `api/worker/fetchers/`
+- **Python**: snake_case files/functions/vars, PascalCase classes; routers in `api/routers/`, fetchers in `api/worker/fetchers/`, chat services in `api/services/chat/`
 - **TypeScript**: camelCase functions/vars, PascalCase components; pages in `src/app/`, components in `src/components/`
 - **API routes**: `/api/{resource}` with kebab-case multi-word paths
 - **Rule IDs**: `SECTION_DESCRIPTIVE_NAME` (e.g., `GLOB_RATE_DECISION`, `IR_FX_USD`)
@@ -52,6 +52,7 @@ Five Docker services: **PostgreSQL** (port 5432, 10 tables), **Redis** (6379, de
 - **RTL layout**: `<html lang="fa" dir="rtl">`, Vazirmatn font, gold color palette
 
 ## Active Work (update each session)
+- [x] AI chat widget (SSE streaming, tool-use, analytics dashboard, admin settings)
 - [ ] Fix news source reliability (English feeds, negative keywords, LLM relevance filter)
 - [ ] Impact matrix per alert (data exists in YAML, not displayed)
 - [ ] Per-market pages (`/market/[marketId]`)
@@ -64,16 +65,22 @@ Five Docker services: **PostgreSQL** (port 5432, 10 tables), **Redis** (6379, de
 - `news_type`/`event_category` only populated after migration 003
 - Gold fund rules exist in YAML but no data sources feed them (TSETMC disabled)
 - Passwords truncated to 72 bytes for bcrypt (`auth.py:_truncate_for_bcrypt`)
+- Chat session data stored as plaintext in DB (no encryption at rest)
+- Chat system prompt template (`chat-system.txt`) uses Python `str.format()` — JSON curly braces must be doubled (`{{`/`}}`)
 
 ## Environment Variables
 Key vars in `gold-monitor-system/.env` (see `.env.example`):
 - `DATABASE_URL` / `DATABASE_URL_SYNC` — PostgreSQL connection strings
 - `REDIS_URL` — Redis connection
-- `OPENROUTER_API_KEY` — LLM text generation (optional)
+- `OPENROUTER_API_KEY` — LLM text generation + chat (required for chat)
 - `BRSAPI_KEY` — BrsAPI market data (optional, TGJU fallback)
 - `SECRET_KEY` — JWT signing secret
 - `ADMIN_EMAIL` / `ADMIN_PASSWORD` — Default: `admin@goldmonitor.ir` / `admin123`
 - `INTERNAL_API_URL` — API URL for Next.js proxy (default: `http://api:8000`)
+- `CHAT_ENABLED` — Enable/disable AI chat widget (default: `true`)
+- `CHAT_MODEL` — Chat LLM model (default: `anthropic/claude-sonnet-4`)
+- `CHAT_RATE_LIMIT_IP` — Chat messages per hour per IP (default: `30`)
+- `CHAT_RATE_LIMIT_GLOBAL` — Chat messages per hour total (default: `1000`)
 
 ## Access Points
 | Service | URL |
@@ -91,6 +98,7 @@ When you need detailed information, read these files:
 - `docs/schema.md` — Database tables, columns, relationships
 - `docs/sentiment-scoring.md` — Sentiment formula, scoring logic, all thresholds
 - `docs/system-logic.md` — Rule matching, severity, dedup, price tracking formulas
+- `api/prompts/chat-system.txt` — AI chat system prompt template
 
 Only read these when the current task specifically requires that info. Do NOT read all of them at session start.
 

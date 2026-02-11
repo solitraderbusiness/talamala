@@ -1,6 +1,6 @@
 # Database Schema
 
-PostgreSQL 16, 10 tables, all UUID PKs, UTC timestamps.
+PostgreSQL 16, 14 tables, all UUID PKs, UTC timestamps.
 
 ## Tables
 
@@ -59,13 +59,47 @@ Generated alerts with severity, impact, and Persian text.
 - `checked_at` TIMESTAMPTZ, prices + change_pct for xauusd/usdirr/coin/18k (all FLOAT nullable)
 - `direction_correct` BOOLEAN (nullable). Unique on (alert_id, check_interval)
 
+### chat_sessions
+AI chat conversation sessions.
+- `id` UUID PK, `ip_address` VARCHAR(45)
+- `messages_count` INTEGER (default 0), `first_message` TEXT (nullable)
+- `primary_intent` VARCHAR(50) (nullable), `had_answer_rate` FLOAT (nullable)
+- `created_at`, `last_active_at` TIMESTAMPTZ
+- Indexes on `created_at`, `last_active_at`
+
+### chat_messages
+Individual messages within chat sessions.
+- `id` UUID PK, `session_id` UUID FK→chat_sessions (CASCADE)
+- `role` VARCHAR(20) [user/assistant], `content` TEXT
+- `tool_calls` JSONB (nullable), `tokens_used` INTEGER (nullable)
+- `created_at` TIMESTAMPTZ
+- Indexes on `session_id`, `created_at`
+
+### chat_analytics
+Per-assistant-message analytics extracted from LLM `<chat_meta>` tags.
+- `id` UUID PK, `session_id` UUID FK→chat_sessions (CASCADE), `message_id` UUID FK→chat_messages (SET NULL)
+- `intent` VARCHAR(50) [news_search/calendar_query/price_check/sentiment_query/comparison/prediction/how_to_use/off_topic/feature_not_available]
+- `topics` JSONB (array), `assets_mentioned` JSONB (array)
+- `had_answer` BOOLEAN, `missing_feature` TEXT (nullable)
+- `suggested_followups` JSONB (array), `created_at` TIMESTAMPTZ
+
+### chat_settings
+Key-value configuration for chat widget.
+- `key` VARCHAR(255) PK, `value` TEXT (nullable), `updated_at` TIMESTAMPTZ
+- Keys: `enabled`, `model`, `rate_limit_ip`, `rate_limit_global`, `welcome_message`, `system_prompt`
+
 ## Relationships
 - sources → raw_items (1:N, CASCADE)
 - sources → fetch_logs (1:N, CASCADE)
 - raw_items → alerts (1:1 optional, SET NULL)
 - alerts → alert_price_outcomes (1:N, CASCADE)
+- chat_sessions → chat_messages (1:N, CASCADE)
+- chat_sessions → chat_analytics (1:N, CASCADE)
+- chat_messages → chat_analytics (1:1 optional, SET NULL)
 
 ## Migrations
 - 001: Initial schema (7 tables + seeds)
 - 002: Economic events table
 - 003: Price tracking columns + outcomes table
+- 005: Chat tables (chat_sessions, chat_messages, chat_settings)
+- 006: Chat analytics table + session analytics columns

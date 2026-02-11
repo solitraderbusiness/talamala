@@ -6,6 +6,7 @@
 
 | Date | Feature |
 |------|---------|
+| 2026-02-11 | AI chat widget: SSE streaming with tool-use (search_news, get_calendar_events, get_price_data), conversation sessions (30min TTL, 50msg cap), Redis rate limiting (30/h per IP), intent analytics + admin dashboard (/admin/chat with insights/conversations/settings tabs), CSV export, system prompt template with Shamsi dates, migrations 005-006 |
 | 2026-02-11 | Price tracking at alert time (4 prices stamped), alert classification (news_type + event_category), price outcome tracking (1h/4h/24h), migration 003 |
 | 2026-02-10 | Economic event calendar (JBlanked + Finnhub APIs, 6h sync, ~120 Persian translations, list/week views, dashboard widget) |
 | 2026-02-09 | Full Docker Compose orchestration, API endpoints, worker pipeline, rule engine (32+ rules), 3-stage direction detection, JWT auth, RTL dashboard, sentiment scoring, deduplication, admin panel |
@@ -19,6 +20,8 @@
 - Economic calendar with Persian translations and gold impact notes
 - Price outcome tracking (background job, 15min interval)
 - Alert classification (news_type + event_category from rule IDs)
+- AI chat widget (SSE streaming, tool-use, session management, rate limiting)
+- Chat admin dashboard (analytics, conversations, settings, CSV export)
 - 136 tests passing (matcher, severity, alert_builder, direction)
 
 ## In Progress
