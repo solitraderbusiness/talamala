@@ -32,7 +32,7 @@ from api.database import AsyncSessionLocal
 logger = logging.getLogger("articles.scorer")
 
 _OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-_MAX_BATCH_SIZE = 10
+_MAX_BATCH_SIZE = 50
 _MAX_RETRIES = 3
 
 
@@ -206,8 +206,12 @@ async def run() -> str:
         # Fetch content for scoring
         content = await _fetch_article_content_for_scoring(article)
 
-        # Skip too-short articles (unless partial)
-        if not article.partial_content and article.word_count_original and article.word_count_original < MIN_WORD_COUNT:
+        # Use fetched content word count (not RSS snippet word count)
+        content_word_count = len(content.split()) if content else 0
+
+        # Skip too-short articles (content must meet minimum)
+        if content_word_count < MIN_WORD_COUNT and not article.partial_content:
+            logger.info("Skipping short article (%d words): %s", content_word_count, article.title_original[:60])
             async with AsyncSessionLocal() as session:
                 await session.execute(
                     update(GoldArticle)

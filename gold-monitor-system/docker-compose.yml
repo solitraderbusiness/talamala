@@ -136,7 +136,7 @@ services:
       REDIS_URL: ${REDIS_URL}
       FRED_API_KEY: ${FRED_API_KEY:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
-      ARTICLE_LLM_MODEL: ${ARTICLE_LLM_MODEL:-anthropic/claude-haiku-4-5-20251001}
+      ARTICLE_LLM_MODEL: ${ARTICLE_LLM_MODEL:-anthropic/claude-haiku-4.5}
       ARTICLE_DAILY_BUDGET: ${ARTICLE_DAILY_BUDGET:-1.0}
     networks:
       - goldmon-net

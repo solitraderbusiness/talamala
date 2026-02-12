@@ -12,7 +12,7 @@ import os
 
 OPENROUTER_API_KEY: str = os.environ.get("OPENROUTER_API_KEY", "")
 ARTICLE_LLM_MODEL: str = os.environ.get(
-    "ARTICLE_LLM_MODEL", "anthropic/claude-haiku-4-5-20251001"
+    "ARTICLE_LLM_MODEL", "anthropic/claude-haiku-4.5"
 )
 ARTICLE_LLM_TEMPERATURE: float = 0.2
 ARTICLE_LLM_MAX_TOKENS: int = 1500
@@ -23,8 +23,8 @@ DAILY_LLM_BUDGET_USD: float = float(os.environ.get("ARTICLE_DAILY_BUDGET", "1.0"
 
 # ── Scoring thresholds ──────────────────────────────────────────────────
 
-PUBLISH_THRESHOLD: float = 55.0       # importance_score >= this → is_published
-MIN_WORD_COUNT: int = 300             # articles shorter than this are rejected
+PUBLISH_THRESHOLD: float = 20.0       # importance_score >= this → is_published
+MIN_WORD_COUNT: int = 50              # articles shorter than this are rejected
 MAX_ARTICLE_AGE_DAYS: int = 7         # articles older than this are rejected
 ARTICLE_CONTENT_MAX_CHARS: int = 3000 # max chars sent to LLM
 
