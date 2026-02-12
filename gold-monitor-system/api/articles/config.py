@@ -38,7 +38,7 @@ ARTICLE_SOURCES: list[dict] = [
     # === TIER 1: Top quality, always check ===
     {
         "name": "World Gold Council",
-        "name_fa": "\u0634\u0648\u0631\u0627\u06cc \u062c\u0647\u0627\u0646\u06cc \u0637\u0644\u0627",
+        "name_fa": "شورای جهانی طلا",
         "url": "https://www.gold.org/goldhub/gold-focus",
         "type": "rss_or_scrape",
         "rss_url": "https://www.gold.org/rss.xml",
@@ -48,7 +48,7 @@ ARTICLE_SOURCES: list[dict] = [
     },
     {
         "name": "Kitco News Analysis",
-        "name_fa": "\u06a9\u06cc\u062a\u06a9\u0648",
+        "name_fa": "کیتکو",
         "url": "https://www.kitco.com/news/gold/",
         "type": "rss",
         "rss_url": "https://www.kitco.com/feed/rss/news/gold",
@@ -58,7 +58,7 @@ ARTICLE_SOURCES: list[dict] = [
     },
     {
         "name": "Reuters Commodities",
-        "name_fa": "\u0631\u0648\u06cc\u062a\u0631\u0632",
+        "name_fa": "رویترز",
         "url": "https://www.reuters.com/markets/commodities/",
         "type": "rss",
         "rss_url": "https://news.google.com/rss/search?q=site%3Areuters.com+gold+OR+%22precious+metals%22+when%3A3d&hl=en-US&gl=US&ceid=US:en",
@@ -68,7 +68,7 @@ ARTICLE_SOURCES: list[dict] = [
     },
     {
         "name": "Bloomberg Commodities",
-        "name_fa": "\u0628\u0644\u0648\u0645\u0628\u0631\u06af",
+        "name_fa": "بلومبرگ",
         "url": "https://www.bloomberg.com/commodities",
         "type": "rss_or_scrape",
         "rss_url": "https://news.google.com/rss/search?q=site%3Abloomberg.com+gold+forecast+OR+%22gold+outlook%22+when%3A3d&hl=en-US&gl=US&ceid=US:en",
@@ -78,7 +78,7 @@ ARTICLE_SOURCES: list[dict] = [
     },
     {
         "name": "Seeking Alpha - Gold",
-        "name_fa": "\u0633\u06cc\u06a9\u06cc\u0646\u06af \u0622\u0644\u0641\u0627",
+        "name_fa": "سیکینگ آلفا",
         "url": "https://seekingalpha.com/market-outlook/gold-and-precious-metals",
         "type": "rss_or_scrape",
         "rss_url": "https://news.google.com/rss/search?q=site%3Aseekingalpha.com+gold+analysis+when%3A3d&hl=en-US&gl=US&ceid=US:en",
@@ -88,7 +88,7 @@ ARTICLE_SOURCES: list[dict] = [
     },
     {
         "name": "GoldSeek",
-        "name_fa": "\u06af\u0644\u062f\u0633\u06cc\u06a9",
+        "name_fa": "گلدسیک",
         "url": "https://www.goldseek.com/",
         "type": "rss",
         "rss_url": "https://goldseek.com/rss/news",
@@ -98,7 +98,7 @@ ARTICLE_SOURCES: list[dict] = [
     },
     {
         "name": "Metals Focus",
-        "name_fa": "\u0645\u062a\u0627\u0644\u0632 \u0641\u0648\u06a9\u0648\u0633",
+        "name_fa": "متالز فوکوس",
         "url": "https://www.metalsfocus.com/",
         "type": "rss_or_scrape",
         "rss_url": None,
@@ -108,7 +108,7 @@ ARTICLE_SOURCES: list[dict] = [
     },
     {
         "name": "CME Group - Gold",
-        "name_fa": "\u06af\u0631\u0648\u0647 CME",
+        "name_fa": "گروه CME",
         "url": "https://www.cmegroup.com/articles.html",
         "type": "scrape",
         "rss_url": None,
@@ -118,7 +118,7 @@ ARTICLE_SOURCES: list[dict] = [
     },
     {
         "name": "Sprott",
-        "name_fa": "\u0627\u0633\u067e\u0631\u0627\u062a",
+        "name_fa": "اسپرات",
         "url": "https://sprott.com/insights/",
         "type": "rss_or_scrape",
         "rss_url": "https://sprott.com/insights/feed/",
@@ -128,7 +128,7 @@ ARTICLE_SOURCES: list[dict] = [
     },
     {
         "name": "Zero Hedge - Commodities",
-        "name_fa": "\u0632\u06cc\u0631\u0648 \u0647\u062c",
+        "name_fa": "زیرو هج",
         "url": "https://www.zerohedge.com/commodities",
         "type": "rss",
         "rss_url": "https://feeds.feedburner.com/zerohedge/feed",
@@ -138,7 +138,7 @@ ARTICLE_SOURCES: list[dict] = [
     },
     {
         "name": "Investing.com - Gold Analysis",
-        "name_fa": "\u0627\u06cc\u0646\u0648\u0633\u062a\u06cc\u0646\u06af",
+        "name_fa": "اینوستینگ",
         "url": "https://www.investing.com/analysis/commodities",
         "type": "rss_or_scrape",
         "rss_url": "https://www.investing.com/rss/news_14.rss",
@@ -148,7 +148,7 @@ ARTICLE_SOURCES: list[dict] = [
     },
     {
         "name": "FXStreet - Gold",
-        "name_fa": "\u0627\u0641\u200c\u0627\u06cc\u06a9\u0633 \u0627\u0633\u062a\u0631\u06cc\u062a",
+        "name_fa": "اف‌ایکس استریت",
         "url": "https://www.fxstreet.com/analysis/gold",
         "type": "rss",
         "rss_url": "https://www.fxstreet.com/rss/news",
@@ -159,7 +159,7 @@ ARTICLE_SOURCES: list[dict] = [
     # === TIER 2: Bank research ===
     {
         "name": "State Street - Gold Monitor",
-        "name_fa": "\u0627\u0633\u062a\u06cc\u062a \u0627\u0633\u062a\u0631\u06cc\u062a",
+        "name_fa": "استیت استریت",
         "url": "https://www.ssga.com/us/en/intermediary/insights/gold",
         "type": "scrape",
         "rss_url": None,
@@ -182,59 +182,59 @@ ARTICLE_SOURCES: list[dict] = [
 # ── Topic labels in Persian ──────────────────────────────────────────────
 
 TOPIC_LABELS_FA: dict[str, str] = {
-    "fed_policy": "\u0633\u06cc\u0627\u0633\u062a \u0641\u062f\u0631\u0627\u0644 \u0631\u0632\u0631\u0648",
-    "ecb_policy": "\u0633\u06cc\u0627\u0633\u062a \u0628\u0627\u0646\u06a9 \u0645\u0631\u06a9\u0632\u06cc \u0627\u0631\u0648\u067e\u0627",
-    "china_demand": "\u062a\u0642\u0627\u0636\u0627\u06cc \u0686\u06cc\u0646",
-    "india_demand": "\u062a\u0642\u0627\u0636\u0627\u06cc \u0647\u0646\u062f",
-    "central_banks": "\u0628\u0627\u0646\u06a9\u200c\u0647\u0627\u06cc \u0645\u0631\u06a9\u0632\u06cc",
-    "etf_flows": "\u062c\u0631\u06cc\u0627\u0646 ETF",
-    "mine_supply": "\u0639\u0631\u0636\u0647 \u0645\u0639\u062f\u0646\u06cc",
-    "geopolitics": "\u0698\u0626\u0648\u067e\u0644\u06cc\u062a\u06cc\u06a9",
-    "sanctions": "\u062a\u062d\u0631\u06cc\u0645\u200c\u0647\u0627",
-    "inflation": "\u062a\u0648\u0631\u0645",
-    "dollar": "\u062f\u0644\u0627\u0631",
-    "technical_analysis": "\u062a\u062d\u0644\u06cc\u0644 \u062a\u06a9\u0646\u06cc\u06a9\u0627\u0644",
-    "price_forecast": "\u067e\u06cc\u0634\u200c\u0628\u06cc\u0646\u06cc \u0642\u06cc\u0645\u062a",
-    "investment_strategy": "\u0627\u0633\u062a\u0631\u0627\u062a\u0698\u06cc \u0633\u0631\u0645\u0627\u06cc\u0647\u200c\u06af\u0630\u0627\u0631\u06cc",
-    "silver": "\u0646\u0642\u0631\u0647",
-    "oil": "\u0646\u0641\u062a",
-    "crypto_correlation": "\u0647\u0645\u0628\u0633\u062a\u06af\u06cc \u0631\u0645\u0632\u0627\u0631\u0632",
-    "de_dollarization": "\u062f\u0644\u0627\u0631\u0632\u062f\u0627\u06cc\u06cc",
-    "supply_demand": "\u0639\u0631\u0636\u0647 \u0648 \u062a\u0642\u0627\u0636\u0627",
-    "macro": "\u06a9\u0644\u0627\u0646 \u0627\u0642\u062a\u0635\u0627\u062f\u06cc",
-    "market_outlook": "\u0686\u0634\u0645\u200c\u0627\u0646\u062f\u0627\u0632 \u0628\u0627\u0632\u0627\u0631",
-    "price_analysis": "\u062a\u062d\u0644\u06cc\u0644 \u0642\u06cc\u0645\u062a",
-    "futures": "\u0642\u0631\u0627\u0631\u062f\u0627\u062f\u0647\u0627\u06cc \u0622\u062a\u06cc",
-    "market_structure": "\u0633\u0627\u062e\u062a\u0627\u0631 \u0628\u0627\u0632\u0627\u0631",
+    "fed_policy": "سیاست فدرال رزرو",
+    "ecb_policy": "سیاست بانک مرکزی اروپا",
+    "china_demand": "تقاضای چین",
+    "india_demand": "تقاضای هند",
+    "central_banks": "بانک‌های مرکزی",
+    "etf_flows": "جریان ETF",
+    "mine_supply": "عرضه معدنی",
+    "geopolitics": "ژئوپلیتیک",
+    "sanctions": "تحریم‌ها",
+    "inflation": "تورم",
+    "dollar": "دلار",
+    "technical_analysis": "تحلیل تکنیکال",
+    "price_forecast": "پیش‌بینی قیمت",
+    "investment_strategy": "استراتژی سرمایه‌گذاری",
+    "silver": "نقره",
+    "oil": "نفت",
+    "crypto_correlation": "همبستگی رمزارز",
+    "de_dollarization": "دلارزدایی",
+    "supply_demand": "عرضه و تقاضا",
+    "macro": "کلان اقتصادی",
+    "market_outlook": "چشم‌انداز بازار",
+    "price_analysis": "تحلیل قیمت",
+    "futures": "قراردادهای آتی",
+    "market_structure": "ساختار بازار",
 }
 
 # ── Outlook labels in Persian ────────────────────────────────────────────
 
 OUTLOOK_LABELS_FA: dict[str, str] = {
-    "bullish": "\u0635\u0639\u0648\u062f\u06cc",
-    "bearish": "\u0646\u0632\u0648\u0644\u06cc",
-    "neutral": "\u062e\u0646\u062b\u06cc",
-    "mixed": "\u062a\u0631\u06a9\u06cc\u0628\u06cc",
+    "bullish": "صعودی",
+    "bearish": "نزولی",
+    "neutral": "خنثی",
+    "mixed": "ترکیبی",
 }
 
 # ── Time horizon labels ──────────────────────────────────────────────────
 
 TIME_HORIZON_LABELS_FA: dict[str, str] = {
-    "short_term": "\u06a9\u0648\u062a\u0627\u0647\u200c\u0645\u062f\u062a",
-    "medium_term": "\u0645\u06cc\u0627\u0646\u200c\u0645\u062f\u062a",
-    "long_term": "\u0628\u0644\u0646\u062f\u0645\u062f\u062a",
+    "short_term": "کوتاه‌مدت",
+    "medium_term": "میان‌مدت",
+    "long_term": "بلندمدت",
 }
 
 # ── Asset labels ─────────────────────────────────────────────────────────
 
 ASSET_LABELS_FA: dict[str, str] = {
-    "xauusd": "\u0637\u0644\u0627\u06cc \u062c\u0647\u0627\u0646\u06cc XAU/USD",
-    "iran_gold": "\u0637\u0644\u0627\u06cc \u0627\u06cc\u0631\u0627\u0646",
-    "usd_irr": "\u062f\u0644\u0627\u0631/\u0631\u06cc\u0627\u0644",
-    "silver": "\u0646\u0642\u0631\u0647",
-    "dxy": "\u0634\u0627\u062e\u0635 \u062f\u0644\u0627\u0631",
-    "oil": "\u0646\u0641\u062a",
-    "btc": "\u0628\u06cc\u062a\u200c\u06a9\u0648\u06cc\u0646",
+    "xauusd": "طلای جهانی XAU/USD",
+    "iran_gold": "طلای ایران",
+    "usd_irr": "دلار/ریال",
+    "silver": "نقره",
+    "dxy": "شاخص دلار",
+    "oil": "نفت",
+    "btc": "بیت‌کوین",
 }
 
 # ── Auto-boost source names ─────────────────────────────────────────────

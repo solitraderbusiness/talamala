@@ -12,19 +12,19 @@ interface NavItem {
 }
 
 const navItems: NavItem[] = [
-  { href: "/", label: "\u062f\u0627\u0634\u0628\u0648\u0631\u062f" },
+  { href: "/", label: "داشبورد" },
   {
     href: "/ai-analysis",
-    label: "\u062a\u062d\u0644\u06cc\u0644 \u0647\u0648\u0634\u0645\u0646\u062f",
+    label: "تحلیل هوشمند",
     children: [
-      { href: "/ai-analysis", label: "\u062a\u062d\u0644\u06cc\u0644 \u0632\u0646\u062f\u0647" },
-      { href: "/analysis/articles", label: "\u0645\u0642\u0627\u0644\u0647\u200c\u0647\u0627\u06cc \u0645\u0647\u0645 \u0637\u0644\u0627" },
+      { href: "/ai-analysis", label: "تحلیل زنده" },
+      { href: "/analysis/articles", label: "مقاله‌های مهم طلا" },
     ],
   },
-  { href: "/prices", label: "\u0642\u06cc\u0645\u062a\u200c\u0647\u0627" },
-  { href: "/calendar", label: "\u062a\u0642\u0648\u06cc\u0645" },
-  { href: "/library", label: "\u06a9\u062a\u0627\u0628\u062e\u0627\u0646\u0647 \u0642\u0648\u0627\u0646\u06cc\u0646" },
-  { href: "/admin/sources", label: "\u0645\u062f\u06cc\u0631\u06cc\u062a" },
+  { href: "/prices", label: "قیمت‌ها" },
+  { href: "/calendar", label: "تقویم" },
+  { href: "/library", label: "کتابخانه قوانین" },
+  { href: "/admin/sources", label: "مدیریت" },
 ];
 
 export default function TopBar() {
@@ -77,9 +77,9 @@ export default function TopBar() {
       <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3 sm:px-6 lg:px-8">
         {/* Logo */}
         <Link href="/" className="flex items-center gap-2">
-          <span className="text-2xl">{"\ud83e\ude99"}</span>
+          <span className="text-2xl">{"🪙"}</span>
           <span className="text-lg font-bold text-gold-600 dark:text-gold-400">
-            {"\u0637\u0644\u0627\u0645\u0644\u0627"}
+            {"طلاملا"}
           </span>
         </Link>
 
