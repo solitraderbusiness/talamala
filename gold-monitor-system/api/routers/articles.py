@@ -9,7 +9,8 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Query
-from sqlalchemy import and_, desc, func, select
+from sqlalchemy import and_, cast, desc, func, select
+from sqlalchemy.dialects.postgresql import JSONB
 
 from api.articles.config import (
     ASSET_LABELS_FA,
@@ -85,14 +86,13 @@ async def list_articles(
 
         # Apply filters
         if topic:
-            # JSON contains filter for topics array
-            q = q.where(GoldArticle.topics.op("@>")(f'["{topic}"]'))
+            q = q.where(GoldArticle.topics.op("@>")(cast(f'["{topic}"]', JSONB)))
 
         if outlook and outlook in ("bullish", "bearish", "neutral", "mixed"):
             q = q.where(GoldArticle.gold_outlook == outlook)
 
         if asset:
-            q = q.where(GoldArticle.affected_assets.op("@>")(f'["{asset}"]'))
+            q = q.where(GoldArticle.affected_assets.op("@>")(cast(f'["{asset}"]', JSONB)))
 
         if source:
             q = q.where(GoldArticle.source_name == source)
@@ -244,7 +244,7 @@ async def get_article(article_id: int):
                     .where(
                         GoldArticle.id != article.id,
                         GoldArticle.is_published.is_(True),
-                        GoldArticle.topics.op("@>")(f'["{topic}"]'),
+                        GoldArticle.topics.op("@>")(cast(f'["{topic}"]', JSONB)),
                     )
                     .order_by(desc(GoldArticle.created_at))
                     .limit(3)
