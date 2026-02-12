@@ -47,6 +47,23 @@ from api.worker.fetchers import get_fetcher
 from api.worker.fetchers.base import RawItem
 from api.worker.job_tracker import track_job
 
+_snapshot_logger = logging.getLogger("gold_monitor.snapshot_hook")
+
+
+async def _safe_capture_snapshot(alert_id: str, alert_dict: dict, price_snapshot: dict) -> None:
+    """Fire-and-forget wrapper for market snapshot capture (5s timeout)."""
+    try:
+        from api.data_collection.snapshot_builder import capture_market_snapshot
+        await asyncio.wait_for(
+            capture_market_snapshot(alert_id, alert_dict, price_snapshot),
+            timeout=5.0,
+        )
+    except asyncio.TimeoutError:
+        _snapshot_logger.warning("Snapshot capture timed out for alert %s", str(alert_id)[:8])
+    except Exception:
+        _snapshot_logger.warning("Snapshot capture failed for alert %s", str(alert_id)[:8], exc_info=True)
+
+
 # ---------------------------------------------------------------------------
 # Optional rule-engine integration (may not be deployed yet)
 # ---------------------------------------------------------------------------
@@ -635,6 +652,9 @@ class Worker:
         alert["event_category"] = event_category
 
         await self._store_alert(db, alert)
+        # Fire-and-forget snapshot capture (won't block alert pipeline)
+        alert_id = alert.get("id", "")
+        asyncio.create_task(_safe_capture_snapshot(alert_id, alert, self._price_snapshot))
         await dedup.mark_alert(dedupe_key)
         await dedup.mark_event(item.title or "", item.content_text or "")
         return 1
@@ -691,7 +711,16 @@ class Worker:
                         exc_info=True,
                     )
 
+            # Stamp prices on fallback alerts too
+            alert["price_xauusd_at_alert"] = self._price_snapshot.get("xauusd")
+            alert["price_usdirr_at_alert"] = self._price_snapshot.get("usdirr")
+            alert["price_coin_at_alert"] = self._price_snapshot.get("coin")
+            alert["price_18k_at_alert"] = self._price_snapshot.get("gold_18k")
+
             await self._store_alert(db, alert)
+            # Fire-and-forget snapshot capture
+            alert_id = alert.get("id", "")
+            asyncio.create_task(_safe_capture_snapshot(alert_id, alert, self._price_snapshot))
             await dedup.mark_alert(dedupe_key)
             alerts_created += 1
 

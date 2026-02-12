@@ -40,6 +40,14 @@ from api.signal_aggregator.models import (
     ConsensusSnapshot, DailyPerformance, MonthlyPerformance,
     ParsedSignal, RawPost, SignalPriceTick, SignalSource,
 )
+from api.analysis.models import (
+    AssetPriceDaily, MacroIndicator, EtfHolding, CotData,
+    MarketEventAnalysis, CorrelationCache,
+)
+from api.data_collection.models import (
+    AlertMarketSnapshot, AlertOutcome, SentimentTimeline, PriceHistory,
+)
+from api.articles.models import GoldArticle
 
 logger = logging.getLogger("gold_monitor")
 
@@ -1425,6 +1433,36 @@ async def _create_signal_aggregator_tables() -> None:
         logger.warning("Could not create signal aggregator tables", exc_info=True)
 
 
+async def _create_analysis_tables() -> None:
+    """Create all fundamental analysis tables if they don't exist."""
+    try:
+        for model in [AssetPriceDaily, MacroIndicator, EtfHolding,
+                      CotData, MarketEventAnalysis, CorrelationCache]:
+            model.__table__.create(bind=sync_engine, checkfirst=True)
+        logger.info("Analysis tables ensured.")
+    except Exception:
+        logger.warning("Could not create analysis tables", exc_info=True)
+
+
+async def _create_data_collection_tables() -> None:
+    """Create all data collection tables if they don't exist."""
+    try:
+        for model in [AlertMarketSnapshot, AlertOutcome, SentimentTimeline, PriceHistory]:
+            model.__table__.create(bind=sync_engine, checkfirst=True)
+        logger.info("Data collection tables ensured.")
+    except Exception:
+        logger.warning("Could not create data collection tables", exc_info=True)
+
+
+async def _create_articles_table() -> None:
+    """Create the gold_articles table if it doesn't exist."""
+    try:
+        GoldArticle.__table__.create(bind=sync_engine, checkfirst=True)
+        logger.info("gold_articles table ensured.")
+    except Exception:
+        logger.warning("Could not create gold_articles table", exc_info=True)
+
+
 async def _create_chat_tables() -> None:
     """Create chat_sessions, chat_messages, and chat_settings tables if they don't exist."""
     try:
@@ -1551,6 +1589,9 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     await _create_economic_events_table()
     await _create_price_outcomes_table()
     await _create_signal_aggregator_tables()
+    await _create_analysis_tables()
+    await _create_data_collection_tables()
+    await _create_articles_table()
     await _flush_dedup_keys()
     await _snapshot_rules()
     await _start_calendar_sync()
@@ -1567,11 +1608,14 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     import asyncio as _asyncio
     from api.worker.calendar_sync import calendar_sync_loop
     from api.worker.price_tracker import price_tracker_loop
+    from api.data_collection.outcome_tracker import outcome_tracker_loop
     _calendar_task = _asyncio.create_task(calendar_sync_loop())
     _price_tracker_task = _asyncio.create_task(price_tracker_loop())
+    _outcome_tracker_task = _asyncio.create_task(outcome_tracker_loop())
 
     yield  # application is running
 
+    _outcome_tracker_task.cancel()
     _price_tracker_task.cancel()
     _calendar_task.cancel()
     logger.info("Shutting down Gold Monitor API ...")
@@ -1619,6 +1663,9 @@ def create_app() -> FastAPI:
     from api.routers.sentiment import router as sentiment_router
     from api.routers.sources import router as sources_router
     from api.signal_aggregator.api.routes import router as ai_analysis_router
+    from api.routers.analysis import router as analysis_router
+    from api.routers.data_health import router as data_health_router
+    from api.routers.articles import router as articles_router
 
     app.include_router(alerts_router, prefix="/api/alerts")
     app.include_router(sources_router, prefix="/api/sources")
@@ -1632,6 +1679,9 @@ def create_app() -> FastAPI:
     app.include_router(calendar_router, prefix="/api/calendar")
     app.include_router(health_router, prefix="/api/health")
     app.include_router(ai_analysis_router, prefix="/api/ai-analysis")
+    app.include_router(analysis_router, prefix="/api/analysis")
+    app.include_router(data_health_router, prefix="/api/admin/data-health")
+    app.include_router(articles_router, prefix="/api/analysis")
 
     return app
 

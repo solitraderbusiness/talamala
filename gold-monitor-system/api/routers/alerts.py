@@ -63,12 +63,40 @@ def _alert_section(alert: Alert) -> str:
     return _RULE_SECTION_MAP.get(prefix, "global_gold")
 
 
+def _extract_enrichment_from_evidence(
+    evidence: dict[str, Any],
+) -> dict[str, Any]:
+    """Extract enrichment params from stored match_evidence.
+
+    The evidence dict contains per-rule entries like:
+        {"RULE_ID": {"keywords": [...], "signals": [...]}, ...}
+    plus meta keys (direction, direction_confidence, direction_method, alert_score).
+    """
+    meta_keys = {"direction", "direction_confidence", "direction_method", "alert_score"}
+    num_rules = 0
+    total_kw = 0
+    total_sig = 0
+    for key, val in evidence.items():
+        if key in meta_keys or not isinstance(val, dict):
+            continue
+        num_rules += 1
+        total_kw += len(val.get("keywords", []))
+        total_sig += len(val.get("signals", []))
+    return {
+        "num_rules_matched": num_rules,
+        "num_keywords_matched": total_kw,
+        "num_signals_matched": total_sig,
+    }
+
+
 def _alert_to_dict(alert: Alert) -> dict[str, Any]:
     """Convert a SQLAlchemy Alert object to a plain dict.
 
     For alerts stored with direction data (new pipeline), uses those values.
     For legacy alerts without direction, computes on-the-fly using the
-    direction detection module.
+    direction detection module.  Alert scores are always recomputed with
+    enrichment data extracted from match_evidence so that old and new alerts
+    benefit from the improved scoring formula.
     """
     section = _alert_section(alert)
 
@@ -77,22 +105,25 @@ def _alert_to_dict(alert: Alert) -> dict[str, Any]:
     stored_direction = evidence.get("direction")
     stored_dir_confidence = evidence.get("direction_confidence")
     stored_dir_method = evidence.get("direction_method")
-    stored_alert_score = evidence.get("alert_score")
 
-    if stored_direction and stored_alert_score is not None:
+    if stored_direction:
         direction = stored_direction
         direction_confidence = stored_dir_confidence or 0.0
         direction_method = stored_dir_method or "stored"
-        alert_score = stored_alert_score
     else:
         # Compute on-the-fly for legacy alerts
         dir_result = detect_direction(alert.title or "", alert.summary_fa or "")
         direction = dir_result["direction"]
         direction_confidence = dir_result["confidence"]
         direction_method = dir_result["method"]
-        alert_score = calculate_alert_score(
-            direction, direction_confidence, alert.severity or "medium",
-        )
+
+    # Always recompute alert_score with enrichment from match_evidence
+    enrichment = _extract_enrichment_from_evidence(evidence)
+    alert_score = calculate_alert_score(
+        direction, direction_confidence, alert.severity or "medium",
+        direction_method=direction_method,
+        **enrichment,
+    )
 
     return {
         "id": str(alert.id),

@@ -13,10 +13,12 @@ from datetime import date, datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
+from pydantic import BaseModel, Field
 from sqlalchemy import Date, case, cast, func, select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.auth import get_current_admin
 from api.database import get_db
 from api.signal_aggregator.models import (
     ConsensusSnapshot,
@@ -24,6 +26,7 @@ from api.signal_aggregator.models import (
     DailyPerformance,
     MonthlyPerformance,
     ParsedSignal,
+    RawPost,
     SignalPriceTick,
     SignalSource,
 )
@@ -92,22 +95,33 @@ async def get_consensus_latest(
         if snap is not None:
             consensuses.append(_row_to_dict(snap))
 
-    # Current price from most recent tick
-    price_stmt = (
-        select(SignalPriceTick)
-        .where(SignalPriceTick.asset == "XAUUSD")
-        .order_by(desc(SignalPriceTick.checked_at))
-        .limit(1)
-    )
-    price_result = await db.execute(price_stmt)
-    tick = price_result.scalar_one_or_none()
+    # Current price — try live fetch first so it matches the dashboard
+    current_price: float | None = None
+    try:
+        from api.signal_aggregator.workers.price_checker import fetch_current_price
+        price, _ = await fetch_current_price()
+        current_price = price
+    except Exception:
+        pass
+
+    if current_price is None:
+        # Fallback: latest DB tick
+        price_stmt = (
+            select(SignalPriceTick)
+            .where(SignalPriceTick.asset == "XAUUSD")
+            .order_by(desc(SignalPriceTick.checked_at))
+            .limit(1)
+        )
+        price_result = await db.execute(price_stmt)
+        tick = price_result.scalar_one_or_none()
+        current_price = tick.price if tick else None
 
     now_iso = datetime.now(timezone.utc).isoformat()
 
     return {
         "consensuses": consensuses,
         "updated_at": consensuses[0]["generated_at"] if consensuses else now_iso,
-        "current_price": tick.price if tick else None,
+        "current_price": current_price,
     }
 
 
@@ -125,14 +139,17 @@ async def get_signals_recent(
     """Return recent parsed signals with optional filters, joined with
     source name and accuracy.
     """
-    # Base query — join to get source name / accuracy
+    # Base query — join to get source name / accuracy / type / post URL
     base = (
         select(
             ParsedSignal,
             SignalSource.name.label("source_name"),
             SignalSource.accuracy_rate.label("source_accuracy"),
+            SignalSource.type.label("source_type"),
+            RawPost.url.label("post_url"),
         )
         .join(SignalSource, ParsedSignal.source_id == SignalSource.id)
+        .outerjoin(RawPost, ParsedSignal.raw_post_id == RawPost.id)
     )
 
     # Apply filters
@@ -164,6 +181,8 @@ async def get_signals_recent(
         d = _row_to_dict(signal)
         d["source_name"] = row.source_name
         d["source_accuracy"] = row.source_accuracy
+        d["source_type"] = row.source_type
+        d["url"] = row.post_url
         items.append(d)
 
     return {"items": items, "total": total}
@@ -352,7 +371,28 @@ async def get_sources_leaderboard(
 async def get_price_current(
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
-    """Return the most recent XAUUSD price tick."""
+    """Return the current XAUUSD price.
+
+    Tries a live BrsAPI fetch first (same source as the dashboard) so
+    both pages always show the same number.  Falls back to the most
+    recent ``signal_price_ticks`` row if the live call fails.
+    """
+    from api.signal_aggregator.workers.price_checker import fetch_current_price
+
+    # Try live price first (same source as dashboard /api/prices)
+    try:
+        price, source = await fetch_current_price()
+        if price is not None:
+            return {
+                "asset": "XAUUSD",
+                "price": price,
+                "source": source,
+                "checked_at": datetime.now(timezone.utc).isoformat(),
+            }
+    except Exception:
+        logger.debug("Live price fetch failed — falling back to DB tick")
+
+    # Fallback: latest DB tick
     stmt = (
         select(SignalPriceTick)
         .where(SignalPriceTick.asset == "XAUUSD")
@@ -449,3 +489,147 @@ async def get_journal_recent(
         items.append(entry)
 
     return {"items": items}
+
+
+# ── Pydantic schemas for signal source admin ──────────────────────────
+
+class SignalSourceCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    type: str = Field(..., pattern=r"^(telegram|tradingview|website|forum)$")
+    telegram_channel_id: str | None = None
+    telegram_channel_name: str | None = None
+    url: str | None = None
+    active: bool = True
+
+class SignalSourceUpdate(BaseModel):
+    name: str | None = Field(None, min_length=1, max_length=255)
+    type: str | None = Field(None, pattern=r"^(telegram|tradingview|website|forum)$")
+    telegram_channel_id: str | None = None
+    telegram_channel_name: str | None = None
+    url: str | None = None
+    active: bool | None = None
+    current_weight: float | None = Field(None, ge=0.0, le=1.0)
+
+
+# ── 9.  Admin CRUD for signal sources ─────────────────────────────────
+
+_SOURCE_COLUMNS = [
+    "id", "name", "type", "telegram_channel_id", "telegram_channel_name",
+    "url", "active", "added_at", "total_signals", "correct_signals",
+    "wrong_signals", "expired_signals", "accuracy_rate", "avg_profit_pips",
+    "avg_loss_pips", "profit_factor", "current_weight", "last_signal_at",
+]
+
+
+@router.get("/sources/admin", dependencies=[Depends(get_current_admin)])
+async def list_signal_sources_admin(
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """List all signal sources with full details (admin only)."""
+    stmt = select(SignalSource).order_by(desc(SignalSource.current_weight))
+    result = await db.execute(stmt)
+    rows = result.scalars().all()
+
+    items = [_row_to_dict(src, columns=_SOURCE_COLUMNS) for src in rows]
+    return {"items": items, "total": len(items)}
+
+
+@router.get("/sources/admin/{source_id}", dependencies=[Depends(get_current_admin)])
+async def get_signal_source_admin(
+    source_id: UUID,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """Get a single signal source by ID (admin only)."""
+    result = await db.execute(
+        select(SignalSource).where(SignalSource.id == source_id)
+    )
+    src = result.scalar_one_or_none()
+    if src is None:
+        raise HTTPException(status_code=404, detail="Signal source not found")
+
+    data = _row_to_dict(src, columns=_SOURCE_COLUMNS)
+
+    # Include signal counts by status
+    status_q = (
+        select(
+            ParsedSignal.status,
+            func.count(ParsedSignal.id),
+        )
+        .where(ParsedSignal.source_id == source_id)
+        .group_by(ParsedSignal.status)
+    )
+    status_result = await db.execute(status_q)
+    data["signal_counts_by_status"] = {
+        row[0]: row[1] for row in status_result.all()
+    }
+
+    return data
+
+
+@router.post("/sources/admin", dependencies=[Depends(get_current_admin)])
+async def create_signal_source(
+    body: SignalSourceCreate,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """Create a new signal source (admin only)."""
+    src = SignalSource(
+        name=body.name,
+        type=body.type,
+        telegram_channel_id=body.telegram_channel_id,
+        telegram_channel_name=body.telegram_channel_name,
+        url=body.url,
+        active=body.active,
+    )
+    db.add(src)
+    await db.flush()
+    await db.refresh(src)
+    await db.commit()
+
+    return _row_to_dict(src, columns=_SOURCE_COLUMNS)
+
+
+@router.put("/sources/admin/{source_id}", dependencies=[Depends(get_current_admin)])
+async def update_signal_source(
+    source_id: UUID,
+    body: SignalSourceUpdate,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """Update a signal source (admin only)."""
+    result = await db.execute(
+        select(SignalSource).where(SignalSource.id == source_id)
+    )
+    src = result.scalar_one_or_none()
+    if src is None:
+        raise HTTPException(status_code=404, detail="Signal source not found")
+
+    update_data = body.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(src, field, value)
+
+    await db.flush()
+    await db.refresh(src)
+    await db.commit()
+
+    return _row_to_dict(src, columns=_SOURCE_COLUMNS)
+
+
+@router.delete("/sources/admin/{source_id}", dependencies=[Depends(get_current_admin)])
+async def delete_signal_source(
+    source_id: UUID,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, str]:
+    """Delete a signal source and all related data (admin only).
+
+    CASCADE will remove raw_posts and parsed_signals linked to this source.
+    """
+    result = await db.execute(
+        select(SignalSource).where(SignalSource.id == source_id)
+    )
+    src = result.scalar_one_or_none()
+    if src is None:
+        raise HTTPException(status_code=404, detail="Signal source not found")
+
+    await db.delete(src)
+    await db.commit()
+
+    return {"status": "deleted"}

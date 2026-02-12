@@ -182,8 +182,19 @@ def build_alert(
     follow_up_questions: list[str] = llm.get("follow_up_questions", [])
 
     # --- per-alert sentiment score ---------------------------------------- #
+    best_match_score = match_results[0].match_score
+    total_keywords = sum(len(mr.matched_keywords) for mr in match_results)
+    total_signals = sum(len(mr.matched_signals) for mr in match_results)
+    content_len = len(item_content)
+
     alert_score = calculate_alert_score(
         direction, direction_confidence, highest_severity,
+        match_score=best_match_score,
+        num_rules_matched=len(match_results),
+        num_keywords_matched=total_keywords,
+        num_signals_matched=total_signals,
+        direction_method=direction_method,
+        content_length=content_len,
     )
 
     # --- dedupe key ------------------------------------------------------- #

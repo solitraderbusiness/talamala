@@ -497,3 +497,42 @@ class TestBuildAlert:
         assert alert["title"] == ""
         assert alert["source_name"] == ""
         assert alert["source_url"] == ""
+
+    def test_alert_score_differentiates_by_match_quality(self):
+        """Two bullish alerts with different match richness produce different scores."""
+        # Use Persian title that triggers bullish regex detection
+        bullish_title = "قیمت طلا افزایش یافت"
+
+        # Rich match: high score, multiple rules, many keywords, long content
+        rule1 = _make_rule(rule_id="r1", horizon="short")
+        rule2 = _make_rule(rule_id="r2", horizon="short")
+        mr_rich_1 = _make_match_result(
+            rule=rule1, match_score=0.9,
+            matched_keywords=["gold", "price", "surge"],
+            matched_signals=["bullish breakout"],
+        )
+        mr_rich_2 = _make_match_result(
+            rule=rule2, match_score=0.7,
+            matched_keywords=["market", "rally"],
+        )
+        rich_content = "x" * 600
+        alert_rich = build_alert(
+            {"title": bullish_title, "content": rich_content},
+            [mr_rich_1, mr_rich_2],
+        )
+
+        # Weak match: low score, single rule, one keyword, short content
+        rule3 = _make_rule(rule_id="r3", horizon="short")
+        mr_weak = _make_match_result(
+            rule=rule3, match_score=0.2,
+            matched_keywords=["gold"],
+        )
+        alert_weak = build_alert(
+            {"title": bullish_title, "content": "short"},
+            [mr_weak],
+        )
+
+        # Both should have alert_score, and rich should score higher
+        assert "alert_score" in alert_rich
+        assert "alert_score" in alert_weak
+        assert alert_rich["alert_score"] > alert_weak["alert_score"]

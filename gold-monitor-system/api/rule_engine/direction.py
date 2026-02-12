@@ -185,17 +185,36 @@ def calculate_alert_score(
     direction: str,
     confidence: float,
     severity: str,
+    *,
+    match_score: float = 0.0,
+    num_rules_matched: int = 0,
+    num_keywords_matched: int = 0,
+    num_signals_matched: int = 0,
+    direction_method: str = "",
+    content_length: int = 0,
 ) -> int:
     """Calculate per-alert sentiment score (0-100).
 
     50 = neutral, 100 = extremely bullish, 0 = extremely bearish.
-    Severity acts as a multiplier on the swing range.
+    Severity acts as a multiplier on the base swing.  Additional enrichment
+    factors (match quality, evidence depth, detection method, content length)
+    widen the spread so that stronger alerts score further from 50.
+
+    All keyword-only params default to zero so that callers without enrichment
+    data (e.g. legacy recalculation) produce the same output as before.
     """
     SEVERITY_MULTIPLIER = {
         "critical": 1.0,  # full range: 0-100
         "high": 0.8,      # range: 10-90
         "medium": 0.6,    # range: 20-80
         "low": 0.35,      # range: 32-68
+    }
+
+    METHOD_BONUS = {
+        "regex": 3,
+        "lexicon": 1,
+        "regex_weak": -1,
+        "fallback": -2,
     }
 
     if direction == "neutral" or direction == "pending_llm":
@@ -205,9 +224,26 @@ def calculate_alert_score(
 
     # confidence 0.3-1.0 maps to 15-45 points from center
     conf_clamped = max(0.3, min(1.0, confidence))
-    swing = 15 + (conf_clamped - 0.3) * (30 / 0.7)
+    base_swing = 15 + (conf_clamped - 0.3) * (30 / 0.7)
 
     multiplier = SEVERITY_MULTIPLIER.get(severity, 0.6)
-    score = 50 + sign * swing * multiplier
+
+    # --- enrichment bonuses ------------------------------------------------ #
+    match_quality_bonus = match_score * 6                            # 0-6
+    multi_rule_bonus = min(num_rules_matched - 1, 3) * 2            # 0-6 (neg when 0 rules)
+    multi_rule_bonus = max(0, multi_rule_bonus)                      # clamp to 0
+    evidence_depth_bonus = min(num_keywords_matched + num_signals_matched, 8) * 0.75  # 0-6
+    method_bonus = METHOD_BONUS.get(direction_method, 0)             # -2 to 3
+    content_bonus = min(content_length / 500, 1) * 3                 # 0-3
+
+    total_bonus = (
+        match_quality_bonus
+        + multi_rule_bonus
+        + evidence_depth_bonus
+        + method_bonus
+        + content_bonus
+    )
+
+    score = 50 + sign * (base_swing * multiplier + total_bonus)
 
     return max(0, min(100, round(score)))

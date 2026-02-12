@@ -174,6 +174,7 @@ class RawPost(Base):
     captured_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, server_default="now()",
     )
+    url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     parsed: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     parse_attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 

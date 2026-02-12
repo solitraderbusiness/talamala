@@ -947,6 +947,101 @@ export function getChatConversations(
   );
 }
 
+/* ---------- Fundamental Analysis types ---------- */
+
+export interface MacroCard {
+  id: string;
+  title_fa: string;
+  status: "ready" | "pending";
+  impact?: "bullish" | "bearish" | "neutral";
+  data: Record<string, number | string | null> | null;
+}
+
+export interface MacroOverviewResponse {
+  cards: MacroCard[];
+}
+
+export interface MoneyFlowResponse {
+  etf_holdings: Record<string, Array<{ date: string; total_tonnes: number; change_tonnes: number | null }>>;
+  cot_positions: Array<{
+    date: string;
+    non_commercial_net: number | null;
+    open_interest: number | null;
+    change: number | null;
+  }>;
+  period_days: number;
+}
+
+export interface RealRatesIndicator {
+  series_id: string;
+  label_en: string;
+  label_fa: string;
+  latest_value: number | null;
+  latest_date: string | null;
+  history: Array<{ date: string; value: number }>;
+}
+
+export interface RealRatesResponse {
+  indicators: RealRatesIndicator[];
+  period_days: number;
+}
+
+export interface CorrelationPair {
+  pair_a: string;
+  pair_b: string;
+  label_fa: string;
+  correlation: number;
+  impact: "bullish" | "bearish" | "neutral";
+  window_days: number;
+}
+
+export interface CorrelationsResponse {
+  pairs: CorrelationPair[];
+  computed_date: string | null;
+}
+
+export interface SentimentComponent {
+  name: string;
+  label_fa: string;
+  score: number;
+  weight: number;
+}
+
+export interface SentimentGaugeResponse {
+  composite_score: number | null;
+  label: string;
+  label_fa: string;
+  components: SentimentComponent[];
+  component_count: number;
+  max_components: number;
+}
+
+export interface ShanghaiPremiumResponse {
+  status: "ready" | "pending";
+  premium_usd: number | null;
+  premium_pct: number | null;
+  message_fa?: string;
+}
+
+export interface MarketEvent {
+  id: string;
+  event_type: string;
+  title: string;
+  title_fa: string | null;
+  description: string | null;
+  description_fa: string | null;
+  impact: "bullish" | "bearish" | "neutral";
+  magnitude: number | null;
+  data: Record<string, unknown> | null;
+  created_at: string | null;
+}
+
+export interface MarketActivityResponse {
+  events: MarketEvent[];
+  total: number;
+  period_hours: number;
+}
+
 /* ---------- AI Analysis (Signal Aggregator) types ---------- */
 
 export interface ConsensusCard {
@@ -1125,4 +1220,265 @@ export function getAiCurrentPrice(): Promise<CurrentPriceResponse> {
 
 export function getAiJournalRecent(limit: number = 7): Promise<{ items: JournalEntry[] }> {
   return request<{ items: JournalEntry[] }>(`/api/ai-analysis/journal/recent?limit=${limit}`);
+}
+
+/* ---------- Signal Source Admin API ---------- */
+
+export interface SignalSourceAdmin {
+  id: string;
+  name: string;
+  type: string;
+  telegram_channel_id: string | null;
+  telegram_channel_name: string | null;
+  url: string | null;
+  active: boolean;
+  added_at: string;
+  total_signals: number;
+  correct_signals: number;
+  wrong_signals: number;
+  expired_signals: number;
+  accuracy_rate: number | null;
+  avg_profit_pips: number | null;
+  avg_loss_pips: number | null;
+  profit_factor: number | null;
+  current_weight: number;
+  last_signal_at: string | null;
+}
+
+export function getSignalSources(token: string): Promise<{ items: SignalSourceAdmin[]; total: number }> {
+  return authRequest<{ items: SignalSourceAdmin[]; total: number }>("/api/ai-analysis/sources/admin", token);
+}
+
+export function createSignalSource(
+  token: string,
+  data: Partial<SignalSourceAdmin>
+): Promise<SignalSourceAdmin> {
+  return authRequest<SignalSourceAdmin>("/api/ai-analysis/sources/admin", token, {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export function updateSignalSource(
+  token: string,
+  id: string,
+  data: Partial<SignalSourceAdmin>
+): Promise<SignalSourceAdmin> {
+  return authRequest<SignalSourceAdmin>(`/api/ai-analysis/sources/admin/${id}`, token, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
+}
+
+export function deleteSignalSource(token: string, id: string): Promise<{ status: string }> {
+  return authRequest<{ status: string }>(`/api/ai-analysis/sources/admin/${id}`, token, {
+    method: "DELETE",
+  });
+}
+
+/* ---------- Data Health types ---------- */
+
+export interface DataHealthOverview {
+  snapshot_coverage_pct: number | null;
+  alerts_24h: number;
+  snapshots_24h: number;
+  complete_snapshots_24h: number;
+  outcome_pipeline: Record<string, number>;
+  sentiment_last_recorded: string | null;
+  price_data_last_update: string | null;
+  outcome_errors: number;
+}
+
+export interface SnapshotStats {
+  period: string;
+  alerts_count: number;
+  snapshots_count: number;
+  complete_count: number;
+  missing_count: number;
+  completeness_pct: number | null;
+  top_missing_fields: Array<{ field: string; count: number }>;
+}
+
+export interface OutcomePipeline {
+  counts: Record<string, number>;
+  total: number;
+  completed: number;
+  completion_rate: number | null;
+  recent_errors: Array<{
+    alert_id: string;
+    status: string;
+    errors: unknown;
+    updated_at: string | null;
+  }>;
+}
+
+export interface SentimentTimelinePoint {
+  recorded_at: string;
+  composite_score: number | null;
+  direction: string | null;
+  gold_price: number | null;
+  gold_change_1h_pct: number | null;
+  alerts_active_24h: number | null;
+}
+
+export interface SentimentTimelineResponse {
+  data: SentimentTimelinePoint[];
+  count: number;
+  period_hours: number;
+}
+
+export interface PriceStatusItem {
+  symbol: string;
+  timeframe: string;
+  last_update: string | null;
+  record_count: number;
+  last_price: number | null;
+}
+
+export interface PriceStatusResponse {
+  symbols: PriceStatusItem[];
+}
+
+export interface CorrelationItem {
+  lag: string;
+  correlation: number;
+  interpretation: string;
+}
+
+export interface SentimentCorrelationResponse {
+  correlations: CorrelationItem[];
+  data_points: number;
+  period_days?: number;
+  message_fa?: string;
+}
+
+/* ---------- Data Health API ---------- */
+
+export function getDataHealthOverview(token: string): Promise<DataHealthOverview> {
+  return authRequest<DataHealthOverview>("/api/admin/data-health/overview", token);
+}
+
+export function getSnapshotStats(
+  token: string,
+  period: string = "today"
+): Promise<SnapshotStats> {
+  return authRequest<SnapshotStats>(
+    `/api/admin/data-health/snapshot-stats?period=${period}`,
+    token
+  );
+}
+
+export function getOutcomePipeline(token: string): Promise<OutcomePipeline> {
+  return authRequest<OutcomePipeline>("/api/admin/data-health/outcome-pipeline", token);
+}
+
+export function getSentimentTimeline(
+  token: string,
+  hours: number = 168
+): Promise<SentimentTimelineResponse> {
+  return authRequest<SentimentTimelineResponse>(
+    `/api/admin/data-health/sentiment-timeline?hours=${hours}`,
+    token
+  );
+}
+
+export function getPriceStatus(token: string): Promise<PriceStatusResponse> {
+  return authRequest<PriceStatusResponse>("/api/admin/data-health/price-status", token);
+}
+
+export function getSentimentCorrelation(
+  token: string,
+  days: number = 7
+): Promise<SentimentCorrelationResponse> {
+  return authRequest<SentimentCorrelationResponse>(
+    `/api/admin/data-health/correlation?days=${days}`,
+    token
+  );
+}
+
+/* ---------- Gold Articles types ---------- */
+
+export interface GoldArticle {
+  id: number;
+  title_fa: string | null;
+  title_original: string;
+  source_name: string;
+  source_name_fa: string;
+  source_url: string;
+  source_logo: string | null;
+  author: string | null;
+  published_at: string | null;
+  summary_fa: string | null;
+  key_takeaways_fa: string[];
+  gold_outlook: "bullish" | "bearish" | "neutral" | "mixed" | null;
+  gold_outlook_fa: string;
+  time_horizon: "short_term" | "medium_term" | "long_term" | null;
+  time_horizon_fa: string;
+  topics: string[];
+  topics_fa: string[];
+  affected_assets: string[];
+  affected_assets_fa: string[];
+  importance_score: number | null;
+  is_featured: boolean;
+  is_published: boolean;
+  original_language: string | null;
+  created_at: string | null;
+  related_articles?: GoldArticle[];
+  related_alert?: { id: string; title: string } | null;
+}
+
+export interface GoldArticlesResponse {
+  articles: GoldArticle[];
+  total: number;
+  page: number;
+  per_page: number;
+  today_count: number;
+  today_outlook_summary: {
+    bullish: number;
+    bearish: number;
+    neutral: number;
+    mixed: number;
+  };
+}
+
+export interface GoldArticlesDailyDigest {
+  featured: GoldArticle | null;
+  today_articles: GoldArticle[];
+  by_topic: Record<string, GoldArticle[]>;
+  today_count: number;
+}
+
+/* ---------- Gold Articles API ---------- */
+
+export function getGoldArticles(params?: {
+  page?: number;
+  per_page?: number;
+  topic?: string;
+  outlook?: string;
+  asset?: string;
+  source?: string;
+  featured?: boolean;
+  from?: string;
+  to?: string;
+}): Promise<GoldArticlesResponse> {
+  const sp = new URLSearchParams();
+  if (params?.page) sp.set("page", String(params.page));
+  if (params?.per_page) sp.set("per_page", String(params.per_page));
+  if (params?.topic) sp.set("topic", params.topic);
+  if (params?.outlook) sp.set("outlook", params.outlook);
+  if (params?.asset) sp.set("asset", params.asset);
+  if (params?.source) sp.set("source", params.source);
+  if (params?.featured) sp.set("featured", "true");
+  if (params?.from) sp.set("from", params.from);
+  if (params?.to) sp.set("to", params.to);
+  const qs = sp.toString();
+  return request<GoldArticlesResponse>(`/api/analysis/articles${qs ? `?${qs}` : ""}`);
+}
+
+export function getGoldArticle(id: number): Promise<GoldArticle> {
+  return request<GoldArticle>(`/api/analysis/articles/${id}`);
+}
+
+export function getGoldArticlesDailyDigest(): Promise<GoldArticlesDailyDigest> {
+  return request<GoldArticlesDailyDigest>("/api/analysis/articles/daily-digest");
 }

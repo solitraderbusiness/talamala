@@ -62,9 +62,11 @@ class Settings(BaseSettings):
     TELEGRAM_API_ID: str = ""
     TELEGRAM_API_HASH: str = ""
     TELEGRAM_PHONE: str = ""
-    ANTHROPIC_API_KEY: str = ""
     TRADINGVIEW_COOKIE: str = ""
-    SIGNAL_PARSE_MODEL: str = "claude-sonnet-4-20250514"
+    SIGNAL_PARSE_MODEL: str = "anthropic/claude-sonnet-4"
+
+    # ── Fundamental Analysis ───────────────────────────────────────────────
+    FRED_API_KEY: str = ""
 
 
 settings = Settings()

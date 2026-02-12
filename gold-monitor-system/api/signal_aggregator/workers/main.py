@@ -175,6 +175,7 @@ async def main() -> None:
 
     # Import worker functions
     from api.signal_aggregator.workers.tradingview_scraper import run_tradingview_scraper
+    from api.signal_aggregator.workers.telegram_web_scraper import run_telegram_web_scraper
     from api.signal_aggregator.workers.signal_parser import run_signal_parser
     from api.signal_aggregator.workers.price_checker import run_price_checker
     from api.signal_aggregator.workers.consensus_builder import generate_all_consensus
@@ -183,6 +184,9 @@ async def main() -> None:
     # Periodic workers
     tasks.append(asyncio.create_task(
         _run_periodic("TradingView Scraper", run_tradingview_scraper, TRADINGVIEW_INTERVAL_SECONDS),
+    ))
+    tasks.append(asyncio.create_task(
+        _run_periodic("Telegram Web Scraper", run_telegram_web_scraper, TRADINGVIEW_INTERVAL_SECONDS),
     ))
     tasks.append(asyncio.create_task(
         _run_periodic("Signal Parser", run_signal_parser, PARSE_INTERVAL_SECONDS),

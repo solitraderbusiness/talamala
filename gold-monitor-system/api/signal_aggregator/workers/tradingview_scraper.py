@@ -1,13 +1,19 @@
 """TradingView XAUUSD ideas scraper for the Signal Aggregator.
 
-Periodically fetches XAUUSD trading ideas from TradingView's public API
-endpoint and saves new ones as ``RawPost`` rows for subsequent parsing.
+Periodically fetches XAUUSD trading ideas from TradingView's ideas page
+and saves new ones as ``RawPost`` rows for subsequent parsing.
+
+TradingView removed their public ideas API, so we scrape the HTML page at
+``/symbols/XAUUSD/ideas/?sort=recent`` and extract ideas from the embedded
+JSON blob in a ``<script>`` tag.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import re
 from datetime import datetime, timezone
 
 import httpx
@@ -23,14 +29,17 @@ from api.signal_aggregator.utils.deduplication import is_duplicate
 
 logger = logging.getLogger("signal_aggregator.tradingview")
 
-# TradingView public ideas API for XAUUSD
-_TV_IDEAS_URL = "https://www.tradingview.com/ideas/xauusd/"
-_TV_API_URL = (
-    "https://www.tradingview.com/pubapi/v1/ideas/search"
-)
+# TradingView ideas page for XAUUSD (sorted by most recent)
+_TV_IDEAS_URL = "https://www.tradingview.com/symbols/XAUUSD/ideas/?sort=recent"
 _TV_SYMBOL = "XAUUSD"
 _REQUEST_TIMEOUT = 30.0
 _MAX_IDEAS_PER_FETCH = 50
+
+_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/120.0.0.0 Safari/537.36"
+)
 
 
 async def _get_tradingview_source() -> SignalSource | None:
@@ -45,66 +54,68 @@ async def _get_tradingview_source() -> SignalSource | None:
         return result.scalars().first()
 
 
+def _extract_ideas_from_html(html: str) -> list[dict]:
+    """Extract idea objects from TradingView's server-rendered HTML.
+
+    TradingView embeds a large JSON blob in an inline ``<script>`` tag.
+    The ideas are nested under a dynamic hash key at the path:
+    ``{hash_key}.data.ideas.data.items[]``.
+    """
+    # Find all inline <script> tags (no src attribute) with substantial content
+    script_pattern = re.compile(
+        r"<script[^>]*>(\{.+?\})</script>", re.DOTALL
+    )
+
+    for match in script_pattern.finditer(html):
+        blob_text = match.group(1)
+        # Quick sanity check — must contain "ideas" and be large enough
+        if '"ideas"' not in blob_text or len(blob_text) < 500:
+            continue
+
+        try:
+            blob = json.loads(blob_text)
+        except (json.JSONDecodeError, ValueError):
+            continue
+
+        # Navigate the dynamic structure: {hash_key}.data.ideas.data.items[]
+        if not isinstance(blob, dict):
+            continue
+
+        for key, value in blob.items():
+            if not isinstance(value, dict):
+                continue
+            data = value.get("data")
+            if not isinstance(data, dict):
+                continue
+            ideas_container = data.get("ideas")
+            if not isinstance(ideas_container, dict):
+                continue
+            ideas_data = ideas_container.get("data")
+            if not isinstance(ideas_data, dict):
+                continue
+            items = ideas_data.get("items")
+            if isinstance(items, list) and items:
+                logger.info(
+                    "Extracted %d ideas from TradingView HTML (key=%s).",
+                    len(items),
+                    key,
+                )
+                return items[:_MAX_IDEAS_PER_FETCH]
+
+    logger.warning("Could not extract ideas from TradingView HTML.")
+    return []
+
+
 async def _fetch_ideas(client: httpx.AsyncClient) -> list[dict]:
-    """Fetch XAUUSD ideas from TradingView's public API."""
+    """Fetch XAUUSD ideas by scraping the TradingView ideas HTML page."""
     headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/120.0.0.0 Safari/537.36"
-        ),
-        "Accept": "application/json",
-        "Referer": "https://www.tradingview.com/ideas/xauusd/",
+        "User-Agent": _USER_AGENT,
+        "Accept": "text/html,application/xhtml+xml",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.tradingview.com/",
     }
     if TRADINGVIEW_COOKIE:
         headers["Cookie"] = TRADINGVIEW_COOKIE
-
-    params = {
-        "filter": "recent",
-        "category": "",
-        "symbol": _TV_SYMBOL,
-        "sort": "recent_first",
-        "page_size": str(_MAX_IDEAS_PER_FETCH),
-        "locale": "en",
-    }
-
-    try:
-        resp = await client.get(
-            _TV_API_URL,
-            headers=headers,
-            params=params,
-            timeout=_REQUEST_TIMEOUT,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-
-        # The API may return results under "results" or at the top level
-        if isinstance(data, dict) and "results" in data:
-            return data["results"]
-        if isinstance(data, list):
-            return data
-
-        logger.warning("Unexpected TradingView API response shape: %s", type(data))
-        return []
-
-    except httpx.HTTPStatusError as exc:
-        logger.warning(
-            "TradingView API returned HTTP %s — falling back to HTML scrape",
-            exc.response.status_code,
-        )
-        return await _fetch_ideas_html_fallback(client, headers)
-    except Exception:
-        logger.exception("Error fetching TradingView ideas from API")
-        return []
-
-
-async def _fetch_ideas_html_fallback(
-    client: httpx.AsyncClient, headers: dict
-) -> list[dict]:
-    """Fallback: scrape the TradingView ideas HTML page and extract ideas
-    from the embedded ``__NEXT_DATA__`` JSON or ``<script>`` blocks."""
-    import json
-    import re
 
     try:
         resp = await client.get(
@@ -114,47 +125,25 @@ async def _fetch_ideas_html_fallback(
             follow_redirects=True,
         )
         resp.raise_for_status()
-        html = resp.text
 
-        # Attempt 1: __NEXT_DATA__ JSON blob
-        match = re.search(
-            r'<script\s+id="__NEXT_DATA__"\s+type="application/json">(.*?)</script>',
-            html,
-            re.DOTALL,
-        )
-        if match:
-            try:
-                next_data = json.loads(match.group(1))
-                # Navigate into the typical Next.js structure
-                props = next_data.get("props", {}).get("pageProps", {})
-                ideas = props.get("ideas", props.get("data", []))
-                if isinstance(ideas, list) and ideas:
-                    return ideas
-            except json.JSONDecodeError:
-                logger.debug("Failed to parse __NEXT_DATA__ JSON")
-
-        # Attempt 2: look for inline JSON array of ideas
-        idea_pattern = re.findall(
-            r'"id"\s*:\s*"(\w+)".*?"name"\s*:\s*"(.*?)".*?"description"\s*:\s*"(.*?)"',
-            html,
-        )
-        ideas_from_html: list[dict] = []
-        for idea_id, name, description in idea_pattern:
-            ideas_from_html.append(
-                {
-                    "id": idea_id,
-                    "name": name,
-                    "description": description,
-                }
+        # Verify we landed on the ideas page (not the chart page)
+        if "/ideas" not in str(resp.url):
+            logger.warning(
+                "TradingView redirected away from ideas page to %s",
+                resp.url,
             )
-        if ideas_from_html:
-            return ideas_from_html[:_MAX_IDEAS_PER_FETCH]
+            return []
 
-        logger.warning("HTML fallback could not extract any ideas")
+        return _extract_ideas_from_html(resp.text)
+
+    except httpx.HTTPStatusError as exc:
+        logger.warning(
+            "TradingView ideas page returned HTTP %s",
+            exc.response.status_code,
+        )
         return []
-
     except Exception:
-        logger.exception("Error in TradingView HTML fallback scrape")
+        logger.exception("Error fetching TradingView ideas page")
         return []
 
 
@@ -166,21 +155,39 @@ def _idea_to_text(idea: dict) -> str:
     if title:
         parts.append(f"Title: {title}")
 
-    author = idea.get("username") or idea.get("author", {}).get("username", "")
+    # Author: may be nested under "user" dict or flat "username"
+    user = idea.get("user")
+    if isinstance(user, dict):
+        author = user.get("username", "")
+    else:
+        author = idea.get("username", "")
     if author:
         parts.append(f"Author: {author}")
 
     description = idea.get("description") or idea.get("text") or ""
     if description:
-        # TradingView descriptions can be HTML-like; strip basic tags
-        import re
-
         clean = re.sub(r"<[^>]+>", " ", description)
         clean = re.sub(r"\s+", " ", clean).strip()
         parts.append(f"Description: {clean}")
 
-    symbol = idea.get("symbol") or _TV_SYMBOL
-    parts.append(f"Symbol: {symbol}")
+    # Symbol info: may be nested dict or flat string
+    symbol_data = idea.get("symbol")
+    if isinstance(symbol_data, dict):
+        symbol_name = symbol_data.get("short_name") or symbol_data.get("name", _TV_SYMBOL)
+        # direction: 1=Long/Bullish, 2=Short/Bearish, 0=Neutral
+        direction_code = symbol_data.get("direction")
+        if direction_code == 1:
+            parts.append(f"Symbol: {symbol_name} (Long/Bullish)")
+        elif direction_code == 2:
+            parts.append(f"Symbol: {symbol_name} (Short/Bearish)")
+        else:
+            parts.append(f"Symbol: {symbol_name}")
+
+        interval = symbol_data.get("interval")
+        if interval:
+            parts.append(f"Timeframe: {interval}")
+    else:
+        parts.append(f"Symbol: {symbol_data or _TV_SYMBOL}")
 
     labels = idea.get("labels") or []
     if labels:
@@ -222,7 +229,11 @@ async def _scrape_once() -> int:
 
             # Extract media / image URL if present
             media_urls: list[str] = []
-            image_url = idea.get("image_url") or idea.get("image", {}).get("big", "")
+            image_url = idea.get("image_url") or ""
+            if not image_url:
+                image = idea.get("image")
+                if isinstance(image, dict):
+                    image_url = image.get("big", "")
             if image_url:
                 media_urls.append(image_url)
 
@@ -238,12 +249,16 @@ async def _scrape_once() -> int:
                 except Exception:
                     posted_at = None
 
+            # TradingView provides the full idea URL in chart_url
+            idea_url = idea.get("chart_url") or None
+
             post = RawPost(
                 source_id=source.id,
                 raw_text=raw_text,
                 media_urls=media_urls if media_urls else None,
                 external_id=external_id,
                 posted_at=posted_at or datetime.now(timezone.utc),
+                url=idea_url,
             )
             session.add(post)
             saved += 1

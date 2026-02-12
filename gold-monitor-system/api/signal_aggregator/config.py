@@ -10,9 +10,9 @@ TELEGRAM_API_HASH: str = os.getenv("TELEGRAM_API_HASH", "")
 TELEGRAM_PHONE: str = os.getenv("TELEGRAM_PHONE", "")
 TELEGRAM_SESSION_PATH: str = os.getenv("TELEGRAM_SESSION_PATH", "/app/data/telegram_session")
 
-# ── Anthropic (Claude API for parsing) ───────────────────────────────────
-ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
-SIGNAL_PARSE_MODEL: str = os.getenv("SIGNAL_PARSE_MODEL", "claude-sonnet-4-20250514")
+# ── OpenRouter (LLM for signal parsing — same key as the rest of the system) ─
+OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
+SIGNAL_PARSE_MODEL: str = os.getenv("SIGNAL_PARSE_MODEL", "anthropic/claude-sonnet-4")
 
 # ── TradingView ──────────────────────────────────────────────────────────
 TRADINGVIEW_COOKIE: str = os.getenv("TRADINGVIEW_COOKIE", "")
@@ -88,5 +88,17 @@ Rules for valid_hours:
 If the post is not a trading signal (just news, commentary, or ads), \
 set has_signal=false and leave other fields null.
 
+CRITICAL: Extract the EXACT numbers from the text. Do NOT modify, round, \
+or invent price values. Copy the numbers exactly as written in the post. \
+If the post says "SELL 4950" the entry_price must be 4950, not 2491 or any \
+other number.
+
 The post language may be English, Farsi, Arabic, Russian, or any other \
 language. Parse regardless of language."""
+
+# ── Price sanity check ─────────────────────────────────────────────────
+# Reject signals where entry_price is too far from the current market.
+# This catches both stale signals and LLM hallucinations.
+PRICE_SANITY_MAX_DEVIATION: float = float(os.getenv(
+    "PRICE_SANITY_MAX_DEVIATION", "0.15"
+))  # 15% max deviation from latest known price

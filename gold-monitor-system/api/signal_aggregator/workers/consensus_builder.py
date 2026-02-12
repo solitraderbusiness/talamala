@@ -33,6 +33,39 @@ logger = logging.getLogger("signal_aggregator.consensus")
 # directional consensus is declared.
 _DIRECTION_THRESHOLD = 1.2
 
+# ── Minimum signal count thresholds ────────────────────────────────
+# Cap consensus_strength when there are too few signals to be reliable.
+_MIN_SIGNALS_LOW = 3   # Below this → cap strength at 30
+_MIN_SIGNALS_MED = 5   # Below this → cap strength at 60
+_STRENGTH_CAP_LOW = 30
+_STRENGTH_CAP_MED = 60
+
+# ── Opposing signal bonus ──────────────────────────────────────────
+# When opposing signals exist but one side dominates, it shows the
+# market was contested — a stronger conviction signal.
+_OPPOSING_BONUS = 10  # Added to strength when opposition exists
+
+
+def _compute_staleness_factor(sig: ParsedSignal, now: datetime) -> float:
+    """Return a factor between 0.3 and 1.0 based on how much of the
+    signal's validity window remains.
+
+    A freshly created signal (100% remaining) returns 1.0.
+    A signal about to expire (0% remaining) returns 0.3.
+    Linear interpolation in between.
+    """
+    created = sig.parsed_at
+    expires = sig.valid_until
+    if not created or not expires or expires <= created:
+        return 0.5  # fallback for malformed data
+
+    total_life = (expires - created).total_seconds()
+    remaining = max(0.0, (expires - now).total_seconds())
+    fraction = remaining / total_life  # 1.0 = fresh, 0.0 = about to expire
+
+    # Map [0, 1] → [0.3, 1.0]
+    return 0.3 + 0.7 * fraction
+
 
 async def generate_consensus(
     asset: str = "XAUUSD",
@@ -60,8 +93,25 @@ async def generate_consensus(
         signals = result.scalars().all()
 
     if not signals:
-        logger.debug("No active signals for %s/%s", asset, consensus_view)
-        return None
+        # Write a NEUTRAL snapshot so stale data gets overwritten
+        snapshot = ConsensusSnapshot(
+            asset=asset,
+            consensus_view=consensus_view,
+            timeframes_included=timeframes,
+            signals_count=0,
+            buy_count=0,
+            sell_count=0,
+            weighted_buy_score=0.0,
+            weighted_sell_score=0.0,
+            consensus_direction="NEUTRAL",
+            consensus_strength=0,
+            timeframe_alignment={v: "NEUTRAL" for v in CONSENSUS_TIMEFRAMES},
+        )
+        async with AsyncSessionLocal() as session:
+            session.add(snapshot)
+            await session.commit()
+        logger.debug("No active signals for %s/%s — wrote NEUTRAL snapshot", asset, consensus_view)
+        return snapshot
 
     # ── 2. Fetch source weights ─────────────────────────────────────
     source_ids = {s.source_id for s in signals}
@@ -73,7 +123,7 @@ async def generate_consensus(
         for src in result.scalars().all():
             source_weights[src.id] = src.current_weight or 0.5
 
-    # ── 3. Calculate weighted scores ────────────────────────────────
+    # ── 3. Calculate weighted scores (with staleness factor) ────────
     weighted_buy = 0.0
     weighted_sell = 0.0
     buy_count = 0
@@ -88,7 +138,13 @@ async def generate_consensus(
         weight = source_weights.get(sig.source_id, 0.5)
         # Scale by confidence_raw (1-10 -> 0.1-1.0)
         confidence_factor = (sig.confidence_raw or 5) / 10.0
-        effective_weight = weight * confidence_factor
+
+        # Staleness factor: freshly posted signals count more than
+        # signals close to expiring.  A signal at 100% remaining life
+        # gets factor 1.0; one at 0% remaining life gets 0.3.
+        staleness_factor = _compute_staleness_factor(sig, now)
+
+        effective_weight = weight * confidence_factor * staleness_factor
 
         if sig.direction == "BUY":
             weighted_buy += effective_weight
@@ -138,6 +194,19 @@ async def generate_consensus(
             strength = min(100, int((ratio - 1) * 50))
         else:
             strength = 100
+
+        # Opposing signal bonus: when there ARE opposing signals but
+        # one side still dominates, it means the market was contested
+        # and the winning side is more convincing.
+        if minority > 0 and (buy_count + sell_count) >= _MIN_SIGNALS_LOW:
+            strength = min(100, strength + _OPPOSING_BONUS)
+
+    # Cap strength based on signal count — low counts aren't reliable
+    signals_count = len(signals)
+    if signals_count < _MIN_SIGNALS_LOW:
+        strength = min(strength, _STRENGTH_CAP_LOW)
+    elif signals_count < _MIN_SIGNALS_MED:
+        strength = min(strength, _STRENGTH_CAP_MED)
 
     # ── 5. Price consensus ──────────────────────────────────────────
     avg_entry = statistics.mean(entry_prices) if entry_prices else None
@@ -227,7 +296,8 @@ async def _compute_alignment(asset: str) -> dict[str, str]:
             buy_w = 0.0
             sell_w = 0.0
             for s in sigs:
-                w = weights.get(s.source_id, 0.5) * ((s.confidence_raw or 5) / 10.0)
+                staleness = _compute_staleness_factor(s, now)
+                w = weights.get(s.source_id, 0.5) * ((s.confidence_raw or 5) / 10.0) * staleness
                 if s.direction == "BUY":
                     buy_w += w
                 else:

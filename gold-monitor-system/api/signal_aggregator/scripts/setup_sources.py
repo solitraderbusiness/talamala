@@ -24,41 +24,60 @@ logger = logging.getLogger(__name__)
 # ── Source definitions ───────────────────────────────────────────────────
 
 TELEGRAM_SOURCES: list[dict[str, Any]] = [
+    # ── Verified public channels with XAUUSD BUY/SELL signals ──
     {
-        "name": "SureShotFX Gold",
+        "name": "Gold Signals",
         "type": "telegram",
-        "telegram_channel_name": "@SureShotFXGold",
-        "notes": "35k+ members, 2-4 daily signals",
+        "telegram_channel_name": "@gold_signals",
+        "notes": "Structured signals with entry/SL/TP, weekly performance",
     },
     {
-        "name": "UnitedSignals",
+        "name": "Sure Gold Signals",
         "type": "telegram",
-        "telegram_channel_name": "@UnitedSignals",
-        "notes": "11k+ members, 5+ years active",
+        "telegram_channel_name": "@suregoldsignais",
+        "notes": "Excellent format: entry zones, 10-level TPs, very active",
     },
     {
-        "name": "GoldSignalsDaily",
+        "name": "Gold Signal Free",
         "type": "telegram",
-        "telegram_channel_name": "@GoldSignalsDaily",
-        "notes": "126k+ subs, gold-only focus",
-    },
-    {
-        "name": "FXPremiere",
-        "type": "telegram",
-        "telegram_channel_name": "@FXPremiere",
-        "notes": "Since 2010, aggregator",
+        "telegram_channel_name": "@GoldSignalFree",
+        "notes": "Clean dual-TP format, active daily, pure gold focus",
     },
     {
         "name": "XAUUSD Gold Signals",
         "type": "telegram",
         "telegram_channel_name": "@XAUUSDGOLDsignals",
-        "notes": "PA + fundamentals",
+        "notes": "BUY/SELL with entry/SL/TP, weekly pip summaries",
     },
     {
-        "name": "AltSignals",
+        "name": "Anabel Signals",
         "type": "telegram",
-        "telegram_channel_name": "@AltSignals",
-        "notes": "43k+, since 2017, gold + crypto",
+        "telegram_channel_name": "@AnabelSignals",
+        "notes": "Structured with timeframe info, pivot-based signals",
+    },
+    {
+        "name": "Forex Gold Room",
+        "type": "telegram",
+        "telegram_channel_name": "@ForexGoldRoom",
+        "notes": "Entry zones with SL/TP, copier results",
+    },
+    {
+        "name": "Gold Signal Trading",
+        "type": "telegram",
+        "telegram_channel_name": "@gold_signal_trading",
+        "notes": "Active with running updates, #GOLD #SELL/#BUY format",
+    },
+    {
+        "name": "Gold Trading Room",
+        "type": "telegram",
+        "telegram_channel_name": "@gold_trading_room",
+        "notes": "Multi-level TP signals, active daily",
+    },
+    {
+        "name": "Vasily Trading",
+        "type": "telegram",
+        "telegram_channel_name": "@VasilyTrading",
+        "notes": "XAUUSD analysis, support/resistance zones, directional forecasts",
     },
 ]
 

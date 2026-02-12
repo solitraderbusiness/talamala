@@ -21,5 +21,7 @@ pytest-asyncio
 hazm
 # Signal Aggregator
 telethon
-anthropic
 cryptg
+# Fundamental Analysis
+yfinance
+pandas

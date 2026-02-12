@@ -354,6 +354,132 @@ class TestDirectionDetection:
 
 
 # =========================================================================
+# Enriched alert score tests
+# =========================================================================
+
+
+class TestAlertScoreEnriched:
+    """Tests for calculate_alert_score with enrichment parameters."""
+
+    def test_default_params_match_old_formula(self):
+        """With all defaults (zeros), output is identical to the old formula."""
+        from api.rule_engine.direction import calculate_alert_score
+
+        # Bullish, high confidence, critical severity
+        old = 50 + 1 * (15 + (0.85 - 0.3) * (30 / 0.7)) * 1.0
+        new = calculate_alert_score("bullish", 0.85, "critical")
+        assert new == round(old)
+
+        # Bearish, medium confidence, high severity
+        old_b = 50 + (-1) * (15 + (0.7 - 0.3) * (30 / 0.7)) * 0.8
+        new_b = calculate_alert_score("bearish", 0.7, "high")
+        assert new_b == round(old_b)
+
+    def test_higher_match_score_increases_score(self):
+        from api.rule_engine.direction import calculate_alert_score
+        low = calculate_alert_score("bullish", 0.7, "high", match_score=0.2)
+        high = calculate_alert_score("bullish", 0.7, "high", match_score=0.9)
+        assert high > low
+
+    def test_more_rules_increases_score(self):
+        from api.rule_engine.direction import calculate_alert_score
+        one = calculate_alert_score("bullish", 0.7, "high", num_rules_matched=1)
+        three = calculate_alert_score("bullish", 0.7, "high", num_rules_matched=3)
+        assert three > one
+
+    def test_more_keywords_signals_increases_score(self):
+        from api.rule_engine.direction import calculate_alert_score
+        few = calculate_alert_score("bullish", 0.7, "high", num_keywords_matched=1)
+        many = calculate_alert_score("bullish", 0.7, "high", num_keywords_matched=6, num_signals_matched=2)
+        assert many > few
+
+    def test_regex_method_better_than_fallback(self):
+        from api.rule_engine.direction import calculate_alert_score
+        regex = calculate_alert_score("bullish", 0.7, "high", direction_method="regex")
+        fallback = calculate_alert_score("bullish", 0.7, "high", direction_method="fallback")
+        assert regex > fallback
+
+    def test_longer_content_increases_score(self):
+        from api.rule_engine.direction import calculate_alert_score
+        short = calculate_alert_score("bullish", 0.7, "high", content_length=50)
+        long = calculate_alert_score("bullish", 0.7, "high", content_length=600)
+        assert long > short
+
+    def test_rule_cap_at_4(self):
+        """Multi-rule bonus caps at 3 extra rules (4 total)."""
+        from api.rule_engine.direction import calculate_alert_score
+        at_cap = calculate_alert_score("bullish", 0.7, "high", num_rules_matched=4)
+        over_cap = calculate_alert_score("bullish", 0.7, "high", num_rules_matched=10)
+        assert at_cap == over_cap
+
+    def test_evidence_cap_at_8(self):
+        """Evidence depth bonus caps at 8 total keywords+signals."""
+        from api.rule_engine.direction import calculate_alert_score
+        at_cap = calculate_alert_score("bullish", 0.7, "high", num_keywords_matched=5, num_signals_matched=3)
+        over_cap = calculate_alert_score("bullish", 0.7, "high", num_keywords_matched=10, num_signals_matched=5)
+        assert at_cap == over_cap
+
+    def test_content_bonus_caps_at_500(self):
+        """Content bonus caps at 500 chars."""
+        from api.rule_engine.direction import calculate_alert_score
+        at_cap = calculate_alert_score("bullish", 0.7, "high", content_length=500)
+        over_cap = calculate_alert_score("bullish", 0.7, "high", content_length=2000)
+        assert at_cap == over_cap
+
+    def test_bearish_enrichment_lowers_score_further(self):
+        """Enrichment on bearish alerts pushes score further below 50."""
+        from api.rule_engine.direction import calculate_alert_score
+        base = calculate_alert_score("bearish", 0.7, "high")
+        enriched = calculate_alert_score(
+            "bearish", 0.7, "high",
+            match_score=0.8, num_rules_matched=3, num_keywords_matched=5,
+            direction_method="regex", content_length=600,
+        )
+        assert enriched < base
+
+    def test_neutral_ignores_enrichment(self):
+        """Neutral direction always returns 50 regardless of enrichment."""
+        from api.rule_engine.direction import calculate_alert_score
+        score = calculate_alert_score(
+            "neutral", 0.9, "critical",
+            match_score=1.0, num_rules_matched=5, num_keywords_matched=10,
+            direction_method="regex", content_length=1000,
+        )
+        assert score == 50
+
+    def test_meaningful_spread_between_weak_and_strong(self):
+        """Weak vs strong evidence should differ by at least 10 points."""
+        from api.rule_engine.direction import calculate_alert_score
+        weak = calculate_alert_score(
+            "bullish", 0.7, "high",
+            match_score=0.2, num_rules_matched=1, num_keywords_matched=1,
+            direction_method="fallback", content_length=50,
+        )
+        strong = calculate_alert_score(
+            "bullish", 0.7, "high",
+            match_score=0.9, num_rules_matched=4, num_keywords_matched=6,
+            num_signals_matched=2, direction_method="regex", content_length=600,
+        )
+        assert strong - weak >= 10
+
+    def test_enriched_scores_clamped_0_100(self):
+        """Even with maximum enrichment, scores stay in 0-100."""
+        from api.rule_engine.direction import calculate_alert_score
+        bull = calculate_alert_score(
+            "bullish", 1.0, "critical",
+            match_score=1.0, num_rules_matched=10, num_keywords_matched=20,
+            num_signals_matched=10, direction_method="regex", content_length=5000,
+        )
+        assert 0 <= bull <= 100
+        bear = calculate_alert_score(
+            "bearish", 1.0, "critical",
+            match_score=1.0, num_rules_matched=10, num_keywords_matched=20,
+            num_signals_matched=10, direction_method="regex", content_length=5000,
+        )
+        assert 0 <= bear <= 100
+
+
+# =========================================================================
 # Event fingerprint tests
 # =========================================================================
 

@@ -22,51 +22,76 @@ from api.signal_aggregator.utils.weight_calculator import calculate_source_weigh
 
 logger = logging.getLogger("signal_aggregator.price_checker")
 
-_BINANCE_URL = "https://api.binance.com/api/v3/ticker/price"
-_FALLBACK_URL = "https://data-asg.goldprice.org/dbXRates/USD"
+_BRSAPI_URL = "https://brsapi.ir/Api/Market/Gold_Currency.php"
+_TGJU_URL = "https://call4.tgju.org/ajax.json"
 _REQUEST_TIMEOUT = 15.0
 
 # Gold pip = 0.1 USD (10 pips = $1)
 _PIP_SIZE = 0.1
 
 
-async def _fetch_price_binance(client: httpx.AsyncClient) -> float | None:
-    """Fetch XAUUSD(T) price from Binance."""
+def _get_brsapi_key() -> str:
+    """Lazy import to avoid circular dependency at module level."""
+    import os
+    return os.getenv("BRSAPI_KEY", "")
+
+
+async def _fetch_price_brsapi(client: httpx.AsyncClient) -> float | None:
+    """Fetch XAUUSD price from BrsAPI (same source as main system)."""
+    api_key = _get_brsapi_key()
+    if not api_key:
+        logger.debug("BRSAPI_KEY not set — skipping BrsAPI")
+        return None
     try:
         resp = await client.get(
-            _BINANCE_URL,
-            params={"symbol": "XAUUSDT"},
+            _BRSAPI_URL,
+            params={"key": api_key},
             timeout=_REQUEST_TIMEOUT,
+            headers={
+                "User-Agent": "Mozilla/5.0 (compatible; GoldMonitor/1.0)",
+                "Accept": "application/json",
+            },
         )
         resp.raise_for_status()
         data = resp.json()
-        price = float(data["price"])
-        logger.debug("Binance XAUUSDT price: %.2f", price)
-        return price
+
+        # Response is a list with one element containing "gold" array
+        container = data[0] if isinstance(data, list) and data else data
+        if not isinstance(container, dict):
+            return None
+
+        for item in container.get("gold", []):
+            if isinstance(item, dict) and item.get("symbol") == "XAUUSD":
+                price_str = str(item.get("price", "")).replace(",", "")
+                price = float(price_str)
+                if price > 0:
+                    logger.debug("BrsAPI XAUUSD price: %.2f", price)
+                    return price
     except Exception:
-        logger.warning("Failed to fetch price from Binance", exc_info=True)
-        return None
+        logger.warning("Failed to fetch price from BrsAPI", exc_info=True)
+    return None
 
 
-async def _fetch_price_fallback(client: httpx.AsyncClient) -> float | None:
-    """Fallback: fetch gold price from goldprice.org."""
+async def _fetch_price_tgju(client: httpx.AsyncClient) -> float | None:
+    """Fallback: fetch gold global price from TGJU."""
     try:
         resp = await client.get(
-            _FALLBACK_URL,
+            _TGJU_URL,
             timeout=_REQUEST_TIMEOUT,
             headers={"Accept": "application/json"},
         )
         resp.raise_for_status()
         data = resp.json()
-        # goldprice.org returns items list with xauPrice
-        items = data.get("items", [])
-        if items:
-            price = float(items[0].get("xauPrice", 0))
+        # TGJU returns "ounce" key with "p" (price in USD)
+        ounce = data.get("ounce", {})
+        if isinstance(ounce, dict):
+            price_str = str(ounce.get("p", "")).replace(",", "")
+            price = float(price_str)
             if price > 0:
-                logger.debug("Goldprice.org XAUUSD price: %.2f", price)
+                logger.debug("TGJU XAUUSD price: %.2f", price)
                 return price
     except Exception:
-        logger.warning("Failed to fetch price from fallback source", exc_info=True)
+        logger.warning("Failed to fetch price from TGJU", exc_info=True)
     return None
 
 
@@ -74,13 +99,13 @@ async def fetch_current_price() -> tuple[float | None, str]:
     """Return ``(price, source_name)`` or ``(None, '')`` if all sources
     fail."""
     async with httpx.AsyncClient() as client:
-        price = await _fetch_price_binance(client)
+        price = await _fetch_price_brsapi(client)
         if price is not None:
-            return price, "binance"
+            return price, "brsapi"
 
-        price = await _fetch_price_fallback(client)
+        price = await _fetch_price_tgju(client)
         if price is not None:
-            return price, "goldprice"
+            return price, "tgju"
 
     logger.error("All price sources failed — no price available")
     return None, ""
