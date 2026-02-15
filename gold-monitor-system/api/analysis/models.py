@@ -16,6 +16,7 @@ import uuid
 from datetime import date, datetime, timezone
 
 from sqlalchemy import (
+    Boolean,
     Column,
     Date,
     DateTime,
@@ -239,6 +240,10 @@ class RegimeScore(Base):
     smoothed_p_stress = Column(Float, nullable=True)
     smoothed_p_recovery = Column(Float, nullable=True)
     chosen_regime = Column(String(16), nullable=True)
+    chosen_regime_raw = Column(String(16), nullable=True)
+    chosen_note_fa = Column(String(256), nullable=True)
+    score_semantics = Column(String(64), nullable=True)
+    lookahead_safe = Column("lookahead_safe", Integer, nullable=True, default=1)
     real_yield_source = Column(String(32), nullable=True)
     credit_proxy_source = Column(String(32), nullable=True)
     days_skipped = Column(Integer, default=0)
@@ -251,4 +256,34 @@ class RegimeScore(Base):
 
     __table_args__ = (
         Index("ix_regime_scores_ts", ts.desc()),
+    )
+
+
+class RegimeAuditLog(Base):
+    """Audit log for regime engine computations — full provenance per day."""
+
+    __tablename__ = "regime_audit_logs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    computed_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+    ts = Column(Date, nullable=False)
+    inputs_json = Column(JSONB, nullable=True)
+    indices_json = Column(JSONB, nullable=True)
+    scores_json = Column(JSONB, nullable=True)
+    raw_probs = Column(JSONB, nullable=True)
+    smoothed_probs = Column(JSONB, nullable=True)
+    chosen_regime = Column(String(16), nullable=True)
+    chosen_regime_raw = Column(String(16), nullable=True)
+    chosen_note_fa = Column(String(256), nullable=True)
+    sources = Column(JSONB, nullable=True)
+    staleness = Column(JSONB, nullable=True)
+    extra = Column(JSONB, nullable=True)
+
+    __table_args__ = (
+        Index("ix_regime_audit_ts", ts.desc()),
+        Index("ix_regime_audit_computed", computed_at.desc()),
     )

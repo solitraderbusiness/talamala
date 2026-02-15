@@ -1,16 +1,30 @@
 """Liquidity Regime Engine — deterministic macro regime classifier.
 
-Computes daily probabilities for 4 macro regimes:
+Computes daily scores for 4 (+1 mixed) macro regimes:
 - EXPANSION: low yields, weak dollar, low stress
 - TIGHTENING: high yields, strong dollar, low stress
 - STRESS: high VIX, credit widening, equity drawdown
 - RECOVERY: falling stress (delta_LSI > 0)
+- MIXED: scores too close to call (top < 0.45 or gap < 0.08)
 
 Indices
 -------
 - LSI (Liquidity Stress Index): 0.5*z_vix + 0.3*z_credit + 0.2*z_spx_dd
 - USDX: zscore(20d return of DXY)
 - RYPI (Real Yield Pressure Index): zscore(DFII10 level) with fallback chain
+
+Credit proxy
+------------
+- Primary: FRED BAMLH0A0HYM2 (ICE BofA US High Yield OAS)
+- Fallback: -ln(HYG/IEF) price-based proxy
+- Source tracked as credit_proxy_source = "fred_oas" | "hyg_ief" | "none"
+
+Real yield
+----------
+- Primary: DFII10 (TIPS-derived real yield)
+- Fallback A: DGS10 - T10YIE (nominal minus breakeven inflation)
+- Fallback B: None — RYPI excluded from scoring when missing
+- Source tracked as real_yield_source = "dfii10" | "nominal_minus_breakeven" | "missing"
 
 Scoring
 -------
@@ -19,7 +33,16 @@ Scoring
 - S_exp     = -0.7*RYPI - 0.6*USDX - 0.8*LSI
 - S_recov   = -0.8*LSI - 0.2*RYPI - 0.2*USDX + 0.5*delta_LSI_20
 
-Raw probabilities via softmax, smoothed via EWMA (alpha=0.2).
+Raw scores via softmax → EWMA smoothed (alpha=0.2).
+Output labeled "relative_regime_scores" (NOT probabilities).
+
+Mixed regime
+------------
+- top = max(smoothed_scores), second = 2nd highest
+- If top < 0.45 OR (top - second) < 0.08 → chosen_regime = "mixed"
+- chosen_regime_raw always contains the argmax (for debugging)
+
+No-lookahead guarantee: all series alignment uses only data at or before date t.
 """
 
 from __future__ import annotations
@@ -33,7 +56,12 @@ from typing import Sequence
 from sqlalchemy import select
 
 from api.database import AsyncSessionLocal
-from api.analysis.models import AssetPriceDaily, MacroIndicator, RegimeScore
+from api.analysis.models import (
+    AssetPriceDaily,
+    MacroIndicator,
+    RegimeAuditLog,
+    RegimeScore,
+)
 
 logger = logging.getLogger("analysis.regime")
 
@@ -41,6 +69,10 @@ logger = logging.getLogger("analysis.regime")
 
 Z_WINDOW = int(os.environ.get("REGIME_ZSCORE_WINDOW", "252"))
 EWMA_ALPHA = float(os.environ.get("REGIME_EWMA_ALPHA", "0.2"))
+
+# Mixed regime thresholds
+MIXED_MIN_TOP = 0.45        # top score must exceed this to be decisive
+MIXED_MIN_GAP = 0.08        # gap between top and second must exceed this
 
 REGIMES = ["expansion", "tightening", "stress", "recovery"]
 REGIME_LABELS = {0: "expansion", 1: "tightening", 2: "stress", 3: "recovery"}
@@ -97,6 +129,29 @@ def compute_credit_proxy(hyg: list[float | None], ief: list[float | None]) -> li
     return result
 
 
+def merge_credit_series(
+    fred_oas: list[float | None],
+    hyg_ief: list[float | None],
+) -> tuple[list[float | None], list[str]]:
+    """Merge FRED OAS (primary) with HYG/IEF fallback for credit stress.
+
+    Returns (merged_values, source_per_date).
+    """
+    merged: list[float | None] = []
+    sources: list[str] = []
+    for oas, proxy in zip(fred_oas, hyg_ief):
+        if oas is not None:
+            merged.append(oas)
+            sources.append("fred_oas")
+        elif proxy is not None:
+            merged.append(proxy)
+            sources.append("hyg_ief")
+        else:
+            merged.append(None)
+            sources.append("none")
+    return merged, sources
+
+
 def softmax(scores: list[float]) -> list[float]:
     """Numerically stable softmax."""
     max_s = max(scores)
@@ -108,9 +163,9 @@ def softmax(scores: list[float]) -> list[float]:
 def ewma_smooth(
     series: list[list[float]], alpha: float = 0.2,
 ) -> list[list[float]]:
-    """EWMA on a sequence of probability vectors.
+    """EWMA on a sequence of score vectors.
 
-    Each element is [p_exp, p_tight, p_stress, p_recov].
+    Each element is [s_exp, s_tight, s_stress, s_recov].
     Returns smoothed vectors that still sum to ~1.0.
     """
     if not series:
@@ -126,6 +181,36 @@ def ewma_smooth(
             smoothed = [s / total for s in smoothed]
         result.append(smoothed)
     return result
+
+
+def classify_regime(
+    smoothed_scores: list[float],
+    min_top: float = MIXED_MIN_TOP,
+    min_gap: float = MIXED_MIN_GAP,
+) -> tuple[str, str, str | None]:
+    """Classify regime from smoothed softmax scores.
+
+    Returns (chosen_regime, chosen_regime_raw, chosen_note_fa).
+    - chosen_regime_raw = argmax (always)
+    - chosen_regime = "mixed" if uncertainty is too high, else argmax
+    """
+    top_val = max(smoothed_scores)
+    top_idx = smoothed_scores.index(top_val)
+    regime_raw = REGIME_LABELS[top_idx]
+
+    # Find second highest
+    sorted_scores = sorted(smoothed_scores, reverse=True)
+    second_val = sorted_scores[1] if len(sorted_scores) > 1 else 0.0
+    gap = top_val - second_val
+
+    if top_val < min_top or gap < min_gap:
+        return (
+            "mixed",
+            regime_raw,
+            "عدم قطعیت بالا — امتیاز رژیم‌ها نزدیک است",
+        )
+
+    return regime_raw, regime_raw, None
 
 
 def _spx_drawdown(closes: list[float | None], window: int = 252) -> list[float | None]:
@@ -180,9 +265,9 @@ async def run() -> dict:
             )
             price_series[symbol] = {r.trade_date: r.close for r in rows}
 
-        # FRED macro — DFII10 (real yield) and DGS10 (nominal yield fallback)
+        # FRED macro — DFII10 (real yield), DGS10, T10YIE, BAMLH0A0HYM2 (HY OAS)
         macro_series: dict[str, dict[date, float]] = {}
-        for series_id in ["DFII10", "DGS10"]:
+        for series_id in ["DFII10", "DGS10", "T10YIE", "BAMLH0A0HYM2"]:
             rows = await session.execute(
                 select(MacroIndicator.observation_date, MacroIndicator.value)
                 .where(
@@ -203,7 +288,7 @@ async def run() -> dict:
         def _get(series_dict: dict[date, float], d: date) -> float | None:
             return series_dict.get(d)
 
-        # Build aligned lists
+        # Build aligned lists (no forward fill — only exact date matches)
         dates: list[date] = all_dates
         dxy_prices = [_get(price_series.get("DX-Y.NYB", {}), d) for d in dates]
         vix_prices = [_get(price_series.get("^VIX", {}), d) for d in dates]
@@ -212,6 +297,8 @@ async def run() -> dict:
         ief_prices = [_get(price_series.get("IEF", {}), d) for d in dates]
         dfii10_vals = [_get(macro_series.get("DFII10", {}), d) for d in dates]
         dgs10_vals = [_get(macro_series.get("DGS10", {}), d) for d in dates]
+        t10yie_vals = [_get(macro_series.get("T10YIE", {}), d) for d in dates]
+        hy_oas_vals = [_get(macro_series.get("BAMLH0A0HYM2", {}), d) for d in dates]
 
         # --- Compute intermediate series ---
         # DXY 20-day log return
@@ -221,29 +308,49 @@ async def run() -> dict:
         # VIX z-score (level)
         z_vix = rolling_zscore(vix_prices, Z_WINDOW)
 
-        # Credit proxy: -ln(HYG/IEF)
-        credit = compute_credit_proxy(hyg_prices, ief_prices)
-        z_credit = rolling_zscore(credit, Z_WINDOW)
+        # Credit proxy: primary = FRED OAS, fallback = -ln(HYG/IEF)
+        hyg_ief_proxy = compute_credit_proxy(hyg_prices, ief_prices)
+        credit_merged, credit_sources = merge_credit_series(hy_oas_vals, hyg_ief_proxy)
+        z_credit = rolling_zscore(credit_merged, Z_WINDOW)
 
         # S&P 500 drawdown z-score
         spx_dd = _spx_drawdown(spx_prices, Z_WINDOW)
         z_spx_dd = rolling_zscore(spx_dd, Z_WINDOW)
 
-        # Real yield source determination and z-score
-        # Fallback chain: DFII10 → DGS10 (nominal proxy) → 0.0 (neutral)
+        # Real yield: DFII10 → (DGS10 - T10YIE) → None
         real_yield_vals: list[float | None] = []
         real_yield_sources: list[str] = []
         for i, d in enumerate(dates):
             if dfii10_vals[i] is not None:
                 real_yield_vals.append(dfii10_vals[i])
                 real_yield_sources.append("dfii10")
-            elif dgs10_vals[i] is not None:
-                real_yield_vals.append(dgs10_vals[i])
-                real_yield_sources.append("nominal_proxy")
+            elif dgs10_vals[i] is not None and t10yie_vals[i] is not None:
+                # Approximate real yield = nominal - breakeven inflation
+                real_yield_vals.append(dgs10_vals[i] - t10yie_vals[i])
+                real_yield_sources.append("nominal_minus_breakeven")
             else:
                 real_yield_vals.append(None)
-                real_yield_sources.append("neutral")
+                real_yield_sources.append("missing")
         z_real_yield = rolling_zscore(real_yield_vals, Z_WINDOW)
+
+        # Track staleness per series (last non-None date)
+        def _last_valid_date(vals: list[float | None]) -> str | None:
+            for i in range(len(vals) - 1, -1, -1):
+                if vals[i] is not None:
+                    return str(dates[i])
+            return None
+
+        staleness_info = {
+            "vix_last": _last_valid_date(vix_prices),
+            "dxy_last": _last_valid_date(dxy_prices),
+            "hyg_last": _last_valid_date(hyg_prices),
+            "ief_last": _last_valid_date(ief_prices),
+            "hy_oas_last": _last_valid_date(hy_oas_vals),
+            "dfii10_last": _last_valid_date(dfii10_vals),
+            "dgs10_last": _last_valid_date(dgs10_vals),
+            "t10yie_last": _last_valid_date(t10yie_vals),
+            "spx_last": _last_valid_date(spx_prices),
+        }
 
         # --- Compute LSI (Liquidity Stress Index) ---
         lsi_values: list[float | None] = []
@@ -272,7 +379,10 @@ async def run() -> dict:
         raw_probs: list[list[float] | None] = []
         computed_dates: list[date] = []
         computed_indices: list[dict] = []
-        computed_sources: list[str] = []
+        computed_scores_raw: list[dict] = []
+        computed_ry_sources: list[str] = []
+        computed_credit_sources: list[str] = []
+        computed_rypi_included: list[bool] = []
         days_skipped = 0
         skipped_dates: list[str] = []
 
@@ -288,6 +398,8 @@ async def run() -> dict:
                 raw_probs.append(None)
                 continue
 
+            # RYPI: if missing, exclude from scoring (set to 0 and flag)
+            rypi_included = rypi is not None
             _rypi = rypi if rypi is not None else 0.0
             _dlsi = delta_lsi_20[i] if delta_lsi_20[i] is not None else 0.0
 
@@ -300,11 +412,20 @@ async def run() -> dict:
             raw_probs.append(probs)
             computed_dates.append(d)
             computed_indices.append({
-                "lsi": lsi,
-                "usdx": usdx,
-                "rypi": _rypi,
+                "lsi": round(lsi, 6),
+                "usdx": round(usdx, 6),
+                "rypi": round(_rypi, 6),
+                "delta_lsi_20": round(_dlsi, 6),
             })
-            computed_sources.append(real_yield_sources[i])
+            computed_scores_raw.append({
+                "s_exp": round(s_exp, 6),
+                "s_tight": round(s_tight, 6),
+                "s_stress": round(s_stress, 6),
+                "s_recov": round(s_recov, 6),
+            })
+            computed_ry_sources.append(real_yield_sources[i])
+            computed_credit_sources.append(credit_sources[i])
+            computed_rypi_included.append(rypi_included)
 
         if not computed_dates:
             logger.warning("No dates with sufficient data for regime computation")
@@ -316,12 +437,17 @@ async def run() -> dict:
 
         # --- Upsert into DB ---
         upserted = 0
+        audit_rows: list[RegimeAuditLog] = []
+
         for idx, d in enumerate(computed_dates):
             raw_p = valid_probs[idx]
             sm_p = smoothed[idx]
             indices = computed_indices[idx]
-            ry_source = computed_sources[idx]
-            chosen = REGIME_LABELS[sm_p.index(max(sm_p))]
+            ry_source = computed_ry_sources[idx]
+            cr_source = computed_credit_sources[idx]
+            scores_raw = computed_scores_raw[idx]
+
+            chosen, chosen_raw, note_fa = classify_regime(sm_p)
 
             # Check if row exists
             existing = await session.execute(
@@ -344,16 +470,64 @@ async def run() -> dict:
             row.smoothed_p_stress = sm_p[2]
             row.smoothed_p_recovery = sm_p[3]
             row.chosen_regime = chosen
+            row.chosen_regime_raw = chosen_raw
+            row.chosen_note_fa = note_fa
+            row.score_semantics = "relative_regime_scores"
+            row.lookahead_safe = 1
             row.real_yield_source = ry_source
-            row.credit_proxy_source = "hyg_ief"
+            row.credit_proxy_source = cr_source
             row.days_skipped = days_skipped
             upserted += 1
+
+            # Build audit log row (only for last 30 days to avoid massive inserts)
+            if idx >= max(0, len(computed_dates) - 30):
+                audit_rows.append(RegimeAuditLog(
+                    computed_at=datetime.now(timezone.utc),
+                    ts=d,
+                    inputs_json={
+                        "z_vix": z_vix[dates.index(d)] if d in dates else None,
+                        "z_credit": z_credit[dates.index(d)] if d in dates else None,
+                        "z_spx_dd": z_spx_dd[dates.index(d)] if d in dates else None,
+                        "z_dxy_ret20": z_dxy_ret20[dates.index(d)] if d in dates else None,
+                        "z_real_yield": z_real_yield[dates.index(d)] if d in dates else None,
+                        "rypi_included": computed_rypi_included[idx],
+                    },
+                    indices_json=indices,
+                    scores_json=scores_raw,
+                    raw_probs={
+                        "expansion": round(raw_p[0], 6),
+                        "tightening": round(raw_p[1], 6),
+                        "stress": round(raw_p[2], 6),
+                        "recovery": round(raw_p[3], 6),
+                    },
+                    smoothed_probs={
+                        "expansion": round(sm_p[0], 6),
+                        "tightening": round(sm_p[1], 6),
+                        "stress": round(sm_p[2], 6),
+                        "recovery": round(sm_p[3], 6),
+                    },
+                    chosen_regime=chosen,
+                    chosen_regime_raw=chosen_raw,
+                    chosen_note_fa=note_fa,
+                    sources={
+                        "real_yield": ry_source,
+                        "credit": cr_source,
+                    },
+                    staleness=staleness_info,
+                ))
+
+        # Persist audit logs
+        for al in audit_rows:
+            session.add(al)
 
         await session.commit()
 
         # --- Provenance logging ---
         latest_raw = valid_probs[-1] if valid_probs else None
         latest_smoothed = smoothed[-1] if smoothed else None
+        latest_cr_source = computed_credit_sources[-1] if computed_credit_sources else "none"
+        latest_ry_source = computed_ry_sources[-1] if computed_ry_sources else "missing"
+
         try:
             from api.data_reliability.logger import start_run, log_transform, finish_run
             from api.data_reliability.validator import validate_metric, create_alert_if_needed
@@ -377,8 +551,8 @@ async def run() -> dict:
                         output_value={
                             "dates_computed": len(computed_dates),
                             "days_skipped": days_skipped,
-                            "real_yield_source": computed_sources[-1] if computed_sources else "unknown",
-                            "credit_proxy_source": "hyg_ief",
+                            "real_yield_source": latest_ry_source,
+                            "credit_proxy_source": latest_cr_source,
                             "raw_probs": latest_raw,
                             "smoothed_probs": latest_smoothed,
                         },
@@ -395,14 +569,23 @@ async def run() -> dict:
         except Exception:
             logger.debug("Provenance logging not available", exc_info=True)
 
+    # Final chosen regime
+    latest_chosen, latest_chosen_raw, _ = classify_regime(
+        smoothed[-1]
+    ) if smoothed else ("unknown", "unknown", None)
+
     result = {
         "status": "ok",
         "dates_computed": len(computed_dates),
         "days_skipped": days_skipped,
         "upserted": upserted,
-        "latest_regime": REGIME_LABELS.get(
-            smoothed[-1].index(max(smoothed[-1])), "unknown"
-        ) if smoothed else "unknown",
+        "latest_regime": latest_chosen,
+        "latest_regime_raw": latest_chosen_raw,
+        "credit_proxy_source": latest_cr_source,
+        "real_yield_source": latest_ry_source,
+        "score_semantics": "relative_regime_scores",
+        "lookahead_safe": True,
+        "audit_logs_written": len(audit_rows),
     }
     logger.info("Regime engine: %s", result)
     return result

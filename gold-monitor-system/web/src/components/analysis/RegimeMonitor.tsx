@@ -19,6 +19,10 @@ interface RegimeData {
   smoothed_p_stress: number | null;
   smoothed_p_recovery: number | null;
   chosen_regime: string | null;
+  chosen_regime_raw?: string | null;
+  chosen_note_fa?: string | null;
+  score_semantics?: string | null;
+  lookahead_safe?: boolean;
   real_yield_source: string | null;
   credit_proxy_source: string | null;
   status?: string;
@@ -71,6 +75,15 @@ const REGIME_INFO: Record<
     description:
       "در رژیم بازیابی، استرس بازار کاهش یافته ولی هنوز ناپایدار است. طلا ممکن است کمی تثبیت یا اصلاح شود.",
   },
+  mixed: {
+    label: "نامشخص",
+    en: "MIXED",
+    color: "text-gray-500",
+    bg: "bg-gray-500",
+    border: "border-gray-400/30",
+    description:
+      "عدم قطعیت بالا — امتیاز رژیم‌ها نزدیک است. هیچ رژیمی به‌وضوح غالب نیست. احتیاط توصیه می‌شود.",
+  },
 };
 
 const BAR_COLORS: Record<string, string> = {
@@ -78,6 +91,7 @@ const BAR_COLORS: Record<string, string> = {
   tightening: "bg-amber-500",
   stress: "bg-red-500",
   recovery: "bg-blue-500",
+  mixed: "bg-gray-500",
 };
 
 const INDEX_LABELS: Record<string, string> = {
@@ -160,7 +174,7 @@ export default function RegimeMonitor({ data, loading }: Props) {
             <span className={`text-3xl font-black ${info.color}`}>
               {pct(dominantProb)}
             </span>
-            <p className="text-xs text-gray-400">احتمال</p>
+            <p className="text-xs text-gray-400">وزن نسبی</p>
           </div>
         </div>
       </div>
@@ -245,6 +259,20 @@ export default function RegimeMonitor({ data, loading }: Props) {
             <span>+3</span>
           </div>
         </div>
+
+        {/* ── Mixed / uncertainty note ── */}
+        {data.chosen_note_fa && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50/50 p-3 dark:border-amber-800 dark:bg-amber-900/20">
+            <p className="text-xs font-medium text-amber-700 dark:text-amber-400">
+              {data.chosen_note_fa}
+            </p>
+            {data.chosen_regime_raw && data.chosen_regime !== data.chosen_regime_raw && (
+              <p className="mt-1 text-[10px] text-amber-600 dark:text-amber-500">
+                بیشترین امتیاز: {REGIME_INFO[data.chosen_regime_raw]?.label || data.chosen_regime_raw}
+              </p>
+            )}
+          </div>
+        )}
 
         {/* ── Info Box ── */}
         <div className={`rounded-lg border p-3 ${info.border} bg-gray-50/50 dark:bg-gray-800/30`}>

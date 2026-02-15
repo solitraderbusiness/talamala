@@ -23,7 +23,7 @@ from sqlalchemy import select, desc, asc
 
 from api.auth import get_current_admin
 from api.database import AsyncSessionLocal
-from api.analysis.models import AssetPriceDaily, RegimeScore
+from api.analysis.models import AssetPriceDaily, RegimeAuditLog, RegimeScore
 
 logger = logging.getLogger("regime.routes")
 
@@ -45,6 +45,10 @@ def _row_to_dict(row: RegimeScore) -> dict:
         "smoothed_p_stress": row.smoothed_p_stress,
         "smoothed_p_recovery": row.smoothed_p_recovery,
         "chosen_regime": row.chosen_regime,
+        "chosen_regime_raw": getattr(row, "chosen_regime_raw", None),
+        "chosen_note_fa": getattr(row, "chosen_note_fa", None),
+        "score_semantics": getattr(row, "score_semantics", None) or "relative_regime_scores",
+        "lookahead_safe": bool(getattr(row, "lookahead_safe", True)),
         "real_yield_source": row.real_yield_source,
         "credit_proxy_source": row.credit_proxy_source,
         "days_skipped": row.days_skipped,
@@ -270,6 +274,51 @@ async def regime_transitions():
         })
 
     return {"transitions": transitions_out, "total_transitions": total_transitions}
+
+
+@router.get("/audit-logs")
+async def get_regime_audit_logs(
+    days: int = Query(default=30, ge=1, le=365),
+    limit: int = Query(default=100, ge=1, le=500),
+):
+    """Return regime audit log entries for the last N days."""
+    from datetime import datetime, timedelta, timezone
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(
+                *[
+                    c
+                    for c in RegimeAuditLog.__table__.columns
+                ]
+            )
+            .where(RegimeAuditLog.computed_at >= cutoff)
+            .order_by(desc(RegimeAuditLog.computed_at))
+            .limit(limit)
+        )
+        rows = result.mappings().all()
+        return {
+            "logs": [
+                {
+                    "id": str(r["id"]),
+                    "computed_at": r["computed_at"].isoformat() if r["computed_at"] else None,
+                    "ts": str(r["ts"]) if r["ts"] else None,
+                    "inputs_json": r["inputs_json"],
+                    "indices_json": r["indices_json"],
+                    "scores_json": r["scores_json"],
+                    "raw_probs": r["raw_probs"],
+                    "smoothed_probs": r["smoothed_probs"],
+                    "chosen_regime": r["chosen_regime"],
+                    "chosen_regime_raw": r["chosen_regime_raw"],
+                    "chosen_note_fa": r["chosen_note_fa"],
+                    "sources": r["sources"],
+                    "staleness": r["staleness"],
+                }
+                for r in rows
+            ],
+            "count": len(rows),
+        }
 
 
 def _safe_avg(values: list[float | None]) -> float | None:

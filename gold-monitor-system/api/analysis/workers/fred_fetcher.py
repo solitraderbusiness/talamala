@@ -20,7 +20,7 @@ from api.analysis.models import MacroIndicator
 
 logger = logging.getLogger("analysis.fred")
 
-SERIES = ["FEDFUNDS", "CPIAUCSL", "DFII10", "DGS10", "T10YIE"]
+SERIES = ["FEDFUNDS", "CPIAUCSL", "DFII10", "DGS10", "T10YIE", "BAMLH0A0HYM2"]
 FRED_BASE = "https://api.stlouisfed.org/fred/series/observations"
 FRED_LOOKBACK_DAYS = int(os.environ.get("FRED_LOOKBACK_DAYS", "400"))
 
@@ -30,6 +30,7 @@ SERIES_METRIC_MAP = {
     "DFII10": "fred_dfii10",
     "DGS10": "fred_dgs10",
     "T10YIE": "fred_t10yie",
+    "BAMLH0A0HYM2": "fred_hy_oas",
 }
 
 

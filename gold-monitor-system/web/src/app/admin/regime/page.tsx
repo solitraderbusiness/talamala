@@ -33,12 +33,32 @@ interface RegimeRow {
   smoothed_p_stress: number | null;
   smoothed_p_recovery: number | null;
   chosen_regime: string | null;
+  chosen_regime_raw?: string | null;
+  chosen_note_fa?: string | null;
+  score_semantics?: string | null;
+  lookahead_safe?: boolean;
   real_yield_source: string | null;
   credit_proxy_source: string | null;
   days_skipped: number | null;
   metadata: Record<string, unknown> | null;
   created_at: string | null;
   status?: string;
+}
+
+interface AuditLogEntry {
+  id: string;
+  computed_at: string | null;
+  ts: string | null;
+  inputs_json: Record<string, unknown> | null;
+  indices_json: Record<string, number> | null;
+  scores_json: Record<string, number> | null;
+  raw_probs: Record<string, number> | null;
+  smoothed_probs: Record<string, number> | null;
+  chosen_regime: string | null;
+  chosen_regime_raw: string | null;
+  chosen_note_fa: string | null;
+  sources: Record<string, string> | null;
+  staleness: Record<string, string | null> | null;
 }
 
 interface BenchmarkResult {
@@ -75,6 +95,7 @@ const REGIME_COLORS: Record<string, string> = {
   tightening: "#F59E0B",
   stress: "#EF4444",
   recovery: "#3B82F6",
+  mixed: "#6B7280",
 };
 
 const REGIME_LABELS: Record<string, string> = {
@@ -82,6 +103,7 @@ const REGIME_LABELS: Record<string, string> = {
   tightening: "انقباضی",
   stress: "بحرانی",
   recovery: "بازیابی",
+  mixed: "نامشخص",
 };
 
 const DAY_OPTIONS = [30, 90, 180, 365];
@@ -136,7 +158,25 @@ export default function AdminRegimePage() {
   const [backtestData, setBacktestData] = useState<BacktestResult | null>(null);
   const [backtestLoading, setBacktestLoading] = useState(false);
   const [backtestError, setBacktestError] = useState<string | null>(null);
+  const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
+  const [auditLoading, setAuditLoading] = useState(false);
+  const [expandedAudit, setExpandedAudit] = useState<string | null>(null);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const fetchAuditLogs = async () => {
+    setAuditLoading(true);
+    try {
+      const res = await authRequest("/api/regime/audit-logs?days=30&limit=100");
+      if (res.ok) {
+        const data = await res.json();
+        setAuditLogs(data.logs || []);
+      }
+    } catch {
+      // silent
+    } finally {
+      setAuditLoading(false);
+    }
+  };
 
   const fetchData = useCallback(async () => {
     try {
@@ -165,6 +205,7 @@ export default function AdminRegimePage() {
   useEffect(() => {
     setLoading(true);
     fetchRef.current();
+    fetchAuditLogs();
   }, [days]);
 
   useEffect(() => {
@@ -344,7 +385,7 @@ export default function AdminRegimePage() {
             {/* Stacked area chart */}
             <div>
               <p className="mb-2 text-xs text-gray-500 dark:text-gray-400">
-                احتمال رژیم‌ها (%)
+                وزن نسبی رژیم‌ها (%)
               </p>
               <ResponsiveContainer width="100%" height={280}>
                 <AreaChart data={chartData}>
@@ -538,7 +579,148 @@ export default function AdminRegimePage() {
         </div>
       </div>
 
-      {/* ── Section 4: Historical Backtest ── */}
+      {/* ── Section 4: Audit Logs ── */}
+      <div className="card p-6">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+          <h3 className="text-lg font-bold text-gray-900 dark:text-gray-100">
+            لاگ حسابرسی رژیم
+          </h3>
+          <button
+            onClick={fetchAuditLogs}
+            disabled={auditLoading}
+            className="rounded bg-gray-100 px-3 py-1.5 text-xs font-medium text-gray-600 transition-colors hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-gray-700 disabled:opacity-50"
+          >
+            {auditLoading ? "..." : "بروزرسانی"}
+          </button>
+        </div>
+
+        {auditLoading ? (
+          <div className="py-6 text-center text-sm text-gray-400">در حال بارگذاری...</div>
+        ) : auditLogs.length === 0 ? (
+          <div className="py-6 text-center text-sm text-gray-400">
+            هنوز لاگی ثبت نشده. منتظر اجرای بعدی موتور رژیم باشید.
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {auditLogs.slice(0, 30).map((log) => {
+              const isExpanded = expandedAudit === log.id;
+              return (
+                <div
+                  key={log.id}
+                  className="rounded-lg border border-gray-200 dark:border-gray-700"
+                >
+                  <button
+                    onClick={() => setExpandedAudit(isExpanded ? null : log.id)}
+                    className="flex w-full items-center justify-between px-4 py-2.5 text-right"
+                  >
+                    <div className="flex items-center gap-3">
+                      <span
+                        className="inline-block h-2.5 w-2.5 rounded-full"
+                        style={{
+                          backgroundColor:
+                            REGIME_COLORS[log.chosen_regime || ""] || "#6B7280",
+                        }}
+                      />
+                      <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                        {REGIME_LABELS[log.chosen_regime || ""] || log.chosen_regime}
+                        {log.chosen_regime !== log.chosen_regime_raw && (
+                          <span className="mr-1 text-[10px] text-gray-400">
+                            (خام: {REGIME_LABELS[log.chosen_regime_raw || ""] || log.chosen_regime_raw})
+                          </span>
+                        )}
+                      </span>
+                      <span className="font-mono text-xs text-gray-400">{log.ts}</span>
+                    </div>
+                    <svg
+                      className={`h-4 w-4 text-gray-400 transition-transform ${isExpanded ? "rotate-180" : ""}`}
+                      viewBox="0 0 20 20"
+                      fill="currentColor"
+                    >
+                      <path
+                        fillRule="evenodd"
+                        d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"
+                        clipRule="evenodd"
+                      />
+                    </svg>
+                  </button>
+
+                  {isExpanded && (
+                    <div className="border-t border-gray-100 px-4 py-3 dark:border-gray-800">
+                      <div className="grid grid-cols-2 gap-4 text-xs md:grid-cols-3">
+                        {/* Indices */}
+                        {log.indices_json && (
+                          <div>
+                            <p className="mb-1 font-bold text-gray-500">شاخص‌ها</p>
+                            {Object.entries(log.indices_json).map(([k, v]) => (
+                              <p key={k} className="text-gray-600 dark:text-gray-400">
+                                <span className="font-mono">{k}:</span>{" "}
+                                <span className="font-bold">{typeof v === "number" ? v.toFixed(4) : "—"}</span>
+                              </p>
+                            ))}
+                          </div>
+                        )}
+
+                        {/* Scores */}
+                        {log.scores_json && (
+                          <div>
+                            <p className="mb-1 font-bold text-gray-500">امتیازها</p>
+                            {Object.entries(log.scores_json).map(([k, v]) => (
+                              <p key={k} className="text-gray-600 dark:text-gray-400">
+                                <span className="font-mono">{k}:</span>{" "}
+                                <span className="font-bold">{typeof v === "number" ? v.toFixed(4) : "—"}</span>
+                              </p>
+                            ))}
+                          </div>
+                        )}
+
+                        {/* Smoothed probs */}
+                        {log.smoothed_probs && (
+                          <div>
+                            <p className="mb-1 font-bold text-gray-500">وزن نسبی (صاف‌شده)</p>
+                            {Object.entries(log.smoothed_probs).map(([k, v]) => (
+                              <p key={k} className="text-gray-600 dark:text-gray-400">
+                                <span style={{ color: REGIME_COLORS[k] || "#6B7280" }}>
+                                  {REGIME_LABELS[k] || k}:
+                                </span>{" "}
+                                <span className="font-bold font-mono">
+                                  {typeof v === "number" ? `${(v * 100).toFixed(1)}%` : "—"}
+                                </span>
+                              </p>
+                            ))}
+                          </div>
+                        )}
+
+                        {/* Sources */}
+                        {log.sources && (
+                          <div>
+                            <p className="mb-1 font-bold text-gray-500">منابع</p>
+                            {Object.entries(log.sources).map(([k, v]) => (
+                              <p key={k} className="text-gray-600 dark:text-gray-400">
+                                {k}: <span className="font-mono">{v}</span>
+                              </p>
+                            ))}
+                          </div>
+                        )}
+
+                        {/* Note */}
+                        {log.chosen_note_fa && (
+                          <div className="col-span-2">
+                            <p className="text-amber-600 dark:text-amber-400">
+                              {log.chosen_note_fa}
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* ── Section 5: Historical Backtest ── */}
       <div className="card p-6">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
           <h3 className="text-lg font-bold text-gray-900 dark:text-gray-100">
@@ -615,7 +797,7 @@ export default function AdminRegimePage() {
                     <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">رویداد</th>
                     <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">دوره</th>
                     <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">رژیم مورد انتظار</th>
-                    <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">میانگین احتمال</th>
+                    <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">میانگین وزن</th>
                     <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">روزهای صحیح</th>
                     <th className="px-3 py-2 text-center text-xs font-medium text-gray-500">وضعیت</th>
                   </tr>
