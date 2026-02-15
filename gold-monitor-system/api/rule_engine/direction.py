@@ -25,7 +25,7 @@ BULLISH_PATTERNS = [
     # Weak dollar (bullish for gold)
     r"(تضعیف|کاهش|سقوط|ریزش).{0,20}(دلار|dollar|DXY)",
     r"(دلار|dollar|DXY).{0,20}(ضعیف|کاهش|سقوط|پایین|weak|fall|drop|decline)",
-    # Rate cuts (bullish for gold)
+    # Rate cuts (bullish for gold) — NOTE: negation patterns below override these
     r"(کاهش|cut).{0,15}(نرخ\s*بهره|interest\s*rate)",
     r"(نرخ\s*بهره|rate).{0,15}(کاهش|cut|پایین|lower)",
     # Safe haven demand
@@ -43,10 +43,13 @@ BULLISH_PATTERNS = [
 ]
 
 BEARISH_PATTERNS = [
-    # Price going down
+    # Price going down — gold
     r"(قیمت|بها|نرخ).{0,20}(طلا|سکه|gold).{0,30}(کاهش|ریزش|سقوط|نزول|(?<=\s)افت(?=\s|$)|drop|fall|decline|crash|plunge)",
     r"(کاهش|ریزش|سقوط|نزول|افت).{0,20}(قیمت|بها).{0,20}(طلا|سکه|gold)",
     r"(طلا|gold).{0,30}(زیر|پایین|below|under).{0,10}\d",
+    # Price going down — silver (correlated with gold)
+    r"(سقوط|ریزش|نزول|افت|crash|plunge|drop).{0,30}(نقره|silver)",
+    r"(نقره|silver).{0,30}(سقوط|ریزش|نزول|افت|crash|plunge|drop|fall|decline)",
     # Strong dollar (bearish for gold)
     r"(تقویت|رشد|صعود|جهش).{0,20}(دلار|dollar|DXY)",
     r"(دلار|dollar|DXY).{0,20}(قوی|صعود|رشد|بالا|strong|rise|surge|rally)",
@@ -59,6 +62,22 @@ BEARISH_PATTERNS = [
     r"(ETF|صندوق).{0,20}(خروج|outflow|کاهش\s*سرمایه)",
     # Deflation / low inflation
     r"(تورم|inflation).{0,20}(کاهش|پایین|drop|low|cool)",
+]
+
+# ── Negation patterns ─────────────────────────────────────────────────
+# These OVERRIDE bullish signals when "hopes fade" / "expectations reduce"
+# for otherwise-bullish events (e.g. rate cuts hopes fading = bearish).
+
+NEGATION_BEARISH_PATTERNS = [
+    # "Reduced/fading hopes for rate cuts" — bearish, NOT bullish
+    r"(کاهش|کم‌شدن|افت|تضعیف).{0,15}(امید|انتظار|احتمال).{0,20}(کاهش\s*نرخ\s*بهره|rate\s*cut)",
+    r"(rate\s*cut|کاهش\s*نرخ\s*بهره).{0,15}(hopes?\s*fad|expectations?\s*f[ae]|unlikely|doubt)",
+    r"(امید|انتظار|احتمال).{0,15}(کاهش\s*نرخ\s*بهره).{0,15}(کاهش|کم|ضعیف|از\s*بین)",
+    # "No rate cut" / "rate cut ruled out"
+    r"(عدم|بدون|no|without).{0,10}(کاهش|cut).{0,10}(نرخ\s*بهره|rate)",
+    # "Rates to stay higher / higher for longer"
+    r"(نرخ\s*بهره|rate).{0,20}(بالاتر|higher).{0,15}(ماندن|remain|stay|longer)",
+    r"higher.{0,10}for.{0,10}longer",
 ]
 
 
@@ -85,6 +104,8 @@ GOLD_BEARISH_WORDS: dict[str, float] = {
     "نزول": 0.6, "افت": 0.5, "decline": 0.5, "drop": 0.5,
     "کاهش": 0.3, "فروش": 0.3, "selling": 0.3, "sell-off": 0.6,
     "پایین": 0.2, "low": 0.2, "down": 0.2, "fall": 0.4,
+    # Silver drop is bearish for gold (correlated metals)
+    "نقره": 0.2, "silver": 0.2,
 }
 
 
@@ -98,6 +119,15 @@ def detect_direction_regex(title: str, content: str = "") -> tuple[str, float]:
     'bullish', 'bearish', or 'neutral'.
     """
     text = f"{title} {content}".strip()
+
+    # Check negation patterns FIRST — these override bullish signals
+    # (e.g. "rate cut hopes fade" should be bearish, not bullish)
+    negation_matches = sum(
+        1 for p in NEGATION_BEARISH_PATTERNS if re.search(p, text, re.IGNORECASE)
+    )
+    if negation_matches > 0:
+        confidence = min(0.85, 0.6 + negation_matches * 0.1)
+        return ("bearish", confidence)
 
     bull_matches = sum(
         1 for p in BULLISH_PATTERNS if re.search(p, text, re.IGNORECASE)

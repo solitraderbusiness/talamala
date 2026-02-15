@@ -51,17 +51,28 @@ _snapshot_logger = logging.getLogger("gold_monitor.snapshot_hook")
 
 
 async def _safe_capture_snapshot(alert_id: str, alert_dict: dict, price_snapshot: dict) -> None:
-    """Fire-and-forget wrapper for market snapshot capture (5s timeout)."""
+    """Fire-and-forget wrapper for market snapshot capture (10s timeout).
+
+    If this fails, the reconciliation job (every 5 min) will fill the gap.
+    """
     try:
         from api.data_collection.snapshot_builder import capture_market_snapshot
         await asyncio.wait_for(
             capture_market_snapshot(alert_id, alert_dict, price_snapshot),
-            timeout=5.0,
+            timeout=10.0,
         )
     except asyncio.TimeoutError:
-        _snapshot_logger.warning("Snapshot capture timed out for alert %s", str(alert_id)[:8])
-    except Exception:
-        _snapshot_logger.warning("Snapshot capture failed for alert %s", str(alert_id)[:8], exc_info=True)
+        _snapshot_logger.warning(
+            "Snapshot capture timed out for alert %s (will be reconciled)",
+            str(alert_id)[:8],
+        )
+    except Exception as exc:
+        _snapshot_logger.warning(
+            "Snapshot capture failed for alert %s: %s: %s (will be reconciled)",
+            str(alert_id)[:8],
+            type(exc).__name__,
+            str(exc)[:200],
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -111,6 +122,7 @@ class Worker:
         self._price_snapshot: dict[str, float | None] = {
             "xauusd": None, "usdirr": None, "coin": None, "gold_18k": None,
         }
+        self._pending_snapshots: list[tuple[str, dict, dict]] = []
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -267,6 +279,7 @@ class Worker:
                             source.get("id"),
                         )
                         # Rollback the failed transaction before recording error
+                        self._pending_snapshots.clear()
                         try:
                             await db.rollback()
                         except Exception:
@@ -421,6 +434,13 @@ class Worker:
             matched_count += alerts_created
 
         await db.commit()
+
+        # Fire snapshot captures now that alert rows are committed
+        for snap_alert_id, snap_alert, snap_prices in self._pending_snapshots:
+            asyncio.create_task(
+                _safe_capture_snapshot(snap_alert_id, snap_alert, snap_prices)
+            )
+        self._pending_snapshots.clear()
 
         # 7. Update source status
         await self._update_source_success(db, source, new_count)
@@ -626,12 +646,11 @@ class Worker:
                 llm_result = await self._call_llm(
                     item.title, item.content_text, db=db,
                 )
-                if llm_result.get("title_fa"):
-                    alert["title"] = llm_result["title_fa"]
                 if llm_result.get("summary_fa"):
                     alert["summary_fa"] = llm_result["summary_fa"]
                 if llm_result.get("why_important_fa"):
                     alert["why_important_fa"] = llm_result["why_important_fa"]
+                # Never overwrite original title — LLM titles can hallucinate
             except Exception:
                 logger.warning(
                     "LLM enrichment failed for item %s",
@@ -652,9 +671,9 @@ class Worker:
         alert["event_category"] = event_category
 
         await self._store_alert(db, alert)
-        # Fire-and-forget snapshot capture (won't block alert pipeline)
         alert_id = alert.get("id", "")
-        asyncio.create_task(_safe_capture_snapshot(alert_id, alert, self._price_snapshot))
+        # Snapshot must be fired AFTER db.commit() — see _process_source
+        self._pending_snapshots.append((alert_id, dict(alert), dict(self._price_snapshot)))
         await dedup.mark_alert(dedupe_key)
         await dedup.mark_event(item.title or "", item.content_text or "")
         return 1
@@ -698,12 +717,11 @@ class Worker:
                     llm_result = await self._call_llm(
                         item.title, item.content_text, db=db,
                     )
-                    if llm_result.get("title_fa"):
-                        alert["title"] = llm_result["title_fa"]
                     if llm_result.get("summary_fa"):
                         alert["summary_fa"] = llm_result["summary_fa"]
                     if llm_result.get("why_important_fa"):
                         alert["why_important_fa"] = llm_result["why_important_fa"]
+                    # Never overwrite original title — LLM titles can hallucinate
                 except Exception:
                     logger.warning(
                         "LLM enrichment failed for item %s",
@@ -718,9 +736,9 @@ class Worker:
             alert["price_18k_at_alert"] = self._price_snapshot.get("gold_18k")
 
             await self._store_alert(db, alert)
-            # Fire-and-forget snapshot capture
             alert_id = alert.get("id", "")
-            asyncio.create_task(_safe_capture_snapshot(alert_id, alert, self._price_snapshot))
+            # Snapshot must be fired AFTER db.commit() — see _process_source
+            self._pending_snapshots.append((alert_id, dict(alert), dict(self._price_snapshot)))
             await dedup.mark_alert(dedupe_key)
             alerts_created += 1
 
@@ -728,6 +746,8 @@ class Worker:
 
     async def _store_alert(self, db, alert: dict[str, Any]) -> None:
         alert_id = alert.get("id", str(uuid.uuid4()))
+        # Write back so callers (snapshot, dedup) can read the persisted ID
+        alert["id"] = alert_id
         await db.execute(
             text(
                 "INSERT INTO alerts "
@@ -886,10 +906,15 @@ class Worker:
             "You are a Persian-language gold-market analyst. Given the following news "
             "item, generate text in Persian (فارسی). Respond ONLY with a valid JSON object.\n\n"
             "Required JSON keys:\n"
-            '- "title_fa": A short Persian headline (max 80 chars) capturing the main point\n'
-            '- "summary_fa": A concise summary in Persian (2-3 sentences)\n'
+            '- "title_fa": A short Persian headline (max 80 chars). CRITICAL: Do NOT invent numbers, '
+            "facts, or claims that are not explicitly stated in the original title or content. "
+            "Rewrite the original title more concisely in Persian, keeping its meaning faithful.\n"
+            '- "summary_fa": A concise summary in Persian (2-3 sentences). Only include facts from the article.\n'
             '- "why_important_fa": Why this matters for the gold market in Persian (2-3 bullet points with "- " prefix)\n\n'
-            f"Title: {title}\n\n"
+            "IMPORTANT RULES:\n"
+            "- Never fabricate statistics, prices, or percentages not in the source\n"
+            "- If unsure, paraphrase the original title rather than creating a new one\n\n"
+            f"Original Title: {title}\n\n"
             f"Content: {content[:3000]}\n\n"
             "Respond with ONLY the JSON object. No extra text."
         )

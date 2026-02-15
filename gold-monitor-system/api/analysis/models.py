@@ -21,11 +21,12 @@ from sqlalchemy import (
     DateTime,
     Float,
     Index,
+    Integer,
     String,
     Text,
     UniqueConstraint,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 from api.models import Base
 
@@ -93,6 +94,7 @@ class EtfHolding(Base):
     total_oz = Column(Float, nullable=True)
     total_value_usd = Column(Float, nullable=True)
     source = Column(String(64), nullable=False)
+    source_url = Column(String(512), nullable=True)
     fetched_at = Column(
         DateTime(timezone=True),
         nullable=False,
@@ -122,6 +124,7 @@ class CotData(Base):
     open_interest = Column(Float, nullable=True)
     change_non_commercial_net = Column(Float, nullable=True)  # week-over-week
     source = Column(String(64), nullable=False, default="cftc")
+    source_url = Column(String(512), nullable=True)
     fetched_at = Column(
         DateTime(timezone=True),
         nullable=False,
@@ -180,4 +183,72 @@ class CorrelationCache(Base):
     __table_args__ = (
         UniqueConstraint("pair_a", "pair_b", "computed_date", name="uq_corr_pair_date"),
         Index("ix_corr_date", "computed_date"),
+    )
+
+
+class BacktestRun(Base):
+    """Stores backtest run results and metadata."""
+
+    __tablename__ = "backtest_runs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    run_type = Column(String(32), nullable=False)          # unified, regime, correlation, etc.
+    started_at = Column(DateTime(timezone=True), nullable=False)
+    finished_at = Column(DateTime(timezone=True), nullable=True)
+    status = Column(String(16), nullable=False, default="running")  # running, completed, failed
+    date_range_start = Column(Date, nullable=True)
+    date_range_end = Column(Date, nullable=True)
+    total_benchmarks = Column(Integer, nullable=True)
+    passed_benchmarks = Column(Integer, nullable=True)
+    failed_benchmarks = Column(Integer, nullable=True)
+    benchmark_results = Column(JSONB, nullable=True)
+    summary = Column(JSONB, nullable=True)
+    parameters = Column(JSONB, nullable=True)
+    error_message = Column(Text, nullable=True)
+    triggered_by = Column(String(64), nullable=True)       # admin email or "system"
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+    __table_args__ = (
+        Index("ix_backtest_runs_type", "run_type"),
+        Index("ix_backtest_runs_created", "created_at"),
+    )
+
+
+class RegimeScore(Base):
+    """Daily macro regime probabilities computed by the regime engine."""
+
+    __tablename__ = "regime_scores"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    ts = Column(Date, unique=True, nullable=False)
+    liquidity_stress_index = Column(Float, nullable=True)
+    usd_pressure_index = Column(Float, nullable=True)
+    real_yield_pressure_index = Column(Float, nullable=True)
+    # Raw softmax probabilities
+    p_expansion = Column(Float, nullable=True)
+    p_tightening = Column(Float, nullable=True)
+    p_stress = Column(Float, nullable=True)
+    p_recovery = Column(Float, nullable=True)
+    # EWMA smoothed probabilities
+    smoothed_p_expansion = Column(Float, nullable=True)
+    smoothed_p_tightening = Column(Float, nullable=True)
+    smoothed_p_stress = Column(Float, nullable=True)
+    smoothed_p_recovery = Column(Float, nullable=True)
+    chosen_regime = Column(String(16), nullable=True)
+    real_yield_source = Column(String(32), nullable=True)
+    credit_proxy_source = Column(String(32), nullable=True)
+    days_skipped = Column(Integer, default=0)
+    metadata_ = Column("metadata", JSONB, nullable=True)
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+    __table_args__ = (
+        Index("ix_regime_scores_ts", ts.desc()),
     )

@@ -9,13 +9,24 @@ import {
   getSentimentTimeline,
   getPriceStatus,
   getSentimentCorrelation,
+  getSnapshotLiveStatus,
+  getLiveThroughput,
+  getQualityTiers,
+  getMissingFields,
+  getGuardrails,
   DataHealthOverview,
   SnapshotStats,
   OutcomePipeline,
   SentimentTimelineResponse,
   PriceStatusResponse,
   SentimentCorrelationResponse,
+  SnapshotLiveStatusResponse,
+  LiveThroughputResponse,
+  QualityTiersResponse,
+  MissingFieldsResponse,
+  GuardrailsResponse,
 } from "@/lib/api";
+import InfoTip from "@/components/InfoTip";
 
 function StatusDot({ status }: { status: "green" | "yellow" | "red" | "gray" }) {
   const colors = {
@@ -35,7 +46,7 @@ function Card({
   title,
   children,
 }: {
-  title: string;
+  title: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
@@ -55,6 +66,11 @@ export default function DataHealthPage() {
   const [timeline, setTimeline] = useState<SentimentTimelineResponse | null>(null);
   const [priceStatus, setPriceStatus] = useState<PriceStatusResponse | null>(null);
   const [correlation, setCorrelation] = useState<SentimentCorrelationResponse | null>(null);
+  const [liveStatus, setLiveStatus] = useState<SnapshotLiveStatusResponse | null>(null);
+  const [throughput, setThroughput] = useState<LiveThroughputResponse | null>(null);
+  const [qualityTiers, setQualityTiers] = useState<QualityTiersResponse | null>(null);
+  const [missingFields, setMissingFields] = useState<MissingFieldsResponse | null>(null);
+  const [guardrails, setGuardrailsData] = useState<GuardrailsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [snapPeriod, setSnapPeriod] = useState("today");
 
@@ -64,13 +80,18 @@ export default function DataHealthPage() {
 
     setLoading(true);
     try {
-      const [ov, ss, pl, tl, ps, cr] = await Promise.allSettled([
+      const [ov, ss, pl, tl, ps, cr, ls, tp, qt, mf, gr] = await Promise.allSettled([
         getDataHealthOverview(token),
         getSnapshotStats(token, snapPeriod),
         getOutcomePipeline(token),
         getSentimentTimeline(token, 168),
         getPriceStatus(token),
         getSentimentCorrelation(token, 7),
+        getSnapshotLiveStatus(token),
+        getLiveThroughput(token, 24),
+        getQualityTiers(token, 24),
+        getMissingFields(token, 7),
+        getGuardrails(token),
       ]);
 
       if (ov.status === "fulfilled") setOverview(ov.value);
@@ -79,6 +100,11 @@ export default function DataHealthPage() {
       if (tl.status === "fulfilled") setTimeline(tl.value);
       if (ps.status === "fulfilled") setPriceStatus(ps.value);
       if (cr.status === "fulfilled") setCorrelation(cr.value);
+      if (ls.status === "fulfilled") setLiveStatus(ls.value);
+      if (tp.status === "fulfilled") setThroughput(tp.value);
+      if (qt.status === "fulfilled") setQualityTiers(qt.value);
+      if (mf.status === "fulfilled") setMissingFields(mf.value);
+      if (gr.status === "fulfilled") setGuardrailsData(gr.value);
     } finally {
       setLoading(false);
     }
@@ -114,38 +140,399 @@ export default function DataHealthPage() {
       </h2>
 
       {/* ── Section 1: Health Status Cards ── */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <HealthCard
-          label="پوشش اسنپ‌شات"
+          label={<>اسنپ‌شات زنده (live) <InfoTip term="snapshot_coverage" /></>}
+          value={overview?.live_snapshot_coverage_pct != null ? `${overview.live_snapshot_coverage_pct}%` : "—"}
+          status={getHealthStatus(overview?.live_snapshot_coverage_pct, 80, 50)}
+          detail={`${overview?.live_snapshots_24h ?? 0} زنده از ${overview?.alerts_24h ?? 0} هشدار`}
+        />
+        <HealthCard
+          label="اسنپ‌شات کامل (complete)"
+          value={overview?.complete_snapshot_coverage_pct != null ? `${overview.complete_snapshot_coverage_pct}%` : "—"}
+          status={getHealthStatus(overview?.complete_snapshot_coverage_pct, 60, 30)}
+          detail={`${overview?.complete_snapshots_24h ?? 0} کامل — شامل تکنیکال و سنتیمنت`}
+        />
+        <HealthCard
+          label="پوشش ردیف (seeded)"
           value={overview?.snapshot_coverage_pct != null ? `${overview.snapshot_coverage_pct}%` : "—"}
-          status={getHealthStatus(overview?.snapshot_coverage_pct, 80, 50)}
-          detail={`${overview?.snapshots_24h ?? 0} از ${overview?.alerts_24h ?? 0} هشدار`}
+          status={getHealthStatus(overview?.snapshot_coverage_pct, 95, 80)}
+          detail={`${overview?.snapshots_24h ?? 0} ردیف (زنده + بازسازی‌شده)`}
         />
         <HealthCard
-          label="ردیاب نتایج"
-          value={`${overview?.outcome_pipeline?.complete ?? 0} تکمیل`}
-          status={overview?.outcome_errors === 0 ? "green" : overview?.outcome_errors && overview.outcome_errors > 5 ? "red" : "yellow"}
-          detail={`${overview?.outcome_errors ?? 0} خطا`}
+          label={<>ردیاب نتایج <InfoTip term="outcome_tracker" /></>}
+          value={overview?.outcome_seed_coverage_pct != null ? `${overview.outcome_seed_coverage_pct}% seeded` : "—"}
+          status={getHealthStatus(overview?.outcome_seed_coverage_pct, 95, 80)}
+          detail={`${overview?.outcomes_seeded_24h ?? 0} seeded — ${overview?.outcomes_complete_pct ?? 0}% complete (all time)`}
         />
+      </div>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <HealthCard
-          label="جدول زمانی سنتیمنت"
+          label={<>جدول زمانی سنتیمنت <InfoTip term="sentiment_timeline" /></>}
           value={overview?.sentiment_last_recorded ? formatTimeAgo(overview.sentiment_last_recorded) : "—"}
           status={getTimeStatus(overview?.sentiment_last_recorded, 10, 30)}
           detail="هر ۵ دقیقه"
         />
         <HealthCard
-          label="داده قیمت"
+          label={<>داده قیمت <InfoTip term="price_data" /></>}
           value={overview?.price_data_last_update ? formatTimeAgo(overview.price_data_last_update) : "—"}
           status={getTimeStatus(overview?.price_data_last_update, 10, 60)}
           detail="۵ دقیقه‌ای + روزانه"
         />
         <HealthCard
-          label="اسنپ‌شات کامل"
-          value={`${overview?.complete_snapshots_24h ?? 0}`}
-          status={overview?.complete_snapshots_24h && overview.complete_snapshots_24h > 0 ? "green" : "yellow"}
-          detail="۲۴ ساعت اخیر"
+          label="شکاف ۷ روزه — اسنپ‌شات"
+          value={`${overview?.missing_snapshots_7d ?? "—"}`}
+          status={overview?.missing_snapshots_7d === 0 ? "green" : overview?.missing_snapshots_7d != null && overview.missing_snapshots_7d <= 5 ? "yellow" : "red"}
+          detail={`از ${overview?.alerts_7d ?? 0} هشدار`}
+        />
+        <HealthCard
+          label="شکاف ۷ روزه — نتایج"
+          value={`${overview?.missing_outcomes_7d ?? "—"}`}
+          status={overview?.missing_outcomes_7d === 0 ? "green" : overview?.missing_outcomes_7d != null && overview.missing_outcomes_7d <= 5 ? "yellow" : "red"}
+          detail={`${overview?.outcome_errors ?? 0} خطا`}
         />
       </div>
+
+      {/* ── Reconciliation Backlog Widget ── */}
+      {overview && overview.reconciliation_backlog > 0 && (
+        <div className="card flex items-center gap-4 p-4">
+          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-amber-100 dark:bg-amber-900/30">
+            <span className="text-lg">&#x1f504;</span>
+          </div>
+          <div className="flex-1">
+            <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
+              بازسازی (Reconciliation)
+            </p>
+            <p className="text-xs text-gray-500 dark:text-gray-400">
+              {overview.reconciliation_backlog} ردیف در صف
+              {overview.reconciliation_eta_minutes > 0 && (
+                <> — تخمین زمان: {overview.reconciliation_eta_minutes < 60
+                  ? `${overview.reconciliation_eta_minutes} دقیقه`
+                  : `${Math.round(overview.reconciliation_eta_minutes / 60 * 10) / 10} ساعت`
+                }</>
+              )}
+              <span className="mr-3 text-gray-400">
+                (هر {Math.round(overview.reconciliation_interval_seconds / 60)} دقیقه، دسته {overview.reconciliation_batch_size})
+              </span>
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* ── Cockpit Widget 1: Guardrails (QA) ── */}
+      {guardrails && (
+        <Card title="بررسی‌های کیفی (Guardrails QA)">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            {guardrails.checks.map((check) => (
+              <div
+                key={check.id}
+                className={`flex items-start gap-3 rounded-lg border p-4 ${
+                  check.verdict === "PASS"
+                    ? "border-green-200 bg-green-50 dark:border-green-800 dark:bg-green-900/10"
+                    : check.verdict === "WARN"
+                      ? "border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-900/10"
+                      : "border-red-200 bg-red-50 dark:border-red-800 dark:bg-red-900/10"
+                }`}
+              >
+                <span className="mt-0.5 text-lg">
+                  {check.verdict === "PASS" ? "\u2705" : check.verdict === "WARN" ? "\u26a0\ufe0f" : "\u274c"}
+                </span>
+                <div className="flex-1">
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`rounded px-1.5 py-0.5 text-xs font-bold ${
+                        check.verdict === "PASS"
+                          ? "bg-green-200 text-green-800 dark:bg-green-800 dark:text-green-200"
+                          : check.verdict === "WARN"
+                            ? "bg-amber-200 text-amber-800 dark:bg-amber-800 dark:text-amber-200"
+                            : "bg-red-200 text-red-800 dark:bg-red-800 dark:text-red-200"
+                      }`}
+                    >
+                      {check.verdict}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-sm text-gray-700 dark:text-gray-300">
+                    {check.label_fa}
+                  </p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">
+                    {check.id === "live_missing_data"
+                      ? `اسنپ‌شات: ${check.missing_snapshot ?? 0} — نتیجه: ${check.missing_outcome ?? 0}`
+                      : `تعداد: ${check.count ?? 0}`}
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      {/* ── Cockpit Widget 2: Quality Tiers ── */}
+      {qualityTiers && (
+        <Card title="سطوح کیفیت (Quality Tiers — ۲۴ ساعت)">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <QualityCard
+              label="پوشش اسنپ‌شات زنده"
+              labelEn="live_snapshot_coverage"
+              pct={qualityTiers.live_snapshot_coverage.pct}
+              numerator={qualityTiers.live_snapshot_coverage.numerator}
+              denominator={qualityTiers.live_snapshot_coverage.denominator}
+              goodThreshold={80}
+              warnThreshold={50}
+            />
+            <QualityCard
+              label="اسنپ‌شات زنده + کامل"
+              labelEn="live_complete_snapshot"
+              pct={qualityTiers.live_complete_snapshot_coverage.pct}
+              numerator={qualityTiers.live_complete_snapshot_coverage.numerator}
+              denominator={qualityTiers.live_complete_snapshot_coverage.denominator}
+              goodThreshold={60}
+              warnThreshold={30}
+            />
+            <QualityCard
+              label="پوشش ردیاب نتایج"
+              labelEn="outcome_seed_coverage"
+              pct={qualityTiers.outcome_seed_coverage.pct}
+              numerator={qualityTiers.outcome_seed_coverage.numerator}
+              denominator={qualityTiers.outcome_seed_coverage.denominator}
+              goodThreshold={95}
+              warnThreshold={80}
+            />
+            <QualityCard
+              label="نرخ تکمیل نتایج"
+              labelEn="outcome_completion"
+              pct={qualityTiers.outcome_completion.pct}
+              numerator={qualityTiers.outcome_completion.numerator}
+              denominator={qualityTiers.outcome_completion.denominator}
+              goodThreshold={20}
+              warnThreshold={5}
+            />
+          </div>
+        </Card>
+      )}
+
+      {/* ── Cockpit Widget 3: Live Snapshot Throughput Chart ── */}
+      {throughput && throughput.data.length > 0 && (
+        <Card title="عملکرد اسنپ‌شات زنده (Live Snapshot Throughput — ۲۴ ساعت)">
+          <div className="space-y-2">
+            <div className="flex gap-4 text-xs text-gray-500 dark:text-gray-400">
+              <span className="flex items-center gap-1">
+                <span className="inline-block h-3 w-3 rounded bg-gold-500" /> هشدارها (alerts)
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="inline-block h-3 w-3 rounded bg-green-500" /> اسنپ‌شات زنده (live)
+              </span>
+            </div>
+            <div className="overflow-x-auto">
+              <div className="flex h-44 items-end gap-1" style={{ minWidth: `${throughput.data.length * 28}px` }}>
+                {throughput.data.map((point, i) => {
+                  const maxVal = Math.max(
+                    ...throughput.data.map((d) => Math.max(d.alerts_created, d.live_snapshots_created)),
+                    1
+                  );
+                  const alertH = Math.max(2, (point.alerts_created / maxVal) * 150);
+                  const liveH = Math.max(0, (point.live_snapshots_created / maxVal) * 150);
+                  const hour = point.hour_bucket
+                    ? new Date(point.hour_bucket).getUTCHours().toString().padStart(2, "0")
+                    : "";
+                  return (
+                    <div
+                      key={i}
+                      className="group relative flex flex-col items-center"
+                      style={{ width: "24px" }}
+                    >
+                      {/* Tooltip */}
+                      <div className="pointer-events-none absolute -top-16 z-10 hidden whitespace-nowrap rounded bg-gray-800 px-2 py-1 text-xs text-white shadow-lg group-hover:block">
+                        <div>{hour}:00 UTC</div>
+                        <div>هشدار: {point.alerts_created}</div>
+                        <div>زنده: {point.live_snapshots_created}</div>
+                      </div>
+                      <div className="flex gap-px items-end">
+                        <div
+                          className="w-[10px] rounded-t bg-gold-400 dark:bg-gold-600"
+                          style={{ height: `${alertH}px` }}
+                        />
+                        <div
+                          className="w-[10px] rounded-t bg-green-500 dark:bg-green-600"
+                          style={{ height: `${liveH}px` }}
+                        />
+                      </div>
+                      {(i % 3 === 0 || i === throughput.data.length - 1) && (
+                        <span className="mt-1 text-[9px] text-gray-400">{hour}</span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        </Card>
+      )}
+
+      {/* ── Cockpit Widget 4: Missing Field Breakdown ── */}
+      {missingFields && (
+        <Card title="فیلدهای گمشده اسنپ‌شات‌های زنده (Missing Fields — ۷ روز)">
+          {missingFields.fields.length === 0 ? (
+            <p className="text-sm text-green-600 dark:text-green-400">
+              هیچ فیلدی کم نیست &#x2705;
+            </p>
+          ) : (
+            <div className="space-y-2">
+              <p className="text-xs text-gray-500 dark:text-gray-400">
+                از مجموع {missingFields.total_live_snapshots.toLocaleString()} اسنپ‌شات زنده
+              </p>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-200 text-gray-500 dark:border-gray-700 dark:text-gray-400">
+                      <th className="px-3 py-2 text-right">فیلد (missing_field)</th>
+                      <th className="px-3 py-2 text-right">تعداد (count)</th>
+                      <th className="px-3 py-2 text-right">درصد (% of live)</th>
+                      <th className="px-3 py-2 text-right">نوار</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {missingFields.fields.map((f) => (
+                      <tr
+                        key={f.field}
+                        className="border-b border-gray-100 dark:border-gray-800"
+                      >
+                        <td className="px-3 py-2 font-mono text-xs text-gray-900 dark:text-gray-100">
+                          {f.field}
+                        </td>
+                        <td className="px-3 py-2 text-gray-700 dark:text-gray-300">
+                          {f.count.toLocaleString()}
+                        </td>
+                        <td className="px-3 py-2 text-gray-700 dark:text-gray-300">
+                          {f.pct}%
+                        </td>
+                        <td className="px-3 py-2">
+                          <div className="h-2 w-full rounded bg-gray-200 dark:bg-gray-700">
+                            <div
+                              className="h-2 rounded bg-red-400 dark:bg-red-500"
+                              style={{ width: `${Math.min(f.pct, 100)}%` }}
+                            />
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </Card>
+      )}
+
+      {/* ── Section: Live vs Reconciled Snapshots ── */}
+      {liveStatus && (
+        <>
+          <Card title="اسنپ‌شات زنده در مقابل بازسازی‌شده (۲۴ ساعت)">
+            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
+              <StatBox label="کل هشدارها" value={liveStatus.summary_24h.total_alerts} />
+              <StatBox
+                label="زنده (live)"
+                value={liveStatus.summary_24h.live_count}
+              />
+              <StatBox
+                label="بازسازی‌شده (reconciled)"
+                value={liveStatus.summary_24h.reconciled_count}
+              />
+              <StatBox
+                label="پوشش زنده"
+                value={
+                  liveStatus.summary_24h.live_snapshot_coverage_pct != null
+                    ? `${liveStatus.summary_24h.live_snapshot_coverage_pct}%`
+                    : "—"
+                }
+              />
+              <div className="rounded-lg bg-gray-50 p-3 dark:bg-gray-800">
+                <div className="text-xs text-gray-500 dark:text-gray-400">آخرین زنده</div>
+                <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                  {liveStatus.summary_24h.last_live_snapshot_at
+                    ? formatTimeAgo(liveStatus.summary_24h.last_live_snapshot_at)
+                    : "هرگز"}
+                </div>
+              </div>
+              <div className="rounded-lg bg-gray-50 p-3 dark:bg-gray-800">
+                <div className="text-xs text-gray-500 dark:text-gray-400">آخرین بازسازی</div>
+                <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                  {liveStatus.summary_24h.last_reconciled_snapshot_at
+                    ? formatTimeAgo(liveStatus.summary_24h.last_reconciled_snapshot_at)
+                    : "هرگز"}
+                </div>
+              </div>
+            </div>
+          </Card>
+
+          <Card title="آخرین ۲۰ اسنپ‌شات">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-gray-200 text-gray-500 dark:border-gray-700 dark:text-gray-400">
+                    <th className="px-2 py-2 text-right">alert_id</th>
+                    <th className="px-2 py-2 text-right">زمان</th>
+                    <th className="px-2 py-2 text-right">منبع</th>
+                    <th className="px-2 py-2 text-right">کامل</th>
+                    <th className="px-2 py-2 text-right">XAUUSD</th>
+                    <th className="px-2 py-2 text-right">RSI</th>
+                    <th className="px-2 py-2 text-right">سنتیمنت</th>
+                    <th className="px-2 py-2 text-right">ms</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {liveStatus.recent_snapshots.map((s) => (
+                    <tr
+                      key={s.alert_id}
+                      className={`border-b border-gray-100 dark:border-gray-800 ${
+                        s.source === "live"
+                          ? "bg-green-50 dark:bg-green-900/10"
+                          : ""
+                      }`}
+                    >
+                      <td className="px-2 py-1.5 font-mono text-xs text-gray-600 dark:text-gray-400">
+                        {s.alert_id.slice(0, 8)}
+                      </td>
+                      <td className="px-2 py-1.5 text-xs text-gray-500 dark:text-gray-400">
+                        {s.created_at ? formatTimeAgo(s.created_at) : "—"}
+                      </td>
+                      <td className="px-2 py-1.5">
+                        <span
+                          className={`rounded px-1.5 py-0.5 text-xs font-medium ${
+                            s.source === "live"
+                              ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
+                              : "bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400"
+                          }`}
+                        >
+                          {s.source}
+                        </span>
+                      </td>
+                      <td className="px-2 py-1.5 text-center">
+                        {s.snapshot_complete ? (
+                          <span className="text-green-600">&#10003;</span>
+                        ) : (
+                          <span className="text-gray-400">&#10007;</span>
+                        )}
+                      </td>
+                      <td className="px-2 py-1.5 text-xs text-gray-900 dark:text-gray-100">
+                        {s.xauusd != null ? s.xauusd.toLocaleString() : "—"}
+                      </td>
+                      <td className="px-2 py-1.5 text-xs text-gray-900 dark:text-gray-100">
+                        {s.gold_rsi_14 ?? "—"}
+                      </td>
+                      <td className="px-2 py-1.5 text-xs text-gray-900 dark:text-gray-100">
+                        {s.sentiment_composite ?? "—"}
+                      </td>
+                      <td className="px-2 py-1.5 text-xs text-gray-500">
+                        {s.fetch_duration_ms ?? "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        </>
+      )}
 
       {/* ── Section 2: Snapshot Completeness ── */}
       <Card title="کامل بودن اسنپ‌شات">
@@ -197,7 +584,7 @@ export default function DataHealthPage() {
       </Card>
 
       {/* ── Section 3: Outcome Pipeline ── */}
-      <Card title="خط لوله نتایج">
+      <Card title={<>خط لوله نتایج <InfoTip term="outcome_pipeline" /></>}>
         {pipeline && (
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-8">
@@ -385,7 +772,7 @@ function HealthCard({
   status,
   detail,
 }: {
-  label: string;
+  label: React.ReactNode;
   value: string;
   status: "green" | "yellow" | "red" | "gray";
   detail: string;
@@ -417,6 +804,51 @@ function StatBox({
         {typeof value === "number" ? value.toLocaleString() : value}
       </div>
       <div className="text-xs text-gray-500 dark:text-gray-400">{label}</div>
+    </div>
+  );
+}
+
+function QualityCard({
+  label,
+  labelEn,
+  pct,
+  numerator,
+  denominator,
+  goodThreshold,
+  warnThreshold,
+}: {
+  label: string;
+  labelEn: string;
+  pct: number | null;
+  numerator: number;
+  denominator: number;
+  goodThreshold: number;
+  warnThreshold: number;
+}) {
+  const status = getHealthStatus(pct, goodThreshold, warnThreshold);
+  const borderColor =
+    status === "green"
+      ? "border-green-300 dark:border-green-700"
+      : status === "yellow"
+        ? "border-amber-300 dark:border-amber-700"
+        : status === "red"
+          ? "border-red-300 dark:border-red-700"
+          : "border-gray-200 dark:border-gray-700";
+  return (
+    <div className={`rounded-lg border-2 p-4 ${borderColor}`}>
+      <div className="flex items-center gap-2">
+        <StatusDot status={status} />
+        <span className="text-sm text-gray-600 dark:text-gray-400">{label}</span>
+      </div>
+      <div className="mt-2 text-2xl font-bold text-gray-900 dark:text-gray-100">
+        {pct != null ? `${pct}%` : "—"}
+      </div>
+      <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+        {numerator.toLocaleString()} / {denominator.toLocaleString()}
+      </div>
+      <div className="mt-0.5 text-[10px] font-mono text-gray-400">
+        {labelEn}
+      </div>
     </div>
   );
 }

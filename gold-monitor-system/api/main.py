@@ -35,19 +35,27 @@ from sqlalchemy import select, text
 from api.auth import get_password_hash
 from api.config import settings
 from api.database import AsyncSessionLocal, sync_engine
-from api.models import AdminUser, Base, ChatMessage, ChatSession, ChatSetting, EconomicEvent, JobRun, RulesSnapshot, SentimentScore, Source, SystemJob
+from api.models import AdminUser, AuditLog, Base, ChatMessage, ChatSession, ChatSetting, EconomicEvent, JobRun, RulesSnapshot, SentimentLabel, SentimentReferenceScore, SentimentScore, Source, SourceTag, SystemJob
 from api.signal_aggregator.models import (
     ConsensusSnapshot, DailyPerformance, MonthlyPerformance,
     ParsedSignal, RawPost, SignalPriceTick, SignalSource,
 )
 from api.analysis.models import (
     AssetPriceDaily, MacroIndicator, EtfHolding, CotData,
-    MarketEventAnalysis, CorrelationCache,
+    MarketEventAnalysis, CorrelationCache, RegimeScore, BacktestRun,
 )
 from api.data_collection.models import (
     AlertMarketSnapshot, AlertOutcome, SentimentTimeline, PriceHistory,
 )
 from api.articles.models import GoldArticle
+from api.videos.models import (
+    CuratedVideo, LiveStreamChannel, MonitoredYoutubeChannel, VideoChatLog,
+)
+from api.data_reliability.models import (
+    MetricDefinition, MetricRun, RawIngest, TransformStep,
+    ValidationResult, MetricAlert,
+)
+from api.copilot.models import MetricRegistry, CalcRun, DataFreshness
 
 logger = logging.getLogger("gold_monitor")
 
@@ -1437,7 +1445,8 @@ async def _create_analysis_tables() -> None:
     """Create all fundamental analysis tables if they don't exist."""
     try:
         for model in [AssetPriceDaily, MacroIndicator, EtfHolding,
-                      CotData, MarketEventAnalysis, CorrelationCache]:
+                      CotData, MarketEventAnalysis, CorrelationCache,
+                      RegimeScore, BacktestRun]:
             model.__table__.create(bind=sync_engine, checkfirst=True)
         logger.info("Analysis tables ensured.")
     except Exception:
@@ -1461,6 +1470,162 @@ async def _create_articles_table() -> None:
         logger.info("gold_articles table ensured.")
     except Exception:
         logger.warning("Could not create gold_articles table", exc_info=True)
+
+
+async def _create_videos_tables() -> None:
+    """Create all video module tables if they don't exist."""
+    try:
+        for model in [CuratedVideo, LiveStreamChannel, MonitoredYoutubeChannel, VideoChatLog]:
+            model.__table__.create(bind=sync_engine, checkfirst=True)
+        logger.info("Video tables ensured.")
+    except Exception:
+        logger.warning("Could not create video tables", exc_info=True)
+
+
+async def _create_data_reliability_tables() -> None:
+    """Create all data reliability & provenance tables if they don't exist."""
+    try:
+        for model in [MetricDefinition, MetricRun, RawIngest, TransformStep,
+                      ValidationResult, MetricAlert]:
+            model.__table__.create(bind=sync_engine, checkfirst=True)
+        logger.info("Data reliability tables ensured.")
+    except Exception:
+        logger.warning("Could not create data reliability tables", exc_info=True)
+
+
+async def _create_audit_logs_table() -> None:
+    """Create the audit_logs table if it doesn't exist."""
+    try:
+        AuditLog.__table__.create(bind=sync_engine, checkfirst=True)
+        logger.info("audit_logs table ensured.")
+    except Exception:
+        logger.warning("Could not create audit_logs table", exc_info=True)
+
+
+async def _create_sentiment_qa_tables() -> None:
+    """Create source_tags, sentiment_labels, sentiment_reference_scores tables."""
+    try:
+        for model in [SourceTag, SentimentLabel, SentimentReferenceScore]:
+            model.__table__.create(bind=sync_engine, checkfirst=True)
+        logger.info("Sentiment QA tables ensured.")
+    except Exception:
+        logger.warning("Could not create sentiment QA tables", exc_info=True)
+
+
+async def _create_sentiment_calc_logs_table() -> None:
+    """Create the sentiment_calc_logs table if it doesn't exist."""
+    try:
+        from api.data_collection.sentiment_audit import SentimentCalcLog
+        SentimentCalcLog.__table__.create(bind=sync_engine, checkfirst=True)
+        logger.info("sentiment_calc_logs table ensured.")
+    except Exception:
+        logger.warning("Could not create sentiment_calc_logs table", exc_info=True)
+
+
+async def _create_copilot_tables() -> None:
+    """Create all Data Copilot tables if they don't exist."""
+    try:
+        for model in [MetricRegistry, CalcRun, DataFreshness]:
+            model.__table__.create(bind=sync_engine, checkfirst=True)
+        logger.info("Copilot tables ensured.")
+    except Exception:
+        logger.warning("Could not create copilot tables", exc_info=True)
+
+
+async def _seed_copilot_metrics() -> None:
+    """Seed metric_registry with core metrics (idempotent)."""
+    try:
+        from api.copilot.seed import seed_metric_registry
+        async with AsyncSessionLocal() as session:
+            await seed_metric_registry(session)
+    except Exception:
+        logger.warning("Copilot metric seed failed", exc_info=True)
+
+
+async def _seed_metric_definitions() -> None:
+    """Seed metric definition (Data Card) rows — idempotent."""
+    from api.data_reliability.config import METRIC_DEFINITIONS, METRIC_QA_CONFIG
+
+    async with AsyncSessionLocal() as session:
+        for defn in METRIC_DEFINITIONS:
+            existing = await session.execute(
+                select(MetricDefinition).where(
+                    MetricDefinition.metric_id == defn["metric_id"]
+                )
+            )
+            if existing.scalar_one_or_none() is not None:
+                continue
+
+            qa_cfg = METRIC_QA_CONFIG.get(defn["metric_id"], {})
+            expected_range = None
+            if "hard_range" in qa_cfg:
+                expected_range = {
+                    "hard_min": qa_cfg["hard_range"][0],
+                    "hard_max": qa_cfg["hard_range"][1],
+                }
+                if "soft_range" in qa_cfg:
+                    expected_range["soft_min"] = qa_cfg["soft_range"][0]
+                    expected_range["soft_max"] = qa_cfg["soft_range"][1]
+
+            session.add(MetricDefinition(
+                metric_id=defn["metric_id"],
+                display_name=defn["display_name"],
+                unit=defn.get("unit"),
+                update_frequency_minutes=defn.get("update_frequency_minutes"),
+                raw_sources=defn.get("raw_sources"),
+                formula_steps=defn.get("formula_steps"),
+                dependencies=defn.get("dependencies"),
+                expected_range=expected_range,
+            ))
+
+        await session.commit()
+        logger.info("Metric definitions seeded.")
+
+
+async def _seed_videos() -> None:
+    """Seed live stream channels, monitored channels, and initial videos."""
+    from api.videos.config import (
+        SEED_LIVE_STREAMS,
+        SEED_MONITORED_CHANNELS,
+        SEED_CURATED_VIDEOS,
+    )
+
+    async with AsyncSessionLocal() as session:
+        # Seed live streams
+        for ls in SEED_LIVE_STREAMS:
+            existing = await session.execute(
+                select(LiveStreamChannel).where(
+                    LiveStreamChannel.youtube_channel_id == ls["youtube_channel_id"]
+                )
+            )
+            if existing.scalar_one_or_none() is None:
+                session.add(LiveStreamChannel(**ls))
+
+        # Seed monitored channels
+        for ch in SEED_MONITORED_CHANNELS:
+            existing = await session.execute(
+                select(MonitoredYoutubeChannel).where(
+                    MonitoredYoutubeChannel.youtube_channel_id == ch["youtube_channel_id"]
+                )
+            )
+            if existing.scalar_one_or_none() is None:
+                session.add(MonitoredYoutubeChannel(**ch))
+
+        # Seed initial curated videos
+        for yt_id in SEED_CURATED_VIDEOS:
+            existing = await session.execute(
+                select(CuratedVideo).where(CuratedVideo.youtube_id == yt_id)
+            )
+            if existing.scalar_one_or_none() is None:
+                session.add(CuratedVideo(
+                    youtube_id=yt_id,
+                    added_by="seed",
+                    is_published=False,
+                    llm_processed=False,
+                ))
+
+        await session.commit()
+        logger.info("Video seed data ensured.")
 
 
 async def _create_chat_tables() -> None:
@@ -1592,6 +1757,15 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     await _create_analysis_tables()
     await _create_data_collection_tables()
     await _create_articles_table()
+    await _create_videos_tables()
+    await _seed_videos()
+    await _create_data_reliability_tables()
+    await _create_audit_logs_table()
+    await _create_sentiment_qa_tables()
+    await _create_sentiment_calc_logs_table()
+    await _create_copilot_tables()
+    await _seed_copilot_metrics()
+    await _seed_metric_definitions()
     await _flush_dedup_keys()
     await _snapshot_rules()
     await _start_calendar_sync()
@@ -1609,12 +1783,90 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     from api.worker.calendar_sync import calendar_sync_loop
     from api.worker.price_tracker import price_tracker_loop
     from api.data_collection.outcome_tracker import outcome_tracker_loop
+    from api.data_collection.reconciliation import reconciliation_loop
     _calendar_task = _asyncio.create_task(calendar_sync_loop())
     _price_tracker_task = _asyncio.create_task(price_tracker_loop())
     _outcome_tracker_task = _asyncio.create_task(outcome_tracker_loop())
+    _reconciliation_task = _asyncio.create_task(reconciliation_loop())
+
+    # Metric health checker — creates alerts for stale metrics every 15 min
+    async def _metric_health_check_loop() -> None:
+        import asyncio as _aio
+        while True:
+            await _aio.sleep(15 * 60)  # 15 minutes
+            try:
+                from api.data_reliability.validator import create_alert_if_needed
+                from api.data_reliability.config import METRIC_QA_CONFIG
+                from datetime import timedelta as _td
+
+                async with AsyncSessionLocal() as _sess:
+                    for mid, cfg in METRIC_QA_CONFIG.items():
+                        max_h = cfg.get("max_staleness_hours")
+                        if not max_h:
+                            continue
+                        from sqlalchemy import desc as _desc
+                        q = await _sess.execute(
+                            select(MetricRun)
+                            .where(MetricRun.metric_id == mid, MetricRun.status == "success")
+                            .order_by(_desc(MetricRun.started_at))
+                            .limit(1)
+                        )
+                        latest = q.scalar_one_or_none()
+                        if latest and latest.started_at:
+                            from datetime import datetime as _dt, timezone as _tz
+                            age_h = (_dt.now(_tz.utc) - latest.started_at).total_seconds() / 3600
+                            if age_h > max_h * 2:
+                                await create_alert_if_needed(
+                                    _sess, mid, "fail",
+                                    f"No successful run in {age_h:.0f}h (threshold: {max_h}h)"
+                                )
+                            else:
+                                await create_alert_if_needed(_sess, mid, "pass")
+                        elif not latest:
+                            await create_alert_if_needed(
+                                _sess, mid, "warning",
+                                f"No runs recorded for {mid}"
+                            )
+                    await _sess.commit()
+            except Exception:
+                logger.debug("Metric health check error", exc_info=True)
+
+    _health_checker_task = _asyncio.create_task(_metric_health_check_loop())
+
+    # Chat retention cleanup — deletes old sessions every 6 hours
+    async def _chat_retention_cleanup() -> None:
+        import asyncio as _aio2
+        from datetime import timedelta as _td2
+        while True:
+            await _aio2.sleep(6 * 3600)
+            try:
+                from sqlalchemy import delete as _del
+                async with AsyncSessionLocal() as _sess:
+                    cutoff = datetime.now(timezone.utc) - _td2(days=settings.CHAT_RETENTION_DAYS)
+                    await _sess.execute(
+                        _del(ChatMessage).where(ChatMessage.created_at < cutoff)
+                    )
+                    await _sess.execute(
+                        _del(ChatSession).where(ChatSession.created_at < cutoff)
+                    )
+                    await _sess.commit()
+                    logger.debug("Chat retention cleanup completed (cutoff=%s).", cutoff)
+            except Exception:
+                logger.debug("Chat retention cleanup error", exc_info=True)
+
+    _retention_task = _asyncio.create_task(_chat_retention_cleanup())
+
+    # Data Copilot freshness checker — updates data_freshness every 15 min
+    from api.copilot.freshness_checker import freshness_checker_loop
+    _freshness_task = _asyncio.create_task(freshness_checker_loop())
+    logger.info("Copilot freshness checker background task started.")
 
     yield  # application is running
 
+    _freshness_task.cancel()
+    _retention_task.cancel()
+    _health_checker_task.cancel()
+    _reconciliation_task.cancel()
     _outcome_tracker_task.cancel()
     _price_tracker_task.cancel()
     _calendar_task.cancel()
@@ -1641,12 +1893,17 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    # -- CORS (permissive for development) ----------------------------
+    # -- CORS (configurable via CORS_ALLOWED_ORIGINS env var) ----------
+    origins = [
+        o.strip()
+        for o in settings.CORS_ALLOWED_ORIGINS.split(",")
+        if o.strip()
+    ]
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=origins,
         allow_credentials=True,
-        allow_methods=["*"],
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         allow_headers=["*"],
     )
 
@@ -1666,6 +1923,17 @@ def create_app() -> FastAPI:
     from api.routers.analysis import router as analysis_router
     from api.routers.data_health import router as data_health_router
     from api.routers.articles import router as articles_router
+    from api.routers.videos import router as videos_router
+    from api.routers.regime import router as regime_router
+    from api.data_reliability.routes import router as data_reliability_router
+    from api.routers.alert_accuracy import router as alert_accuracy_router
+    from api.routers.backtest import router as backtest_router
+    from api.routers.workbench import router as workbench_router
+    from api.routers.audit import router as audit_router
+    from api.routers.db_admin import router as db_admin_router
+    from api.routers.source_intelligence import router as source_intel_router
+    from api.routers.sentiment_qa import router as sentiment_qa_router
+    from api.routers.sentiment_calc_logs import router as sentiment_calc_logs_router
 
     app.include_router(alerts_router, prefix="/api/alerts")
     app.include_router(sources_router, prefix="/api/sources")
@@ -1680,8 +1948,19 @@ def create_app() -> FastAPI:
     app.include_router(health_router, prefix="/api/health")
     app.include_router(ai_analysis_router, prefix="/api/ai-analysis")
     app.include_router(analysis_router, prefix="/api/analysis")
+    app.include_router(regime_router, prefix="/api/regime")
     app.include_router(data_health_router, prefix="/api/admin/data-health")
     app.include_router(articles_router, prefix="/api/analysis")
+    app.include_router(videos_router, prefix="/api/analysis")
+    app.include_router(data_reliability_router, prefix="/api/admin/data-reliability")
+    app.include_router(alert_accuracy_router, prefix="/api/admin/alert-accuracy")
+    app.include_router(backtest_router, prefix="/api/admin/backtest")
+    app.include_router(workbench_router, prefix="/api/admin/workbench")
+    app.include_router(audit_router, prefix="/api/admin/audit-logs")
+    app.include_router(db_admin_router, prefix="/api/admin/database")
+    app.include_router(source_intel_router, prefix="/api/admin/source-intelligence")
+    app.include_router(sentiment_qa_router, prefix="/api/admin/sentiment-qa")
+    app.include_router(sentiment_calc_logs_router, prefix="/api/admin/sentiment-logs")
 
     return app
 

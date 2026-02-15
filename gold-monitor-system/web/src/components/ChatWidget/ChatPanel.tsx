@@ -89,11 +89,12 @@ export default function ChatPanel({
 
   return (
     <div
-      className={`fixed bottom-20 left-4 z-50 flex flex-col overflow-hidden rounded-2xl border border-gray-700 bg-gray-900 shadow-2xl transition-all duration-300 sm:left-5 ${
+      className={`fixed left-4 z-50 flex flex-col overflow-hidden rounded-2xl border border-gray-700 bg-gray-900 shadow-2xl transition-all duration-300 sm:left-5 ${
         isOpen
           ? "pointer-events-auto translate-y-0 opacity-100"
           : "pointer-events-none translate-y-4 opacity-0"
-      } w-[calc(100vw-2rem)] sm:w-[380px] h-[85vh] sm:h-[500px]`}
+      } w-[calc(100vw-2rem)] sm:w-[380px] h-[80vh] sm:h-[500px]`}
+      style={{ bottom: "calc(5rem + env(safe-area-inset-bottom))" }}
     >
       {/* Header */}
       <div className="flex items-center justify-between border-b border-gray-700 bg-gray-800/80 px-4 py-3">

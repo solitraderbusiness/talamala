@@ -58,6 +58,7 @@ Seven Docker services: **PostgreSQL** (port 5432, 27 tables), **Redis** (6379, d
 - [x] Signal Aggregator + AI Analysis page (Telegram listener, TradingView scraper, Claude API parser, consensus algorithm, performance tracking, AI Analysis page with 5 sections)
 - [x] Fundamental Analysis revamp — AI Analysis page replaced with macro dashboard (ETF flows, COT, real rates, correlations, sentiment gauge, market events)
 - [x] Data Collection & Outcome Tracking — market snapshots at alert time, 6-window outcome tracking, sentiment timeline (5min), price history (5min candles + daily sync), admin data health dashboard
+- [x] Regime Engine Historical Backtest — 10+ year backtest via Yahoo Finance + FRED, 7 benchmark events (COVID, 2022 hikes, etc.), admin panel with run button, PASS/FAIL table, 10-year regime chart
 - [ ] Fix news source reliability (English feeds, negative keywords, LLM relevance filter)
 - [ ] Impact matrix per alert (data exists in YAML, not displayed)
 - [ ] Per-market pages (`/market/[marketId]`)
@@ -72,7 +73,6 @@ Seven Docker services: **PostgreSQL** (port 5432, 27 tables), **Redis** (6379, d
 - Passwords truncated to 72 bytes for bcrypt (`auth.py:_truncate_for_bcrypt`)
 - Chat session data stored as plaintext in DB (no encryption at rest)
 - Chat system prompt template (`chat-system.txt`) uses Python `str.format()` — JSON curly braces must be doubled (`{{`/`}}`)
-- CFTC COT CSV URL returns 404 — `cot_parser.py` may need updated URL for weekly reports
 - FRED data requires `FRED_API_KEY` — without it, real rates section stays empty
 
 ## Environment Variables
@@ -183,18 +183,22 @@ Macro-economic analysis dashboard for gold. Fetches institutional money flows (E
 ```
 api/analysis/
 ├── __init__.py
-├── models.py               -- 6 tables (asset_prices_daily, macro_indicators, etf_holdings, cot_data, market_events_analysis, correlation_cache)
-└── workers/
-    ├── main.py             -- unified worker entry point
-    ├── yahoo_fetcher.py    -- Yahoo Finance daily prices (7 symbols, every 6h)
-    ├── fred_fetcher.py     -- FRED API macro indicators (5 series, every 6h)
-    ├── etf_scraper.py      -- ETF holdings via Yahoo Finance (GLD, IAU, every 6h)
-    ├── cot_parser.py       -- CFTC COT report parsing (weekly, Saturdays)
-    ├── correlation_calc.py -- 30-day Pearson correlations (every 6h)
-    ├── sentiment_scorer.py -- composite sentiment (computed on-the-fly)
-    └── event_generator.py  -- auto-generated events from data changes (every 30min)
+├── models.py               -- 6 tables + regime_scores (asset_prices_daily, macro_indicators, etf_holdings, cot_data, market_events_analysis, correlation_cache)
+├── workers/
+│   ├── main.py             -- unified worker entry point
+│   ├── yahoo_fetcher.py    -- Yahoo Finance daily prices (7 symbols, every 6h)
+│   ├── fred_fetcher.py     -- FRED API macro indicators (5 series, every 6h)
+│   ├── etf_scraper.py      -- ETF holdings via Yahoo Finance (GLD, IAU, every 6h)
+│   ├── cot_parser.py       -- CFTC COT report parsing (weekly, Saturdays)
+│   ├── correlation_calc.py -- 30-day Pearson correlations (every 6h)
+│   ├── sentiment_scorer.py -- composite sentiment (computed on-the-fly)
+│   ├── event_generator.py  -- auto-generated events from data changes (every 30min)
+│   └── regime_engine.py    -- liquidity regime classifier (4 regimes, EWMA smoothed)
+└── scripts/
+    └── backtest_regime.py  -- 10+ year historical backtest (Yahoo + FRED, 7 benchmarks)
 api/routers/
-└── analysis.py             -- /api/analysis/* endpoints (7 routes)
+├── analysis.py             -- /api/analysis/* endpoints (7 routes)
+└── regime.py               -- /api/regime/* endpoints (latest, history, backtest)
 ```
 
 ### API Endpoints (`/api/analysis/`)
@@ -205,6 +209,11 @@ api/routers/
 - `GET /sentiment-gauge` — 0-100 composite score from 6 components
 - `GET /shanghai-premium` — SGE vs LBMA price spread (pending data source)
 - `GET /market-activity` — auto-generated event feed (last 48h)
+
+### API Endpoints (`/api/regime/`)
+- `GET /latest` — latest regime score row
+- `GET /history?days=90` — last N days of regime history
+- `POST /backtest` — run 10+ year historical backtest (admin auth, ~30-60s, on-demand, no DB storage)
 
 ### Frontend Components (`web/src/components/analysis/`)
 | Component | Section |

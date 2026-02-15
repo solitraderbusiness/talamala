@@ -26,6 +26,7 @@ import {
   ChatConversation,
   ChatSettingsData,
 } from "@/lib/api";
+import InfoTip from "@/components/InfoTip";
 
 // Recharts
 import {
@@ -85,6 +86,10 @@ export default function ChatInsightsPage() {
   const [usageHours, setUsageHours] = useState<UsageHour[]>([]);
   const [sessionDepth, setSessionDepth] = useState<SessionDepthBucket[]>([]);
 
+  // Previous period data for comparison (Feature 12)
+  const [prevTopics, setPrevTopics] = useState<TopicCount[]>([]);
+  const [prevFeatureGaps, setPrevFeatureGaps] = useState<FeatureGap[]>([]);
+
   // Conversations
   const [conversations, setConversations] = useState<ConversationsPage | null>(null);
   const [selectedConvo, setSelectedConvo] = useState<ChatConversation | null>(null);
@@ -102,7 +107,10 @@ export default function ChatInsightsPage() {
       setLoading(true);
       setError("");
       try {
-        const [ov, int, top, ast, gaps, hours, depth] = await Promise.all([
+        // Map current period to previous period for comparison
+        const prevPeriod: Period = p === "today" ? "week" : p === "week" ? "month" : "all";
+
+        const [ov, int, top, ast, gaps, hours, depth, prevTop, prevGaps] = await Promise.all([
           getChatOverview(token, p),
           getChatIntents(token, p),
           getChatTopics(token, p),
@@ -110,6 +118,9 @@ export default function ChatInsightsPage() {
           getChatFeatureGaps(token, p),
           getChatUsageHours(token, p),
           getChatSessionDepth(token, p),
+          // Previous period for comparison
+          getChatTopics(token, prevPeriod).catch(() => [] as TopicCount[]),
+          getChatFeatureGaps(token, prevPeriod).catch(() => [] as FeatureGap[]),
         ]);
         setOverview(ov);
         setIntents(int);
@@ -118,6 +129,8 @@ export default function ChatInsightsPage() {
         setFeatureGaps(gaps);
         setUsageHours(hours);
         setSessionDepth(depth);
+        setPrevTopics(prevTop);
+        setPrevFeatureGaps(prevGaps);
       } catch (err: unknown) {
         setError(err instanceof Error ? err.message : "خطا در بارگذاری");
       } finally {
@@ -354,11 +367,12 @@ export default function ChatInsightsPage() {
             )}
           </div>
 
-          {/* 3.3 Trending Topics */}
+          {/* 3.3 Trending Topics with comparison */}
           {topics.length > 0 && (
             <div className="card">
-              <h3 className="mb-3 font-semibold text-gray-900 dark:text-gray-100">
-                موضوعات داغ
+              <h3 className="mb-3 flex items-center font-semibold text-gray-900 dark:text-gray-100">
+                روند علاقه‌مندی کاربران
+                <InfoTip term="chat_topic_trends" />
               </h3>
               <ResponsiveContainer width="100%" height={Math.min(topics.length * 28 + 40, 300)}>
                 <BarChart data={topics.slice(0, 15)} layout="vertical">
@@ -369,15 +383,45 @@ export default function ChatInsightsPage() {
                   <Bar dataKey="count" fill="#e6b422" radius={[0, 4, 4, 0]} />
                 </BarChart>
               </ResponsiveContainer>
+              {/* Topic change comparison */}
+              {prevTopics.length > 0 && (
+                <div className="mt-3 border-t border-gray-100 pt-3 dark:border-gray-800">
+                  <p className="mb-2 text-xs font-medium text-gray-500">تغییرات نسبت به دوره قبل:</p>
+                  <div className="flex flex-wrap gap-2">
+                    {topics.slice(0, 8).map((t) => {
+                      const prev = prevTopics.find((p) => p.topic === t.topic);
+                      const prevCount = prev?.count ?? 0;
+                      const diff = prevCount > 0 ? Math.round(((t.count - prevCount) / prevCount) * 100) : 0;
+                      if (diff === 0) return null;
+                      return (
+                        <span
+                          key={t.topic}
+                          className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${
+                            diff > 0
+                              ? "bg-red-50 text-red-600 dark:bg-red-900/20 dark:text-red-400"
+                              : "bg-emerald-50 text-emerald-600 dark:bg-emerald-900/20 dark:text-emerald-400"
+                          }`}
+                        >
+                          {t.topic}
+                          <span className="font-bold">
+                            {diff > 0 ? `+${diff}%` : `${diff}%`}
+                          </span>
+                        </span>
+                      );
+                    }).filter(Boolean)}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
-          {/* 3.5 Feature Gap Report */}
+          {/* 3.5 Feature Gap Report with Trends */}
           {featureGaps.length > 0 && (
             <div className="card">
-              <h3 className="mb-3 font-semibold text-gray-900 dark:text-gray-100">
+              <h3 className="mb-3 flex items-center font-semibold text-gray-900 dark:text-gray-100">
                 <span className="ml-2 inline-block h-2.5 w-2.5 rounded-full bg-red-500" />
-                گزارش شکاف قابلیت‌ها (نقشه راه محصول)
+                نیازهای برآورده‌نشده کاربران
+                <InfoTip term="chat_feature_discovery" />
               </h3>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
@@ -386,31 +430,53 @@ export default function ChatInsightsPage() {
                       <th className="px-3 py-2 text-right font-medium text-gray-500">#</th>
                       <th className="px-3 py-2 text-right font-medium text-gray-500">درخواست کاربر</th>
                       <th className="px-3 py-2 text-center font-medium text-gray-500">تعداد</th>
+                      <th className="px-3 py-2 text-center font-medium text-gray-500">روند</th>
                       <th className="px-3 py-2 text-right font-medium text-gray-500">نمونه سوال</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {featureGaps.map((gap, i) => (
-                      <tr
-                        key={i}
-                        className="border-b border-gray-100 last:border-0 dark:border-gray-800"
-                      >
-                        <td className="px-3 py-2 text-gray-400">
-                          {(i + 1).toLocaleString("fa-IR")}
-                        </td>
-                        <td className="px-3 py-2 font-medium text-gray-800 dark:text-gray-200">
-                          {gap.feature}
-                        </td>
-                        <td className="px-3 py-2 text-center">
-                          <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-bold text-red-700 dark:bg-red-900/30 dark:text-red-400">
-                            {gap.count.toLocaleString("fa-IR")}
-                          </span>
-                        </td>
-                        <td className="max-w-[200px] truncate px-3 py-2 text-xs text-gray-500">
-                          {gap.example}
-                        </td>
-                      </tr>
-                    ))}
+                    {featureGaps.map((gap, i) => {
+                      const prevGap = prevFeatureGaps.find((g) => g.feature === gap.feature);
+                      const prevCount = prevGap?.count ?? 0;
+                      const trendUp = gap.count > prevCount;
+                      const trendDown = gap.count < prevCount;
+                      return (
+                        <tr
+                          key={i}
+                          className="border-b border-gray-100 last:border-0 dark:border-gray-800"
+                        >
+                          <td className="px-3 py-2 text-gray-400">
+                            {(i + 1).toLocaleString("fa-IR")}
+                          </td>
+                          <td className="px-3 py-2 font-medium text-gray-800 dark:text-gray-200">
+                            {gap.feature}
+                          </td>
+                          <td className="px-3 py-2 text-center">
+                            <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-bold text-red-700 dark:bg-red-900/30 dark:text-red-400">
+                              {gap.count.toLocaleString("fa-IR")}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2 text-center">
+                            {trendUp && (
+                              <span className="text-red-500 font-bold text-xs" title={`قبلی: ${prevCount}`}>
+                                &#9650; افزایش
+                              </span>
+                            )}
+                            {trendDown && (
+                              <span className="text-emerald-500 font-bold text-xs" title={`قبلی: ${prevCount}`}>
+                                &#9660; کاهش
+                              </span>
+                            )}
+                            {!trendUp && !trendDown && (
+                              <span className="text-gray-400 text-xs">●</span>
+                            )}
+                          </td>
+                          <td className="max-w-[200px] truncate px-3 py-2 text-xs text-gray-500">
+                            {gap.example}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

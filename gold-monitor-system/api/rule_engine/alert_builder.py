@@ -134,8 +134,8 @@ def build_alert(
         raw_item.get("source_url", raw_item.get("url", ""))
     )
 
-    # Use Persian title from LLM if available
-    title_fa: str = llm.get("title_fa", "") if llm else ""
+    # LLM title is no longer used for the alert title — original source title
+    # is always preserved to prevent hallucinated/fabricated headlines.
 
     # --- matched rule ids ------------------------------------------------- #
     matched_rule_ids: list[str] = [mr.rule.id for mr in match_results]
@@ -204,7 +204,7 @@ def build_alert(
     match_evidence = _build_match_evidence(match_results)
 
     return {
-        "title": title_fa or item_title,
+        "title": item_title,
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "source_name": source_name,
         "source_url": source_url,

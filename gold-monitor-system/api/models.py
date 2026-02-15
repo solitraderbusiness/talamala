@@ -593,12 +593,14 @@ class ChatSession(Base):
     __table_args__ = (
         Index("ix_chat_sessions_created_at", "created_at"),
         Index("ix_chat_sessions_last_active_at", "last_active_at"),
+        Index("ix_chat_sessions_type", "session_type"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=_new_uuid,
     )
     ip_address: Mapped[str] = mapped_column(String(45), nullable=False, default="")
+    session_type: Mapped[str] = mapped_column(String(20), default="chat", server_default="chat")
     messages_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     first_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     primary_intent: Mapped[str | None] = mapped_column(String(50), nullable=True)
@@ -706,4 +708,114 @@ class ChatSetting(Base):
     value: Mapped[str] = mapped_column(Text, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, server_default="now()",
+    )
+
+
+# ── Audit Logs ─────────────────────────────────────────────────────────
+
+class AuditLog(Base):
+    """Unified audit log for provenance tracking across all subsystems."""
+    __tablename__ = "audit_logs"
+    __table_args__ = (
+        Index("ix_audit_logs_trace_id", "trace_id"),
+        Index("ix_audit_logs_event_type", "event_type"),
+        Index("ix_audit_logs_entity", "entity_type", "entity_id"),
+        Index("ix_audit_logs_created_at", "created_at"),
+        Index("ix_audit_logs_actor", "actor"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=_new_uuid,
+    )
+    trace_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    parent_trace_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    event_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    actor: Mapped[str] = mapped_column(String(255), nullable=False, default="system")
+    entity_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    entity_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    action: Mapped[str] = mapped_column(String(128), nullable=False)
+    details: Mapped[Any] = mapped_column(JSONB, default=dict, server_default="{}")
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="success")
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    code_version: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default="now()",
+    )
+
+    def __repr__(self) -> str:
+        return f"<AuditLog {self.event_type} {self.action} trace={self.trace_id[:8]}>"
+
+
+# ── Source Intelligence ───────────────────────────────────────────────
+
+class SourceTag(Base):
+    """Coverage bucket tag for a news source."""
+    __tablename__ = "source_tags"
+    __table_args__ = (
+        Index("ix_source_tags_tag", "tag"),
+        Index("ix_source_tags_source_id", "source_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=_new_uuid,
+    )
+    source_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("sources.id", ondelete="CASCADE"), nullable=False,
+    )
+    tag: Mapped[str] = mapped_column(String(50), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default="now()",
+    )
+
+
+# ── Sentiment QA ─────────────────────────────────────────────────────
+
+class SentimentLabel(Base):
+    """Human-labeled gold set for sentiment QA."""
+    __tablename__ = "sentiment_labels"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=_new_uuid,
+    )
+    alert_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("alerts.id", ondelete="CASCADE"),
+        nullable=False, unique=True,
+    )
+    direction_label: Mapped[str] = mapped_column(String(10), nullable=False)
+    intensity: Mapped[int] = mapped_column(Integer, nullable=False)
+    relevance: Mapped[int] = mapped_column(Integer, nullable=False)
+    system_direction: Mapped[str | None] = mapped_column(String(20))
+    system_alert_score: Mapped[int | None] = mapped_column(Integer)
+    system_confidence: Mapped[float | None] = mapped_column(Float)
+    labeler: Mapped[str] = mapped_column(String(50), default="admin")
+    labeled_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default="now()",
+    )
+    notes: Mapped[str | None] = mapped_column(Text)
+
+
+class SentimentReferenceScore(Base):
+    """LLM cross-check prediction for sentiment QA."""
+    __tablename__ = "sentiment_reference_scores"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=_new_uuid,
+    )
+    alert_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("alerts.id", ondelete="CASCADE"),
+        nullable=False, unique=True,
+    )
+    system_direction: Mapped[str | None] = mapped_column(String(20))
+    system_score: Mapped[int | None] = mapped_column(Integer)
+    system_method: Mapped[str | None] = mapped_column(String(20))
+    ref_direction: Mapped[str | None] = mapped_column(String(20))
+    ref_intensity: Mapped[int | None] = mapped_column(Integer)
+    ref_confidence: Mapped[float | None] = mapped_column(Float)
+    ref_model: Mapped[str | None] = mapped_column(String(100))
+    ref_reasoning: Mapped[str | None] = mapped_column(Text)
+    direction_agrees: Mapped[bool | None] = mapped_column(Boolean)
+    trace_id: Mapped[str | None] = mapped_column(String(50))
+    scored_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default="now()",
     )

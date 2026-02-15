@@ -19,6 +19,7 @@ const navItems: NavItem[] = [
     children: [
       { href: "/ai-analysis", label: "تحلیل زنده" },
       { href: "/analysis/articles", label: "مقاله‌های مهم طلا" },
+      { href: "/analysis/videos", label: "ویدیوها" },
     ],
   },
   { href: "/prices", label: "قیمت‌ها" },
@@ -73,7 +74,7 @@ export default function TopBar() {
   }
 
   return (
-    <header className="sticky top-0 z-50 border-b border-gray-200 bg-white/80 backdrop-blur-md dark:border-gray-800 dark:bg-gray-950/80">
+    <header className="sticky top-0 z-50 border-b border-gray-200 bg-white/80 backdrop-blur-md dark:border-gray-800 dark:bg-gray-950/80" style={{ paddingTop: "env(safe-area-inset-top)" }}>
       <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3 sm:px-6 lg:px-8">
         {/* Logo */}
         <Link href="/" className="flex items-center gap-2">

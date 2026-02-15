@@ -13,6 +13,7 @@ import {
 import type { RealRatesResponse } from "@/lib/api";
 import DataPending from "./DataPending";
 import SkeletonCard from "./SkeletonCard";
+import InfoTip from "@/components/InfoTip";
 
 const CHART_TOOLTIP_STYLE = {
   backgroundColor: "#1F2937",
@@ -24,6 +25,51 @@ const CHART_TOOLTIP_STYLE = {
 
 const LINE_COLORS = ["#F59E0B", "#10B981", "#3B82F6", "#EF4444", "#8B5CF6"];
 
+// Gold impact direction for each FRED indicator:
+// "bullish_when_higher" = rising value is good for gold (green)
+// "bearish_when_higher" = rising value is bad for gold (red)
+const GOLD_IMPACT: Record<string, { direction: "bullish" | "bearish" | "neutral"; label: string }> = {
+  FEDFUNDS: { direction: "bearish", label: "افزایش = منفی برای طلا" },
+  CPIAUCSL: { direction: "neutral", label: "شاخص پایه" },
+  DFII10: { direction: "bearish", label: "افزایش = منفی برای طلا" },
+  DGS10: { direction: "bearish", label: "افزایش = منفی برای طلا" },
+  T10YIE: { direction: "bullish", label: "افزایش = مثبت برای طلا" },
+};
+
+function getImpactColor(seriesId: string): {
+  border: string;
+  value: string;
+  badge: string;
+  badgeText: string;
+} {
+  const impact = GOLD_IMPACT[seriesId];
+  if (!impact) return { border: "", value: "text-gray-900 dark:text-gray-100", badge: "", badgeText: "" };
+
+  switch (impact.direction) {
+    case "bullish":
+      return {
+        border: "border-r-2 border-r-emerald-500",
+        value: "text-emerald-600 dark:text-emerald-400",
+        badge: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+        badgeText: impact.label,
+      };
+    case "bearish":
+      return {
+        border: "border-r-2 border-r-red-500",
+        value: "text-red-600 dark:text-red-400",
+        badge: "bg-red-500/10 text-red-600 dark:text-red-400",
+        badgeText: impact.label,
+      };
+    default:
+      return {
+        border: "border-r-2 border-r-gray-300 dark:border-r-gray-600",
+        value: "text-gray-900 dark:text-gray-100",
+        badge: "bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400",
+        badgeText: impact.label,
+      };
+  }
+}
+
 interface Props {
   data: RealRatesResponse | null;
   loading: boolean;
@@ -33,11 +79,12 @@ export default function RealRatesSection({ data, loading }: Props) {
   const hasData = data && data.indicators.some((i) => i.latest_value != null);
 
   return (
-    <div>
+    <div className="flex flex-col">
       <div className="mb-4 flex items-center gap-2">
         <h2 className="text-lg font-bold text-gray-900 dark:text-gray-100">
           &#x1F3E6; نرخ‌های بهره و تورم
         </h2>
+        <InfoTip term="real_rates" />
       </div>
 
       {loading ? (
@@ -54,23 +101,37 @@ export default function RealRatesSection({ data, loading }: Props) {
           <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
             {data!.indicators.map((ind) => {
               const hasValue = ind.latest_value != null;
+              const impact = getImpactColor(ind.series_id);
               return (
-                <div key={ind.series_id} className="card py-3">
+                <div key={ind.series_id} className={cn("card py-3", impact.border)}>
                   <p className="text-xs text-gray-500 dark:text-gray-400">
                     {ind.label_fa}
+                    <InfoTip term={ind.series_id.toLowerCase()} />
                   </p>
                   <p
                     className={cn(
                       "mt-1 text-xl font-bold",
-                      hasValue ? "text-gray-900 dark:text-gray-100" : "text-gray-400"
+                      hasValue ? impact.value : "text-gray-400"
                     )}
                     dir="ltr"
                   >
-                    {hasValue ? `${ind.latest_value!.toFixed(2)}%` : "---"}
+                    {hasValue
+                      ? `${ind.latest_value!.toFixed(2)}${ind.unit === "index" ? "" : "%"}`
+                      : "---"}
                   </p>
                   {ind.latest_date && (
                     <p className="mt-0.5 text-[11px] text-gray-400" dir="ltr">
                       {ind.latest_date}
+                      {ind.frequency && (
+                        <span className="mr-1.5 rounded bg-gray-100 px-1 py-0.5 dark:bg-gray-800">
+                          {ind.frequency === "daily" ? "روزانه" : ind.frequency === "monthly" ? "ماهانه" : ind.frequency}
+                        </span>
+                      )}
+                    </p>
+                  )}
+                  {hasValue && impact.badgeText && (
+                    <p className={cn("mt-1.5 inline-block rounded-full px-2 py-0.5 text-[10px] font-medium", impact.badge)}>
+                      {impact.badgeText}
                     </p>
                   )}
                 </div>
@@ -102,7 +163,7 @@ export default function RealRatesSection({ data, loading }: Props) {
                   روند تاریخی ({data!.period_days} روز)
                 </h3>
                 <div className="h-64" dir="ltr">
-                  <ResponsiveContainer width="100%" height="100%">
+                  <ResponsiveContainer width="100%" height="100%" minWidth={0}>
                     <LineChart data={chartData}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#374151" opacity={0.3} />
                       <XAxis

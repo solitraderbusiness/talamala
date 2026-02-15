@@ -9,9 +9,10 @@ export default function ChatBubble({ isOpen, onClick }: ChatBubbleProps) {
   return (
     <button
       onClick={onClick}
-      className={`fixed bottom-4 left-4 z-50 flex items-center justify-center rounded-full bg-gold-600 text-white shadow-lg transition-all duration-300 hover:bg-gold-500 hover:shadow-xl sm:bottom-5 sm:left-5 ${
+      className={`fixed z-50 flex items-center justify-center rounded-full bg-gold-600 text-white shadow-lg transition-all duration-300 hover:bg-gold-500 hover:shadow-xl left-4 sm:left-5 ${
         isOpen ? "scale-0 opacity-0" : "scale-100 opacity-100"
       } h-12 w-12 sm:h-14 sm:w-14`}
+      style={{ bottom: "calc(1rem + env(safe-area-inset-bottom))" }}
       aria-label="Open chat"
       title="با طلاملا حرف بزن"
     >

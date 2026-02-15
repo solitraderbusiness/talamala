@@ -26,7 +26,7 @@ DAILY_LLM_BUDGET_USD: float = float(os.environ.get("ARTICLE_DAILY_BUDGET", "1.0"
 PUBLISH_THRESHOLD: float = 20.0       # importance_score >= this → is_published
 MIN_WORD_COUNT: int = 50              # articles shorter than this are rejected
 MAX_ARTICLE_AGE_DAYS: int = 7         # articles older than this are rejected
-ARTICLE_CONTENT_MAX_CHARS: int = 3000 # max chars sent to LLM
+ARTICLE_CONTENT_MAX_CHARS: int = 2000 # max chars sent to LLM
 
 # ── Fetch intervals ─────────────────────────────────────────────────────
 

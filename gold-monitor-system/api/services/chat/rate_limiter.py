@@ -62,9 +62,8 @@ class ChatRateLimiter:
             return True, None
 
         except Exception as e:
-            logger.warning("Rate limiter error (allowing request): %s", e)
-            # If Redis is down, allow the request
-            return True, None
+            logger.warning("Rate limiter error (fail-closed): %s", e)
+            return False, "سرویس موقتاً در دسترس نیست. لطفاً دقایقی بعد تلاش کنید."
 
     async def increment(self, ip_address: str) -> None:
         """Increment rate limit counters after a successful request."""

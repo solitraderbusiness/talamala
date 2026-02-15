@@ -257,29 +257,56 @@ async def _fetch_forexfactory_calendar(
 ) -> list[dict[str, Any]]:
     """Fetch events from Forex Factory free JSON endpoint (no API key needed).
 
-    Returns this week's economic events. Rate limit: 2 req / 5 min.
+    Fetches both this week and next week (if available).
+    Rate limit: 2 req / 5 min — we fetch at most 2 URLs.
     Fields: title, country (currency code), date (ISO 8601), impact, forecast, previous.
     """
-    url = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
+    headers = {
+        "User-Agent": "GoldMonitor/1.0",
+        "Accept": "application/json",
+    }
+    all_events: list[dict[str, Any]] = []
+
+    # ── This week (always available) ──
     try:
-        headers = {
-            "User-Agent": "GoldMonitor/1.0",
-            "Accept": "application/json",
-        }
+        url = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
         async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as resp:
             if resp.status == 200:
                 data = await resp.json()
                 if isinstance(data, list):
-                    logger.info("ForexFactory returned %d raw events.", len(data))
-                    return data
-                return []
+                    logger.info("ForexFactory thisweek: %d events.", len(data))
+                    all_events.extend(data)
             else:
                 text = await resp.text()
-                logger.warning("ForexFactory returned %d: %s", resp.status, text[:300])
-                return []
+                logger.warning("ForexFactory thisweek returned %d: %s", resp.status, text[:200])
     except Exception:
-        logger.warning("ForexFactory request failed", exc_info=True)
-        return []
+        logger.warning("ForexFactory thisweek request failed", exc_info=True)
+
+    # ── Next week (published Fri night / Sat; may 404 earlier in the week) ──
+    try:
+        url = "https://nfs.faireconomy.media/ff_calendar_nextweek.json"
+        async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                if isinstance(data, list):
+                    logger.info("ForexFactory nextweek: %d events.", len(data))
+                    all_events.extend(data)
+            elif resp.status == 404:
+                logger.info(
+                    "ForexFactory nextweek.json not yet published (404). "
+                    "Set JBLANKED_API_KEY for reliable next-week coverage — "
+                    "free key at https://www.jblanked.com/news/api/docs/calendar/"
+                )
+            else:
+                text = await resp.text()
+                logger.warning("ForexFactory nextweek returned %d: %s", resp.status, text[:200])
+    except Exception:
+        logger.warning("ForexFactory nextweek request failed", exc_info=True)
+
+    if all_events:
+        logger.info("ForexFactory total: %d raw events (this+next week).", len(all_events))
+
+    return all_events
 
 
 def _parse_forexfactory_event(raw: dict[str, Any]) -> dict[str, Any] | None:

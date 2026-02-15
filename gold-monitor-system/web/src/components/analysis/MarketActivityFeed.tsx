@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 import type { MarketActivityResponse } from "@/lib/api";
 import DataPending from "./DataPending";
 import SkeletonCard from "./SkeletonCard";
+import InfoTip from "@/components/InfoTip";
 
 const EVENT_TYPE_ICONS: Record<string, string> = {
   etf_flow: "\uD83D\uDCB0",
@@ -58,6 +59,7 @@ export default function MarketActivityFeed({ data, loading }: Props) {
         <h2 className="text-lg font-bold text-gray-900 dark:text-gray-100">
           &#x1F4F0; رویدادهای بازار
         </h2>
+        <InfoTip term="market_event" />
         {data && (
           <span className="text-xs text-gray-400">
             {data.total} رویداد در {data.period_hours} ساعت اخیر

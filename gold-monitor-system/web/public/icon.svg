@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#f59e0b"/>
+      <stop offset="100%" style="stop-color:#d97706"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#fef3c7"/>
+      <stop offset="100%" style="stop-color:#fde68a"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="96" fill="url(#bg)"/>
+  <!-- Gold bar shape -->
+  <path d="M160 340 L200 180 L312 180 L352 340 Z" fill="url(#gold)" stroke="#92400e" stroke-width="6"/>
+  <line x1="210" y1="200" x2="250" y2="320" stroke="#d97706" stroke-width="3" opacity="0.5"/>
+  <line x1="240" y1="200" x2="280" y2="320" stroke="#d97706" stroke-width="3" opacity="0.5"/>
+  <line x1="270" y1="200" x2="310" y2="320" stroke="#d97706" stroke-width="3" opacity="0.5"/>
+  <!-- Chart line going up -->
+  <polyline points="130,300 190,270 240,290 290,230 340,200 380,160" fill="none" stroke="#ffffff" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="380" cy="160" r="10" fill="#ffffff"/>
+</svg>

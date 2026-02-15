@@ -147,4 +147,174 @@ TOOL_DEFINITIONS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_videos",
+            "description": "Search curated gold-related YouTube videos. Use when user asks about videos, wants video recommendations, or asks to find a video on a topic.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search keywords in Persian or English (e.g., 'gold price', 'تحلیل تکنیکال', 'Fed policy')",
+                    },
+                    "category": {
+                        "type": "string",
+                        "enum": ["analysis", "news", "education", "interview", "documentary", "podcast"],
+                        "description": "Filter by video category",
+                    },
+                    "topic": {
+                        "type": "string",
+                        "description": "Filter by topic slug (e.g., 'gold_price', 'fed_policy', 'technical_analysis')",
+                    },
+                    "outlook": {
+                        "type": "string",
+                        "enum": ["bullish", "bearish", "neutral", "mixed"],
+                        "description": "Filter by gold outlook",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max number of results. Default 5, max 10",
+                    },
+                },
+            },
+        },
+    },
+    # ── Data Copilot tools ──────────────────────────────────────────────
+    {
+        "type": "function",
+        "function": {
+            "name": "list_metrics",
+            "description": (
+                "Search available metrics by name or keyword. Use when the user asks "
+                "'what metrics/data do you have?', 'چه داده‌هایی داری؟', or wants to "
+                "discover what they can ask about."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Optional search keyword in Persian or English (e.g., 'ETF', 'بهره', 'dollar')",
+                    },
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_metric_latest",
+            "description": (
+                "Get the latest value of a specific metric with source, date, and freshness info. "
+                "Use when user asks 'what is X now?', 'الان چنده؟', 'مقدار فعلی'. "
+                "Available keys include: gold_price, dxy, vix, sp500, silver_price, btc_price, "
+                "dfii10, dgs10, t10yie, fedfunds, cpi, gld_holdings, gld_change, "
+                "cot_net, cot_oi, corr_gold_dxy, corr_gold_vix, corr_gold_sp500, "
+                "sentiment_composite, risk_radar, "
+                "gld_zscore_90d, gld_percentile_2yr, cot_wow_pct_oi, money_flow_signal."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "metric_key": {
+                        "type": "string",
+                        "description": "The metric key (e.g., 'gold_price', 'dfii10', 'gld_holdings', 'cot_net')",
+                    },
+                },
+                "required": ["metric_key"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_metric_range",
+            "description": (
+                "Get historical time series for a metric over a date range. "
+                "Use when user asks about trends, history, or 'N روز اخیر', 'روند', 'تاریخچه'."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "metric_key": {
+                        "type": "string",
+                        "description": "The metric key (e.g., 'gold_price', 'dfii10')",
+                    },
+                    "days": {
+                        "type": "integer",
+                        "description": "Number of days of history. Default 30, max 365",
+                    },
+                },
+                "required": ["metric_key"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_live_snapshot",
+            "description": (
+                "Get a complete market snapshot with all metrics, sentiment, and staleness info. "
+                "Use when user asks 'وضعیت کلی بازار', 'خلاصه بازار', 'market overview', "
+                "or any broad market question that needs multiple data points."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "explain_calc_run",
+            "description": (
+                "Explain how a computed score (sentiment, risk, money_flow) was calculated, "
+                "showing all component breakdowns. Use when user asks 'چرا', 'توضیح بده', "
+                "'why is sentiment X?', 'how was this calculated?'."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "metric_key": {
+                        "type": "string",
+                        "description": "The computed metric key: 'sentiment_composite', 'risk_radar', or 'money_flow'",
+                    },
+                },
+                "required": ["metric_key"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_changes",
+            "description": (
+                "Get 1-day and 5-day changes (deltas) for key metrics. "
+                "Use when user asks 'چه تغییر کرده؟', 'نسبت به دیروز', "
+                "'what changed today?', 'deltas'."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_freshness_report",
+            "description": (
+                "Check which data sources are fresh or stale. "
+                "Use when user asks 'کدوم داده‌ها stale هستند؟', 'کیفیت داده', "
+                "'is data stale?', 'data quality'."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+            },
+        },
+    },
 ]

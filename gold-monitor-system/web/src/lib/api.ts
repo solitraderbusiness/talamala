@@ -961,6 +961,48 @@ export interface MacroOverviewResponse {
   cards: MacroCard[];
 }
 
+export interface MoneyFlowDerived {
+  etf: {
+    fund: string;
+    zscore_90d: number | null;
+    percentile_2yr: number | null;
+    latest_change_tonnes: number | null;
+    latest_total_tonnes: number | null;
+    latest_date: string | null;
+    source_url: string | null;
+  };
+  cot: {
+    wow_change_pct_of_oi: number | null;
+    percentile_1yr: number | null;
+    percentile_3yr: number | null;
+    latest_net: number | null;
+    latest_oi: number | null;
+    latest_date: string | null;
+    source_url: string | null;
+  };
+  combined_signal: {
+    signal: string;
+    label_fa: string;
+    confidence: number;
+    reasons: string[];
+  };
+}
+
+export interface MoneyFlowMeta {
+  etf_source: {
+    name: string;
+    url: string | null;
+    frequency: string;
+    last_date: string | null;
+  };
+  cot_source: {
+    name: string;
+    url: string | null;
+    frequency: string;
+    last_date: string | null;
+  };
+}
+
 export interface MoneyFlowResponse {
   etf_holdings: Record<string, Array<{ date: string; total_tonnes: number; change_tonnes: number | null }>>;
   cot_positions: Array<{
@@ -970,12 +1012,17 @@ export interface MoneyFlowResponse {
     change: number | null;
   }>;
   period_days: number;
+  derived?: MoneyFlowDerived;
+  meta?: MoneyFlowMeta;
 }
 
 export interface RealRatesIndicator {
   series_id: string;
   label_en: string;
   label_fa: string;
+  unit?: string;
+  frequency?: string;
+  fetched_at?: string | null;
   latest_value: number | null;
   latest_date: string | null;
   history: Array<{ date: string; value: number }>;
@@ -1005,6 +1052,17 @@ export interface SentimentComponent {
   label_fa: string;
   score: number;
   weight: number;
+  raw_value?: number | null;
+  explanation?: string;
+  percentile?: number;
+  direction?: string;
+  window_size?: number;
+  crowded?: boolean;
+  stale?: boolean;
+  fallback_used?: boolean;
+  data_fetched_at?: string | null;
+  raw_units?: string;
+  raw_transform?: string;
 }
 
 export interface SentimentGaugeResponse {
@@ -1014,6 +1072,110 @@ export interface SentimentGaugeResponse {
   components: SentimentComponent[];
   component_count: number;
   max_components: number;
+  run_id?: string;
+  scoring_method?: string;
+}
+
+// ── Sentiment Calc Logs (Admin) ──────────────────────────────────
+
+export interface SentimentCalcLogSummary {
+  id: string;
+  run_at: string | null;
+  overall_score: number | null;
+  overall_label: string | null;
+  overall_label_fa: string | null;
+  warning_count: number;
+  has_stale: boolean;
+  has_fallback: boolean;
+}
+
+export interface SentimentCalcLogDetail {
+  id: string;
+  run_at: string | null;
+  overall_score: number | null;
+  overall_label: string | null;
+  overall_label_fa: string | null;
+  app_version: string | null;
+  components: Record<string, unknown>[];
+  warnings: string[];
+}
+
+export interface SentimentDiagComponent {
+  component: string;
+  run_count: number;
+  saturation_pct: number;
+  saturation_status: "ok" | "warning" | "fail";
+  mean_score: number;
+  median_score: number;
+  min_score: number;
+  max_score: number;
+  std_dev: number;
+  stale_pct: number;
+  fallback_pct: number;
+  crowded_pct: number;
+}
+
+export interface SentimentDiagnosticsResponse {
+  period_days: number;
+  total_runs: number;
+  components: SentimentDiagComponent[];
+  quality_warnings: string[];
+}
+
+export function getSentimentCalcLogs(token: string, limit = 50): Promise<{ items: SentimentCalcLogSummary[]; total: number }> {
+  return authRequest(`/api/admin/sentiment-logs/list?limit=${limit}`, token);
+}
+
+export function getSentimentCalcLogDetail(token: string, runId: string): Promise<SentimentCalcLogDetail> {
+  return authRequest(`/api/admin/sentiment-logs/detail/${runId}`, token);
+}
+
+export function getSentimentDiagnostics(token: string, days = 60): Promise<SentimentDiagnosticsResponse> {
+  return authRequest(`/api/admin/sentiment-logs/diagnostics?days=${days}`, token);
+}
+
+/* ---------- Action Summary & Deltas types ---------- */
+
+export interface ActionTrigger {
+  label_fa: string;
+  type: "event" | "level" | "regime";
+}
+
+export interface KeyLevels {
+  supports: number[];
+  resistances: number[];
+  invalidation: number;
+}
+
+export interface ActionSummaryResponse {
+  bias_score: number | null;
+  bias_label_fa: string;
+  story_fa: string | null;
+  stance_fa: string | null;
+  triggers: ActionTrigger[];
+  confidence: "high" | "medium" | "low";
+  confidence_reasons: string[];
+  expected_range_1d_usd: number | null;
+  expected_range_1d_pct: number | null;
+  key_levels: KeyLevels | null;
+}
+
+export interface DeltaItem {
+  id: string;
+  label_fa: string;
+  current: number;
+  prev_1d: number | null;
+  prev_5d: number | null;
+  change_1d: number | null;
+  change_5d: number | null;
+  unit: string;
+  direction: "up" | "down" | "flat";
+  gold_impact?: "bullish" | "bearish" | "neutral";
+}
+
+export interface DeltasResponse {
+  deltas: DeltaItem[];
+  computed_at: string;
 }
 
 export interface ShanghaiPremiumResponse {
@@ -1279,14 +1441,32 @@ export function deleteSignalSource(token: string, id: string): Promise<{ status:
 /* ---------- Data Health types ---------- */
 
 export interface DataHealthOverview {
-  snapshot_coverage_pct: number | null;
+  // Snapshot coverage (24h) — 3 tiers
+  snapshot_coverage_pct: number | null;              // any row exists (seeded or live)
+  complete_snapshot_coverage_pct: number | null;      // snapshot_complete=true only
+  live_snapshot_coverage_pct: number | null;           // not reconciled (captured live)
   alerts_24h: number;
   snapshots_24h: number;
   complete_snapshots_24h: number;
+  live_snapshots_24h: number;
+  // Outcome coverage
+  outcomes_seeded_24h: number;
+  outcome_seed_coverage_pct: number | null;           // any outcome row exists
+  outcomes_complete_pct: number | null;               // status='complete' (all time)
   outcome_pipeline: Record<string, number>;
+  // Freshness
   sentiment_last_recorded: string | null;
   price_data_last_update: string | null;
   outcome_errors: number;
+  // 7-day gap counts
+  alerts_7d: number;
+  missing_snapshots_7d: number;
+  missing_outcomes_7d: number;
+  // Reconciliation status
+  reconciliation_backlog: number;
+  reconciliation_eta_minutes: number;
+  reconciliation_batch_size: number;
+  reconciliation_interval_seconds: number;
 }
 
 export interface SnapshotStats {
@@ -1396,6 +1576,132 @@ export function getSentimentCorrelation(
   );
 }
 
+export interface SnapshotLiveStatusSummary {
+  total_alerts: number;
+  live_count: number;
+  reconciled_count: number;
+  total_snapshots: number;
+  live_snapshot_coverage_pct: number | null;
+  last_live_snapshot_at: string | null;
+  last_reconciled_snapshot_at: string | null;
+}
+
+export interface RecentSnapshot {
+  alert_id: string;
+  created_at: string | null;
+  snapshot_complete: boolean;
+  missing_fields: string[] | null;
+  source: "live" | "reconciled";
+  xauusd: number | null;
+  gold_rsi_14: number | null;
+  sentiment_composite: number | null;
+  fetch_duration_ms: number | null;
+}
+
+export interface SnapshotLiveStatusResponse {
+  summary_24h: SnapshotLiveStatusSummary;
+  recent_snapshots: RecentSnapshot[];
+}
+
+export function getSnapshotLiveStatus(token: string): Promise<SnapshotLiveStatusResponse> {
+  return authRequest<SnapshotLiveStatusResponse>(
+    "/api/admin/data-health/snapshot-live-status",
+    token
+  );
+}
+
+/* ---------- Data Health Cockpit types ---------- */
+
+export interface LiveThroughputPoint {
+  hour_bucket: string;
+  alerts_created: number;
+  live_snapshots_created: number;
+}
+
+export interface LiveThroughputResponse {
+  hours: number;
+  data: LiveThroughputPoint[];
+}
+
+export interface QualityTierMetric {
+  pct: number | null;
+  numerator: number;
+  denominator: number;
+}
+
+export interface QualityTiersResponse {
+  hours: number;
+  live_snapshot_coverage: QualityTierMetric;
+  live_complete_snapshot_coverage: QualityTierMetric;
+  outcome_seed_coverage: QualityTierMetric;
+  outcome_completion: QualityTierMetric;
+}
+
+export interface MissingFieldItem {
+  field: string;
+  count: number;
+  pct: number;
+}
+
+export interface MissingFieldsResponse {
+  days: number;
+  total_live_snapshots: number;
+  fields: MissingFieldItem[];
+}
+
+export interface GuardrailCheck {
+  id: string;
+  label_fa: string;
+  label_en: string;
+  verdict: "PASS" | "FAIL" | "WARN";
+  missing_snapshot?: number;
+  missing_outcome?: number;
+  count?: number;
+}
+
+export interface GuardrailsResponse {
+  checks: GuardrailCheck[];
+}
+
+/* ---------- Data Health Cockpit API ---------- */
+
+export function getLiveThroughput(
+  token: string,
+  hours: number = 24
+): Promise<LiveThroughputResponse> {
+  return authRequest<LiveThroughputResponse>(
+    `/api/admin/data-health/live-throughput?hours=${hours}`,
+    token
+  );
+}
+
+export function getQualityTiers(
+  token: string,
+  hours: number = 24
+): Promise<QualityTiersResponse> {
+  return authRequest<QualityTiersResponse>(
+    `/api/admin/data-health/quality-tiers?hours=${hours}`,
+    token
+  );
+}
+
+export function getMissingFields(
+  token: string,
+  days: number = 7
+): Promise<MissingFieldsResponse> {
+  return authRequest<MissingFieldsResponse>(
+    `/api/admin/data-health/missing-fields?days=${days}`,
+    token
+  );
+}
+
+export function getGuardrails(token: string): Promise<GuardrailsResponse> {
+  return authRequest<GuardrailsResponse>(
+    "/api/admin/data-health/guardrails",
+    token
+  );
+}
+
 /* ---------- Gold Articles types ---------- */
 
 export interface GoldArticle {
@@ -1481,4 +1787,280 @@ export function getGoldArticle(id: number): Promise<GoldArticle> {
 
 export function getGoldArticlesDailyDigest(): Promise<GoldArticlesDailyDigest> {
   return request<GoldArticlesDailyDigest>("/api/analysis/articles/daily-digest");
+}
+
+/* ---------- Gold Videos types ---------- */
+
+export interface CuratedVideo {
+  id: number;
+  youtube_id: string;
+  title_original: string | null;
+  title_fa: string | null;
+  channel_name: string | null;
+  channel_id: string | null;
+  thumbnail_url: string;
+  embed_url: string;
+  watch_url: string;
+  duration_seconds: number | null;
+  duration_formatted: string;
+  view_count: number | null;
+  view_count_formatted: string;
+  published_at: string | null;
+  summary_fa: string | null;
+  key_points_fa: string[];
+  topics: string[];
+  topics_fa: string[];
+  category: string | null;
+  category_fa: string;
+  gold_outlook: "bullish" | "bearish" | "neutral" | "mixed" | null;
+  gold_outlook_fa: string;
+  relevance_score: number | null;
+  is_featured: boolean;
+  is_published: boolean;
+  has_transcript: boolean;
+  transcript?: string | null;
+  added_by: string | null;
+  created_at: string | null;
+  related_videos?: CuratedVideo[];
+}
+
+export interface VideosResponse {
+  videos: CuratedVideo[];
+  total: number;
+  page: number;
+  per_page: number;
+}
+
+export interface LiveStreamChannel {
+  id: number;
+  name: string;
+  name_fa: string | null;
+  youtube_channel_id: string;
+  thumbnail_url: string | null;
+  embed_url: string;
+}
+
+export interface LiveStreamsResponse {
+  channels: LiveStreamChannel[];
+}
+
+export interface VideoChatResponse {
+  answer: string;
+}
+
+export interface MonitoredChannel {
+  id: number;
+  name: string;
+  youtube_channel_id: string;
+  is_active: boolean;
+  auto_publish: boolean;
+  always_relevant: boolean;
+  last_checked_at: string | null;
+  created_at: string | null;
+}
+
+/* ---------- Gold Videos API ---------- */
+
+export function getVideos(params?: {
+  page?: number;
+  per_page?: number;
+  category?: string;
+  topic?: string;
+  outlook?: string;
+  featured?: boolean;
+}): Promise<VideosResponse> {
+  const sp = new URLSearchParams();
+  if (params?.page) sp.set("page", String(params.page));
+  if (params?.per_page) sp.set("per_page", String(params.per_page));
+  if (params?.category) sp.set("category", params.category);
+  if (params?.topic) sp.set("topic", params.topic);
+  if (params?.outlook) sp.set("outlook", params.outlook);
+  if (params?.featured) sp.set("featured", "true");
+  const qs = sp.toString();
+  return request<VideosResponse>(`/api/analysis/videos${qs ? `?${qs}` : ""}`);
+}
+
+export function getVideo(id: number): Promise<CuratedVideo> {
+  return request<CuratedVideo>(`/api/analysis/videos/${id}`);
+}
+
+export function getLiveStreams(): Promise<LiveStreamsResponse> {
+  return request<LiveStreamsResponse>("/api/analysis/videos/live-streams");
+}
+
+export function sendVideoChat(
+  videoId: number,
+  question: string
+): Promise<VideoChatResponse> {
+  return request<VideoChatResponse>(`/api/analysis/videos/${videoId}/chat`, {
+    method: "POST",
+    body: JSON.stringify({ question }),
+  });
+}
+
+export function adminAddVideo(
+  token: string,
+  url: string
+): Promise<{ id: number; youtube_id: string; status: string }> {
+  return authRequest<{ id: number; youtube_id: string; status: string }>(
+    "/api/analysis/admin/videos",
+    token,
+    { method: "POST", body: JSON.stringify({ url }) }
+  );
+}
+
+export function adminUpdateVideo(
+  token: string,
+  id: number,
+  data: { is_published?: boolean; is_featured?: boolean; deleted?: boolean }
+): Promise<{ status: string }> {
+  return authRequest<{ status: string }>(
+    `/api/analysis/admin/videos/${id}`,
+    token,
+    { method: "PATCH", body: JSON.stringify(data) }
+  );
+}
+
+export function adminRegenerateVideo(
+  token: string,
+  id: number
+): Promise<{ status: string }> {
+  return authRequest<{ status: string }>(
+    `/api/analysis/admin/videos/${id}/regenerate`,
+    token,
+    { method: "POST" }
+  );
+}
+
+export function adminGetVideoChannels(
+  token: string
+): Promise<{ channels: MonitoredChannel[] }> {
+  return authRequest<{ channels: MonitoredChannel[] }>(
+    "/api/analysis/admin/videos/channels",
+    token
+  );
+}
+
+export function adminAddVideoChannel(
+  token: string,
+  data: { name: string; youtube_channel_id: string; always_relevant?: boolean; auto_publish?: boolean }
+): Promise<{ id: number; name: string; status: string }> {
+  return authRequest<{ id: number; name: string; status: string }>(
+    "/api/analysis/admin/videos/channels",
+    token,
+    { method: "POST", body: JSON.stringify(data) }
+  );
+}
+
+export function adminUpdateVideoChannel(
+  token: string,
+  id: number,
+  data: { is_active?: boolean; auto_publish?: boolean; always_relevant?: boolean }
+): Promise<{ status: string }> {
+  return authRequest<{ status: string }>(
+    `/api/analysis/admin/videos/channels/${id}`,
+    token,
+    { method: "PATCH", body: JSON.stringify(data) }
+  );
+}
+
+/* ---------- Workbench API ---------- */
+
+export function workbenchHistory(
+  token: string,
+  sessionId: string
+): Promise<{ messages: Array<{ id: string; role: string; content: string; tool_calls?: unknown; created_at: string | null }> }> {
+  return authRequest(`/api/admin/workbench/history?session_id=${sessionId}`, token);
+}
+
+export function workbenchSessions(
+  token: string,
+  limit: number = 20
+): Promise<{ sessions: Array<{ id: string; first_message: string | null; messages_count: number; created_at: string | null; last_active_at: string | null }> }> {
+  return authRequest(`/api/admin/workbench/sessions?limit=${limit}`, token);
+}
+
+export function workbenchDeleteSession(
+  token: string,
+  sessionId: string
+): Promise<{ status: string }> {
+  return authRequest(`/api/admin/workbench/sessions/${sessionId}`, token, {
+    method: "DELETE",
+  });
+}
+
+export function workbenchSchema(
+  token: string
+): Promise<{ tables: Array<{ name: string; description: string; columns: string }> }> {
+  return authRequest(`/api/admin/workbench/schema`, token);
+}
+
+/* ---------- Source Intelligence API ---------- */
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function getSourceOverview(token: string, days = 7): Promise<any> {
+  return authRequest(`/api/admin/source-intelligence/overview?days=${days}`, token);
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function getSourceCoverage(token: string, days = 7): Promise<any> {
+  return authRequest(`/api/admin/source-intelligence/coverage?days=${days}`, token);
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function getDedupeHealth(token: string, days = 7): Promise<any> {
+  return authRequest(`/api/admin/source-intelligence/dedupe?days=${days}`, token);
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function getSourceRecommendations(token: string, days = 7): Promise<any> {
+  return authRequest(`/api/admin/source-intelligence/recommendations?days=${days}`, token);
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function manageSourceTag(token: string, data: { source_id: string; tag: string; action: string }): Promise<any> {
+  return authRequest(`/api/admin/source-intelligence/source-tags`, token, {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+/* ---------- Sentiment QA API ---------- */
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function getLabelQueue(token: string, limit = 20): Promise<any> {
+  return authRequest(`/api/admin/sentiment-qa/label-queue?limit=${limit}`, token);
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function submitLabel(token: string, data: { alert_id: string; direction_label: string; intensity: number; relevance: number; notes?: string }): Promise<any> {
+  return authRequest(`/api/admin/sentiment-qa/labels`, token, {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function getLabelStats(token: string, days = 30): Promise<any> {
+  return authRequest(`/api/admin/sentiment-qa/label-stats?days=${days}`, token);
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function getDisagreements(token: string, days = 7): Promise<any> {
+  return authRequest(`/api/admin/sentiment-qa/disagreements?days=${days}`, token);
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function getCalibration(token: string, days = 90): Promise<any> {
+  return authRequest(`/api/admin/sentiment-qa/calibration?days=${days}`, token);
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function getOutliers(token: string, limit = 50): Promise<any> {
+  return authRequest(`/api/admin/sentiment-qa/outliers?limit=${limit}`, token);
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function getProvenance(token: string, alertId: string): Promise<any> {
+  return authRequest(`/api/admin/sentiment-qa/provenance/${alertId}`, token);
 }

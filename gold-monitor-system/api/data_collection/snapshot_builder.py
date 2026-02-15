@@ -21,6 +21,19 @@ from api.data_collection.models import AlertMarketSnapshot, AlertOutcome
 
 logger = logging.getLogger("gold_monitor.snapshot")
 
+
+def _to_datetime(val) -> datetime | None:
+    """Convert string or datetime to datetime; return None on failure."""
+    if val is None:
+        return None
+    if isinstance(val, datetime):
+        return val
+    try:
+        return datetime.fromisoformat(str(val))
+    except (ValueError, TypeError):
+        return None
+
+
 # Symbol mapping for asset_prices_daily → snapshot fields
 _ASSET_SYMBOL_MAP = {
     "DX-Y.NYB": "dxy",
@@ -221,23 +234,36 @@ async def capture_market_snapshot(
         data["missing_fields"] = missing if missing else None
         data["fetch_duration_ms"] = int((time.monotonic() - t0) * 1000)
 
-        # ── Persist snapshot ──────────────────────────────────────────
+        # ── Persist snapshot (upsert: upgrades reconciled stubs) ─────
         try:
-            snapshot = AlertMarketSnapshot(**data)
-            session.add(snapshot)
-            await session.flush()
-
-            # Also create the alert_outcomes row
-            direction = alert_dict.get("match_evidence", {}).get("direction")
-            outcome = AlertOutcome(
-                alert_id=alert_id,
-                alert_direction=direction,
-                alert_severity=alert_dict.get("severity"),
-                price_at_alert=data.get("xauusd"),
-                alert_created_at=alert_dict.get("timestamp_utc") or datetime.now(timezone.utc),
-                status="pending_30min",
+            # Snapshot: INSERT or UPDATE if reconciled stub exists
+            snap_stmt = pg_insert(AlertMarketSnapshot).values(**data)
+            update_cols = {
+                k: snap_stmt.excluded[k]
+                for k in data
+                if k not in ("id", "alert_id")
+            }
+            snap_stmt = snap_stmt.on_conflict_do_update(
+                index_elements=["alert_id"],
+                set_=update_cols,
             )
-            session.add(outcome)
+            await session.execute(snap_stmt)
+
+            # Outcome: INSERT or skip if already seeded
+            direction = alert_dict.get("match_evidence", {}).get("direction")
+            outcome_data = {
+                "alert_id": alert_id,
+                "alert_direction": direction,
+                "alert_severity": alert_dict.get("severity"),
+                "price_at_alert": data.get("xauusd"),
+                "alert_created_at": _to_datetime(alert_dict.get("timestamp_utc")) or datetime.now(timezone.utc),
+                "status": "pending_30min",
+            }
+            outcome_stmt = pg_insert(AlertOutcome).values(**outcome_data)
+            outcome_stmt = outcome_stmt.on_conflict_do_nothing(
+                index_elements=["alert_id"],
+            )
+            await session.execute(outcome_stmt)
 
             await session.commit()
             logger.info(

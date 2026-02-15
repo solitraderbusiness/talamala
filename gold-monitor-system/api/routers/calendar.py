@@ -193,7 +193,11 @@ async def get_upcoming_events(
     limit: int = Query(5, ge=1, le=20, description="Number of events to return"),
     impact: str = Query("high", description="Minimum impact level: high, medium, low"),
 ) -> dict[str, Any]:
-    """Get next upcoming high-impact events (for dashboard widget)."""
+    """Get next upcoming high-impact events (for dashboard widget).
+
+    Auto-widens to medium impact if no high-impact events are found,
+    so the dashboard widget always shows something when data exists.
+    """
     now = datetime.now(timezone.utc)
 
     # Impact filter
@@ -220,6 +224,25 @@ async def get_upcoming_events(
     result = await db.execute(query)
     events = result.scalars().all()
 
+    # Auto-widen: if caller asked for "high" but got nothing, retry with medium
+    widened = False
+    if not events and impact == "high":
+        query2 = (
+            select(EconomicEvent)
+            .where(
+                and_(
+                    EconomicEvent.datetime_utc > now,
+                    EconomicEvent.impact.in_(["high", "medium"]),
+                )
+            )
+            .order_by(EconomicEvent.datetime_utc.asc())
+            .limit(limit)
+        )
+        result2 = await db.execute(query2)
+        events = result2.scalars().all()
+        if events:
+            widened = True
+
     formatted = [_format_event(e) for e in events]
 
     # Countdown for nearest event
@@ -235,11 +258,14 @@ async def get_upcoming_events(
             "impact": nearest["impact"],
         }
 
-    return {
+    resp: dict[str, Any] = {
         "events": formatted,
         "countdown": countdown,
         "last_synced": now.isoformat(),
     }
+    if widened:
+        resp["widened_to_medium"] = True
+    return resp
 
 
 @router.get("/sync-status")

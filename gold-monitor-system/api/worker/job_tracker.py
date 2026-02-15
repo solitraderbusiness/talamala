@@ -132,6 +132,26 @@ async def track_job(
                 exc_info=True,
             )
 
+        # Audit log entry for every job run
+        try:
+            from api.audit import log_audit
+            await log_audit(
+                event_type="job_run",
+                action=f"job.{job_name}",
+                entity_type="system_jobs",
+                entity_id=job_name,
+                status=run_status,
+                duration_ms=duration_ms,
+                error_message=error_message,
+                details={
+                    "category": category,
+                    "items_processed": logger.items_processed,
+                    **logger.metadata,
+                },
+            )
+        except Exception:
+            pass  # Never fail due to audit logging
+
 
 async def _upsert_job(
     *,

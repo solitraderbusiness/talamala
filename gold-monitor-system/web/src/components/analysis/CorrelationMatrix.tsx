@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 import type { CorrelationsResponse } from "@/lib/api";
 import DataPending from "./DataPending";
 import SkeletonCard from "./SkeletonCard";
+import InfoTip from "@/components/InfoTip";
 
 function getCorrelationColor(corr: number): string {
   if (corr >= 0.7) return "bg-emerald-500";
@@ -36,6 +37,7 @@ export default function CorrelationMatrix({ data, loading }: Props) {
         <h2 className="text-lg font-bold text-gray-900 dark:text-gray-100">
           &#x1F517; همبستگی دارایی‌ها با طلا
         </h2>
+        <InfoTip term="correlation" />
         {data?.computed_date && (
           <span className="text-xs text-gray-400" dir="ltr">
             ({data.computed_date})

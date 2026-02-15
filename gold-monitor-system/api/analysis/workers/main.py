@@ -8,6 +8,7 @@ Schedule
 - COT report:            every Saturday (weekly)
 - Correlations:          every 6 hours (after prices)
 - Event generator:       every 30 minutes
+- Data audit:            every 24 hours (+ once on startup)
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ logging.basicConfig(
 logger = logging.getLogger("analysis.worker")
 
 # Intervals in seconds
+INTERVAL_24H = 24 * 60 * 60
 INTERVAL_6H = 6 * 60 * 60
 INTERVAL_4H = 4 * 60 * 60
 INTERVAL_30M = 30 * 60
@@ -75,9 +77,13 @@ async def main() -> None:
         cot_parser,
         correlation_calc,
         event_generator,
+        regime_engine,
+        data_audit,
+        reference_scorer,
     )
     from api.data_collection import sentiment_recorder, candle_builder
     from api.articles.workers.main import run_articles_pipeline
+    from api.videos.workers.main import run_video_pipeline
 
     # Run initial batch immediately
     logger.info("Running initial data fetch ...")
@@ -98,11 +104,24 @@ async def main() -> None:
     except Exception:
         logger.exception("Initial correlation calc error")
 
+    # Run regime engine after price data is loaded
+    try:
+        await regime_engine.run()
+    except Exception:
+        logger.exception("Initial regime engine error")
+
     # Run event generator after initial data
     try:
         await event_generator.run()
     except Exception:
         logger.exception("Initial event generation error")
+
+    # Run data quality audit after initial data is loaded
+    try:
+        result = await data_audit.run()
+        logger.info("Initial data audit: %s", result.get("overall", "?"))
+    except Exception:
+        logger.exception("Initial data audit error")
 
     # Run initial articles fetch
     try:
@@ -110,6 +129,13 @@ async def main() -> None:
         logger.info("Initial articles pipeline: %s", result)
     except Exception:
         logger.exception("Initial articles pipeline error")
+
+    # Run initial video pipeline
+    try:
+        result = await run_video_pipeline()
+        logger.info("Initial video pipeline: %s", result)
+    except Exception:
+        logger.exception("Initial video pipeline error")
 
     logger.info("Initial fetch complete. Starting periodic workers ...")
 
@@ -120,11 +146,15 @@ async def main() -> None:
         asyncio.create_task(_run_worker("etf_scraper", etf_scraper.run, INTERVAL_6H)),
         asyncio.create_task(_run_weekly_worker("cot_parser", cot_parser.run, day_of_week=5)),
         asyncio.create_task(_run_worker("correlation_calc", correlation_calc.run, INTERVAL_6H)),
+        asyncio.create_task(_run_worker("regime_engine", regime_engine.run, INTERVAL_6H)),
         asyncio.create_task(_run_worker("event_generator", event_generator.run, INTERVAL_30M)),
         asyncio.create_task(_run_worker("sentiment_recorder", sentiment_recorder.run, INTERVAL_5M)),
         asyncio.create_task(_run_worker("candle_builder_5min", candle_builder.build_5min_candles, INTERVAL_5M)),
         asyncio.create_task(_run_worker("daily_candle_sync", candle_builder.sync_daily_candles, INTERVAL_6H)),
         asyncio.create_task(_run_worker("articles_pipeline", run_articles_pipeline, INTERVAL_4H)),
+        asyncio.create_task(_run_worker("video_pipeline", run_video_pipeline, INTERVAL_1H)),
+        asyncio.create_task(_run_worker("data_audit", data_audit.run, INTERVAL_24H)),
+        asyncio.create_task(_run_worker("reference_scorer", reference_scorer.run, INTERVAL_6H)),
     ]
 
     logger.info("Analysis worker running with %d periodic tasks.", len(tasks))

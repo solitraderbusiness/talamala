@@ -112,6 +112,7 @@ class ChatOpenRouterClient:
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         model: str | None = None,
+        max_tokens: int = 800,
     ) -> dict[str, Any]:
         """Non-streaming chat completion (used for tool call round)."""
         payload = {
@@ -119,6 +120,7 @@ class ChatOpenRouterClient:
             "messages": messages,
             "tools": tools,
             "tool_choice": "auto",
+            "max_tokens": max_tokens,
         }
 
         async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=120.0, write=10.0, pool=10.0)) as client:
@@ -143,13 +145,14 @@ class ChatOpenRouterClient:
         self,
         messages: list[dict[str, Any]],
         model: str | None = None,
+        max_tokens: int = 800,
     ) -> AsyncGenerator[str, None]:
         """Streaming chat completion (for final response to user)."""
         payload = {
             "model": model or settings.CHAT_MODEL,
             "messages": messages,
             "stream": True,
-            "max_tokens": 800,
+            "max_tokens": max_tokens,
         }
 
         async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=120.0, write=10.0, pool=10.0)) as client:

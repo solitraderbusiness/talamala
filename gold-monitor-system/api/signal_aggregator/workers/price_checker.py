@@ -63,6 +63,8 @@ async def _fetch_price_brsapi(client: httpx.AsyncClient) -> float | None:
         for item in container.get("gold", []):
             if isinstance(item, dict) and item.get("symbol") == "XAUUSD":
                 price_str = str(item.get("price", "")).replace(",", "")
+                if not price_str:
+                    return None
                 price = float(price_str)
                 if price > 0:
                     logger.debug("BrsAPI XAUUSD price: %.2f", price)
@@ -86,6 +88,9 @@ async def _fetch_price_tgju(client: httpx.AsyncClient) -> float | None:
         ounce = data.get("ounce", {})
         if isinstance(ounce, dict):
             price_str = str(ounce.get("p", "")).replace(",", "")
+            if not price_str:
+                logger.warning("TGJU returned empty price string")
+                return None
             price = float(price_str)
             if price > 0:
                 logger.debug("TGJU XAUUSD price: %.2f", price)
@@ -93,6 +98,34 @@ async def _fetch_price_tgju(client: httpx.AsyncClient) -> float | None:
     except Exception:
         logger.warning("Failed to fetch price from TGJU", exc_info=True)
     return None
+
+
+async def _fetch_price_yfinance() -> float | None:
+    """Fallback: fetch gold price from Yahoo Finance via yfinance (sync lib)."""
+    try:
+        import yfinance as yf
+
+        loop = asyncio.get_running_loop()
+
+        def _get_price() -> float | None:
+            ticker = yf.Ticker("GC=F")
+            # Try intraday first
+            hist = ticker.history(period="1d", interval="1m")
+            if hist.empty:
+                # Weekends / holidays — try daily
+                hist = ticker.history(period="5d", interval="1d")
+            if hist.empty:
+                return None
+            price = float(hist["Close"].iloc[-1])
+            return price if price > 0 else None
+
+        price = await loop.run_in_executor(None, _get_price)
+        if price is not None:
+            logger.debug("yfinance GC=F price: %.2f", price)
+        return price
+    except Exception:
+        logger.warning("Failed to fetch price from yfinance", exc_info=True)
+        return None
 
 
 async def fetch_current_price() -> tuple[float | None, str]:
@@ -106,6 +139,11 @@ async def fetch_current_price() -> tuple[float | None, str]:
         price = await _fetch_price_tgju(client)
         if price is not None:
             return price, "tgju"
+
+    # yfinance is sync — call outside httpx context manager
+    price = await _fetch_price_yfinance()
+    if price is not None:
+        return price, "yfinance"
 
     logger.error("All price sources failed — no price available")
     return None, ""

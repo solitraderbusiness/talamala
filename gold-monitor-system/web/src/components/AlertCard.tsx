@@ -99,11 +99,11 @@ export default function AlertCard({ alert, compact = false }: AlertCardProps) {
       >
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
-            <h3 className="text-base font-semibold text-gray-900 group-hover:text-gold-600 dark:text-gray-100 dark:group-hover:text-gold-400">
+            <h3 className="text-base font-semibold break-words text-gray-900 group-hover:text-gold-600 dark:text-gray-100 dark:group-hover:text-gold-400">
               {displayTitle}
             </h3>
             {hasEnglishTitle && (
-              <p className="mt-0.5 text-xs text-gray-400 dark:text-gray-500" dir="ltr">
+              <p className="mt-0.5 truncate text-xs text-gray-400 dark:text-gray-500" dir="ltr">
                 {alert.title}
               </p>
             )}
@@ -118,8 +118,8 @@ export default function AlertCard({ alert, compact = false }: AlertCardProps) {
             <span className={`text-sm font-bold ${scoreColor(score)}`}>{score}</span>
           </div>
         </div>
-        <div className="mt-2 flex items-center justify-between">
-          <div className="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-500">
+        <div className="mt-2 flex items-center justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-2 text-xs text-gray-500 dark:text-gray-500 overflow-hidden">
             {alert.section && (
               <>
                 <span className="text-[10px]">

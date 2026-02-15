@@ -12,7 +12,7 @@ TELEGRAM_SESSION_PATH: str = os.getenv("TELEGRAM_SESSION_PATH", "/app/data/teleg
 
 # ── OpenRouter (LLM for signal parsing — same key as the rest of the system) ─
 OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
-SIGNAL_PARSE_MODEL: str = os.getenv("SIGNAL_PARSE_MODEL", "anthropic/claude-sonnet-4")
+SIGNAL_PARSE_MODEL: str = os.getenv("SIGNAL_PARSE_MODEL", "anthropic/claude-haiku-4.5")
 
 # ── TradingView ──────────────────────────────────────────────────────────
 TRADINGVIEW_COOKIE: str = os.getenv("TRADINGVIEW_COOKIE", "")

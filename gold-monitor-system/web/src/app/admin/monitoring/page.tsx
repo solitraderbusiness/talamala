@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import InfoTip from "@/components/InfoTip";
 import {
   getMonitoringOverview,
   getMonitoringJobs,
@@ -139,6 +140,7 @@ export default function MonitoringPage() {
         <div>
           <h2 className="text-xl font-bold text-gray-900 dark:text-gray-100">
             پایش عملیات
+            <InfoTip term="job_health" />
           </h2>
           <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
             نظارت بر تمام فرآیندهای خودکار سیستم

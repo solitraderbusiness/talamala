@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import ChatBubble from "./ChatBubble";
 import ChatPanel from "./ChatPanel";
+import { useChatContext } from "./ChatContext";
 
 interface Message {
   id: string;
@@ -14,6 +15,7 @@ const SESSION_STORAGE_KEY = "talamala_chat_session_id";
 
 export default function ChatWidget() {
   const [isOpen, setIsOpen] = useState(false);
+  const { pageContext, pendingMessage, requestOpen, clearPendingMessage, clearRequestOpen } = useChatContext();
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [streamingContent, setStreamingContent] = useState("");
@@ -26,6 +28,9 @@ export default function ChatWidget() {
   );
 
   const abortRef = useRef<AbortController | null>(null);
+  // Keep a ref to pageContext so handleSend always reads the latest value
+  const pageContextRef = useRef(pageContext);
+  pageContextRef.current = pageContext;
 
   // Load session + history from localStorage/DB on mount
   useEffect(() => {
@@ -34,7 +39,7 @@ export default function ChatWidget() {
       setSessionId(savedSessionId);
 
       // Load previous messages from the database
-      fetch(`/api/chat/history?session_id=${encodeURIComponent(savedSessionId)}`)
+      fetch(`/api/chat/history?session_id=${encodeURIComponent(savedSessionId)}`, { credentials: "include" })
         .then((res) => res.ok ? res.json() : null)
         .then((data) => {
           if (data?.messages?.length) {
@@ -76,6 +81,26 @@ export default function ChatWidget() {
     }
   }, [sessionId]);
 
+  // Open chat when requestOpen is set (e.g., from "Ask AI" button)
+  useEffect(() => {
+    if (requestOpen) {
+      setIsOpen(true);
+      clearRequestOpen();
+    }
+  }, [requestOpen, clearRequestOpen]);
+
+  // Auto-send pending message once chat is open
+  useEffect(() => {
+    if (pendingMessage && isOpen && !isLoading) {
+      const msg = pendingMessage;
+      clearPendingMessage();
+      // Small delay to let the panel render
+      const timer = setTimeout(() => handleSend(msg), 200);
+      return () => clearTimeout(timer);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingMessage, isOpen, isLoading]);
+
   const addErrorMessage = useCallback((text: string) => {
     const errorMsg: Message = {
       id: `error-${Date.now()}`,
@@ -110,9 +135,11 @@ export default function ChatWidget() {
         const response = await fetch("/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
+          credentials: "include",
           body: JSON.stringify({
             messages: [{ role: "user", content: content.trim() }],
             session_id: sessionId,
+            ...(pageContextRef.current ? { context: pageContextRef.current } : {}),
           }),
           signal: controller.signal,
         });
@@ -244,14 +271,20 @@ export default function ChatWidget() {
     [isLoading, sessionId, addErrorMessage, messages]
   );
 
-  const handleClear = useCallback(() => {
+  const handleClear = useCallback(async () => {
+    // Call backend to delete session
+    if (sessionId) {
+      try {
+        await fetch("/api/chat/session", { method: "DELETE", credentials: "include" });
+      } catch { /* non-critical */ }
+    }
     setMessages([]);
     setStreamingContent("");
     setSuggestions([]);
     setSessionId(null);
     localStorage.removeItem(SESSION_STORAGE_KEY);
     abortRef.current?.abort();
-  }, []);
+  }, [sessionId]);
 
   if (!enabled) return null;
 

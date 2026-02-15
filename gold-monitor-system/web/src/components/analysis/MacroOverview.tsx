@@ -4,12 +4,20 @@ import { cn } from "@/lib/utils";
 import type { MacroOverviewResponse, MacroCard } from "@/lib/api";
 import DataPending from "./DataPending";
 import SkeletonCard from "./SkeletonCard";
+import InfoTip from "@/components/InfoTip";
 
 const CARD_ICONS: Record<string, string> = {
   money_flow: "\uD83D\uDCB0",
   real_rates: "\uD83C\uDFE6",
   dollar: "\uD83D\uDCB5",
   risk: "\u26A0\uFE0F",
+};
+
+const CARD_TERM_KEY: Record<string, string> = {
+  money_flow: "money_flow",
+  real_rates: "real_rates",
+  dollar: "dollar_strength",
+  risk: "market_risk",
 };
 
 const IMPACT_STYLES: Record<string, { color: string; bg: string; border: string; label: string }> = {
@@ -85,6 +93,7 @@ export default function MacroOverview({ data, loading }: Props) {
         <h2 className="text-lg font-bold text-gray-900 dark:text-gray-100">
           نمای کلی بنیادی
         </h2>
+        <InfoTip term="money_flow" />
       </div>
 
       {loading ? (
@@ -106,6 +115,7 @@ export default function MacroOverview({ data, loading }: Props) {
                       <span className="text-xl">{CARD_ICONS[card.id] || ""}</span>
                       <h3 className="text-sm font-bold text-gray-900 dark:text-gray-100">
                         {card.title_fa}
+                        <InfoTip term={CARD_TERM_KEY[card.id] || card.id} />
                       </h3>
                     </div>
                     <p className="text-xs text-gray-400">در انتظار داده...</p>
@@ -124,6 +134,7 @@ export default function MacroOverview({ data, loading }: Props) {
                       <span className="text-xl">{CARD_ICONS[card.id] || ""}</span>
                       <h3 className="text-sm font-bold text-gray-900 dark:text-gray-100">
                         {card.title_fa}
+                        <InfoTip term={CARD_TERM_KEY[card.id] || card.id} />
                       </h3>
                     </div>
                     <span
@@ -143,6 +154,17 @@ export default function MacroOverview({ data, loading }: Props) {
                   {formatCardSubtext(card) && (
                     <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
                       {formatCardSubtext(card)}
+                    </p>
+                  )}
+                  {card.data?.direction_note_fa && (
+                    <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-400">
+                      {String(card.data.direction_note_fa)}
+                    </p>
+                  )}
+                  {card.data?.source && (
+                    <p className="mt-1.5 text-[10px] text-gray-400" dir="ltr">
+                      {String(card.data.source)}
+                      {card.data.source_date && ` · ${String(card.data.source_date)}`}
                     </p>
                   )}
                 </div>

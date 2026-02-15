@@ -9,6 +9,7 @@ import {
   type CalendarResponse,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import InfoTip from "@/components/InfoTip";
 
 // ── Constants ────────────────────────────────────────────────────────
 
@@ -206,10 +207,12 @@ function EventCard({
   event,
   expanded,
   onToggle,
+  historicalImpact,
 }: {
   event: CalendarEvent;
   expanded: boolean;
   onToggle: () => void;
+  historicalImpact?: EventRanking;
 }) {
   const isPast = !event.is_upcoming;
   const isNear = isWithin2Hours(event.datetime_utc);
@@ -270,7 +273,7 @@ function EventCard({
       </div>
 
       {/* Forecast / Previous / Actual row */}
-      <div className="mt-2 flex items-center gap-4 text-sm">
+      <div className="mt-2 flex flex-wrap items-center gap-2 sm:gap-4 text-sm">
         {event.forecast && (
           <span className="text-gray-500 dark:text-gray-400">
             پیش‌بینی: <span className="font-medium text-gray-700 dark:text-gray-300">{event.forecast}</span>
@@ -316,11 +319,31 @@ function EventCard({
         </div>
       )}
 
+      {/* Historical impact badge */}
+      {historicalImpact && historicalImpact.count >= 3 && (
+        <div className="mt-2 flex items-center gap-2 text-xs">
+          <span className="inline-flex items-center gap-1 rounded-md border border-gray-200 bg-gray-50 px-2 py-0.5 dark:border-gray-700 dark:bg-gray-800">
+            <span className="text-gray-500">تاثیر تاریخی:</span>
+            <span className="font-mono font-bold text-gray-700 dark:text-gray-300">
+              &plusmn;{historicalImpact.avg_abs_move_4h.toFixed(1)}%
+            </span>
+            <span className="text-gray-400">
+              ({historicalImpact.count} بار)
+            </span>
+          </span>
+          {historicalImpact.avg_abs_move_4h >= 1.0 && (
+            <span className="rounded bg-red-500/10 px-1.5 py-0.5 text-red-500 font-medium">
+              پرنوسان
+            </span>
+          )}
+        </div>
+      )}
+
       {/* Expanded details */}
       {expanded && (
         <div className="mt-4 border-t border-gray-200 dark:border-gray-700 pt-4 space-y-3">
           {/* Data table */}
-          <div className="grid grid-cols-3 gap-4 text-center">
+          <div className="grid grid-cols-3 gap-2 sm:gap-4 text-center">
             <div>
               <p className="text-xs text-gray-500 dark:text-gray-400">پیش‌بینی</p>
               <p className="text-lg font-bold text-gray-800 dark:text-gray-200">
@@ -370,13 +393,15 @@ function EventCard({
               )}
               {event.gold_impact_note.hawkish && (
                 <p className="text-sm text-gray-700 dark:text-gray-300 mb-1">
-                  <span className="text-red-500">سختگیرانه:</span>{" "}
+                  <span className="text-red-500">سختگیرانه:</span>
+                  <InfoTip term="hawkish" />{" "}
                   {event.gold_impact_note.hawkish}
                 </p>
               )}
               {event.gold_impact_note.dovish && (
                 <p className="text-sm text-gray-700 dark:text-gray-300">
-                  <span className="text-green-500">انبساطی:</span>{" "}
+                  <span className="text-green-500">انبساطی:</span>
+                  <InfoTip term="dovish" />{" "}
                   {event.gold_impact_note.dovish}
                 </p>
               )}
@@ -421,6 +446,14 @@ export default function CalendarPage() {
   );
 }
 
+interface EventRanking {
+  category: string;
+  event_name: string;
+  avg_abs_move_4h: number;
+  avg_move_4h: number;
+  count: number;
+}
+
 function CalendarPageContent() {
   const searchParams = useSearchParams();
   const highlightEventId = searchParams.get("event");
@@ -431,6 +464,7 @@ function CalendarPageContent() {
   const [counts, setCounts] = useState({ total: 0, high: 0, medium: 0, low: 0 });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [impactRankings, setImpactRankings] = useState<EventRanking[]>([]);
 
   // Filters
   const [assetFilter, setAssetFilter] = useState("all");
@@ -476,6 +510,16 @@ function CalendarPageContent() {
     fetchEvents();
   }, [fetchEvents]);
 
+  // Fetch historical impact rankings (once)
+  useEffect(() => {
+    fetch("/api/analysis/event-impact/rankings")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data?.rankings) setImpactRankings(data.rankings);
+      })
+      .catch(() => {});
+  }, []);
+
   // Auto-refresh every 5 minutes
   useEffect(() => {
     const interval = setInterval(fetchEvents, 300_000);
@@ -496,6 +540,7 @@ function CalendarPageContent() {
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">
           تقویم رویدادهای اقتصادی
+          <InfoTip term="economic_event" />
         </h1>
         <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
           رویدادهای مهم اقتصادی که بر بازار طلا و ارز تاثیر می‌گذارند
@@ -549,6 +594,7 @@ function CalendarPageContent() {
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-sm text-gray-500 dark:text-gray-400 ml-2">
             اهمیت:
+            <InfoTip term="event_impact" />
           </span>
           {IMPACT_FILTERS.map((f) => (
             <button
@@ -588,19 +634,19 @@ function CalendarPageContent() {
         </div>
 
         {/* Week navigator */}
-        <div className="flex items-center justify-center gap-4">
+        <div className="flex flex-wrap items-center justify-center gap-2 sm:gap-4">
           <button
             onClick={() => setWeekOffset(weekOffset - 1)}
-            className="btn-secondary text-sm"
+            className="btn-secondary text-xs sm:text-sm"
           >
             &#9664; هفته قبل
           </button>
-          <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+          <span className="text-xs sm:text-sm font-medium text-gray-700 dark:text-gray-300">
             {weekRange.label}
           </span>
           <button
             onClick={() => setWeekOffset(weekOffset + 1)}
-            className="btn-secondary text-sm"
+            className="btn-secondary text-xs sm:text-sm"
           >
             هفته بعد &#9654;
           </button>
@@ -684,20 +730,28 @@ function CalendarPageContent() {
 
                   {/* Events for this date */}
                   <div className="space-y-2">
-                    {dateEvents.map((event) => (
-                      <div
-                        key={event.id}
-                        ref={event.id === highlightEventId ? highlightRef : undefined}
-                      >
-                        <EventCard
-                          event={event}
-                          expanded={expandedId === event.id}
-                          onToggle={() =>
-                            setExpandedId(expandedId === event.id ? null : event.id)
-                          }
-                        />
-                      </div>
-                    ))}
+                    {dateEvents.map((event) => {
+                      const ranking = impactRankings.find(
+                        (r) =>
+                          r.event_name === event.event_name ||
+                          r.category === event.category
+                      );
+                      return (
+                        <div
+                          key={event.id}
+                          ref={event.id === highlightEventId ? highlightRef : undefined}
+                        >
+                          <EventCard
+                            event={event}
+                            expanded={expandedId === event.id}
+                            onToggle={() =>
+                              setExpandedId(expandedId === event.id ? null : event.id)
+                            }
+                            historicalImpact={ranking}
+                          />
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               ))}
@@ -774,14 +828,22 @@ function CalendarPageContent() {
                     <div className="mt-3 border-t border-gray-200 dark:border-gray-700 pt-3">
                       {dateEvents
                         .filter((e) => e.id === expandedId)
-                        .map((event) => (
-                          <EventCard
-                            key={event.id}
-                            event={event}
-                            expanded={true}
-                            onToggle={() => setExpandedId(null)}
-                          />
-                        ))}
+                        .map((event) => {
+                          const ranking = impactRankings.find(
+                            (r) =>
+                              r.event_name === event.event_name ||
+                              r.category === event.category
+                          );
+                          return (
+                            <EventCard
+                              key={event.id}
+                              event={event}
+                              expanded={true}
+                              onToggle={() => setExpandedId(null)}
+                              historicalImpact={ranking}
+                            />
+                          );
+                        })}
                     </div>
                   )}
                 </div>

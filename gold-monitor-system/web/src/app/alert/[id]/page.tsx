@@ -9,6 +9,7 @@ import {
   timeHorizonLabel,
   directionLabel,
 } from "@/lib/utils";
+import InfoTip from "@/components/InfoTip";
 
 /** Check if text is mostly Latin/English. */
 function isLikelyEnglish(text: string): boolean {
@@ -176,6 +177,7 @@ export default function AlertDetailPage() {
                 }`}
               >
                 {timeHorizonLabel(alert.time_horizon)}
+                <InfoTip term="time_horizon" />
               </span>
             </div>
           </div>
@@ -288,6 +290,7 @@ export default function AlertDetailPage() {
               <div>
                 <h2 className={`text-base font-semibold ${dc.color}`}>
                   {dc.label}
+                  <InfoTip term="alert_direction" />
                 </h2>
                 <p className="text-xs text-gray-500 dark:text-gray-400">
                   بر اساس تحلیل قوانین و محتوای خبر

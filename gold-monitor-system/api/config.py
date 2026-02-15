@@ -68,5 +68,16 @@ class Settings(BaseSettings):
     # ── Fundamental Analysis ───────────────────────────────────────────────
     FRED_API_KEY: str = ""
 
+    # ── CORS ───────────────────────────────────────────────────────────────
+    CORS_ALLOWED_ORIGINS: str = "http://localhost:3000"  # comma-separated, "*" for dev
+
+    # ── Chat retention ───────────────────────────────────────────────────
+    CHAT_RETENTION_DAYS: int = 30
+
+    # ── Reconciliation ───────────────────────────────────────────────────
+    RECONCILE_LOOKBACK_DAYS: int = 7
+    RECONCILE_BATCH_SIZE: int = 50
+    RECONCILE_INTERVAL_SECONDS: int = 300  # 5 minutes
+
 
 settings = Settings()

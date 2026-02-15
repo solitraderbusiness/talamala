@@ -3,6 +3,7 @@
 import type { ShanghaiPremiumResponse } from "@/lib/api";
 import DataPending from "./DataPending";
 import SkeletonCard from "./SkeletonCard";
+import InfoTip from "@/components/InfoTip";
 
 interface Props {
   data: ShanghaiPremiumResponse | null;
@@ -16,6 +17,7 @@ export default function ShanghaiPremium({ data, loading }: Props) {
         <h2 className="text-lg font-bold text-gray-900 dark:text-gray-100">
           &#x1F1E8;&#x1F1F3; حق بیمه شانگهای
         </h2>
+        <InfoTip term="shanghai_premium" />
       </div>
 
       {loading ? (

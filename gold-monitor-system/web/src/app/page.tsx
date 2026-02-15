@@ -9,8 +9,10 @@ import {
   getPrices,
   getSentiment,
   getUpcomingEvents,
+  getVideos,
   type Alert,
   type AlertStats,
+  type CuratedVideo,
   type DataFreshness,
   type PricesResponse,
   type PriceItem,
@@ -23,7 +25,7 @@ import {
 import AlertCard from "@/components/AlertCard";
 import RiskGauge from "@/components/RiskGauge";
 import SentimentChart from "@/components/SentimentChart";
-import SeverityBadge from "@/components/SeverityBadge";
+import InfoTip from "@/components/InfoTip";
 import { timeAgo, cn } from "@/lib/utils";
 
 const PRICE_KEYS = ["gold_global", "gold_18k", "usd", "emami_coin"] as const;
@@ -38,6 +40,13 @@ const PRICE_FALLBACK: Record<string, { label: string; unit: string; icon: string
   gold_18k: { label: "طلای ۱۸ عیار", unit: "تومان/گرم", icon: "💛" },
   usd: { label: "دلار", unit: "تومان", icon: "💵" },
   emami_coin: { label: "سکه امامی", unit: "تومان", icon: "🪙" },
+};
+
+const PRICE_TERM_KEY: Record<string, string> = {
+  gold_global: "gold_global",
+  gold_18k: "gold_18k",
+  usd: "usd_irr",
+  emami_coin: "emami_coin",
 };
 
 const SENTIMENT_COLORS: Record<string, string> = {
@@ -75,6 +84,7 @@ export default function DashboardPage() {
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [totalAlerts, setTotalAlerts] = useState(0);
   const [upcomingEvents, setUpcomingEvents] = useState<CalendarEvent[]>([]);
+  const [latestVideo, setLatestVideo] = useState<CuratedVideo | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [freshness, setFreshness] = useState<DataFreshness | null>(null);
@@ -138,11 +148,12 @@ export default function DashboardPage() {
    *  Also detects new alerts and triggers sentiment refresh. */
   const refreshAll = useCallback(async () => {
     try {
-      const [statsData, , pricesData, upcomingData] = await Promise.allSettled([
+      const [statsData, , pricesData, upcomingData, videosData] = await Promise.allSettled([
         getAlertStats(),
         fetchAlerts(),
         getPrices(),
-        getUpcomingEvents(5, "high"),
+        getUpcomingEvents(5, "medium"),
+        getVideos({ per_page: 1 }),
       ]);
       if (statsData.status === "fulfilled") {
         const newStats = statsData.value;
@@ -160,6 +171,7 @@ export default function DashboardPage() {
       }
       if (pricesData.status === "fulfilled") setPrices(pricesData.value);
       if (upcomingData.status === "fulfilled") setUpcomingEvents(upcomingData.value.events || []);
+      if (videosData.status === "fulfilled") setLatestVideo(videosData.value.videos?.[0] ?? null);
       setLastUpdated(new Date());
     } catch {
       // Silent — don't overwrite the page with an error on a background poll
@@ -247,7 +259,7 @@ export default function DashboardPage() {
     <div className="space-y-6">
       {/* Page title + refresh controls */}
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
+        <div className="min-w-0">
           <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">
             داشبورد بازار
           </h1>
@@ -255,7 +267,7 @@ export default function DashboardPage() {
             نمای کلی بازار طلا و ارز
           </p>
         </div>
-        <div className="flex items-center gap-3 text-sm">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3 text-sm">
           {lastUpdated && (
             <span className="text-gray-400">
               آخرین به‌روزرسانی:{" "}
@@ -294,6 +306,7 @@ export default function DashboardPage() {
           <div className="mb-3 flex items-center justify-between">
             <h2 className="text-sm font-bold text-gray-900 dark:text-gray-100">
               تحلیل احساسات بازار
+              <InfoTip term="sentiment_index" />
             </h2>
             {sentiment && (
               <div className="flex gap-1">
@@ -322,7 +335,7 @@ export default function DashboardPage() {
           ) : activeSentiment ? (
             <div className="space-y-3">
               {/* Sentiment badge + summary */}
-              <div className={`flex items-start gap-4 rounded-lg border p-3 transition-colors duration-500 ${SENTIMENT_BG[activeSentiment.sentiment] || SENTIMENT_BG.neutral}`}>
+              <div className={`flex flex-col sm:flex-row items-start gap-3 sm:gap-4 rounded-lg border p-3 transition-colors duration-500 ${SENTIMENT_BG[activeSentiment.sentiment] || SENTIMENT_BG.neutral}`}>
                 <div className="text-center">
                   <div className={`text-2xl font-bold transition-colors duration-500 ${SENTIMENT_COLORS[activeSentiment.sentiment] || ""}`}>
                     {activeSentiment.sentiment_label}
@@ -378,6 +391,7 @@ export default function DashboardPage() {
           <div className="mb-2 flex items-center justify-between">
             <h3 className="text-sm font-medium text-gray-600 dark:text-gray-400">
               شاخص احساسات
+              <InfoTip term="sentiment_index" />
             </h3>
             <button
               onClick={() => setGaugeView(gaugeView === "gauge" ? "chart" : "gauge")}
@@ -446,6 +460,7 @@ export default function DashboardPage() {
               <span className="text-2xl">{priceItem?.icon || fallback.icon}</span>
               <h3 className="mt-2 text-sm font-medium text-gray-600 dark:text-gray-400">
                 {priceItem?.label || fallback.label}
+                <InfoTip term={PRICE_TERM_KEY[key] || key} />
               </h3>
               <p className="mt-1 text-lg font-bold text-gray-900 dark:text-gray-100" dir="ltr">
                 {priceItem?.formatted || "---"}
@@ -481,6 +496,7 @@ export default function DashboardPage() {
           <div className="mb-3 flex items-center justify-between">
             <h3 className="text-sm font-bold text-gray-900 dark:text-gray-100">
               رویدادهای مهم پیش‌رو
+              <InfoTip term="economic_event" />
             </h3>
             <Link
               href="/calendar"
@@ -533,82 +549,15 @@ export default function DashboardPage() {
               })}
             </div>
           ) : (
-            <p className="py-6 text-center text-sm text-gray-400">
-              رویدادی موجود نیست
-            </p>
+            <div className="py-4 text-center">
+              <p className="text-sm text-gray-400">
+                رویداد مهمی در دسترس نیست
+              </p>
+              <p className="mt-1 text-[11px] text-gray-300 dark:text-gray-500">
+                تقویم هفته آینده معمولا آخر هفته منتشر می‌شود
+              </p>
+            </div>
           )}
-        </div>
-
-        {/* Alert counts */}
-        <div className="card">
-          <div className="mb-4 flex items-center justify-between">
-            <h3 className="text-sm font-medium text-gray-600 dark:text-gray-400">
-              هشدارهای امروز
-            </h3>
-            <span className="text-2xl font-bold text-gray-900 dark:text-gray-100">
-              {(stats?.counts?.critical ?? 0) + (stats?.counts?.high ?? 0) + (stats?.counts?.medium ?? 0) + (stats?.counts?.low ?? 0)}
-            </span>
-          </div>
-          <div className="space-y-2.5">
-            {(stats?.counts?.critical ?? 0) > 0 && (
-              <div className="space-y-1">
-                <div className="flex items-center justify-between">
-                  <SeverityBadge severity="critical" />
-                  <span className="text-sm font-bold text-purple-600">
-                    {stats?.counts?.critical ?? 0}
-                  </span>
-                </div>
-                <div className="h-1.5 rounded-full bg-gray-100 dark:bg-gray-800">
-                  <div
-                    className="h-full rounded-full bg-purple-500 transition-all duration-500"
-                    style={{ width: `${Math.max(((stats?.counts?.critical ?? 0) / Math.max((stats?.counts?.critical ?? 0) + (stats?.counts?.high ?? 0) + (stats?.counts?.medium ?? 0) + (stats?.counts?.low ?? 0), 1)) * 100, 5)}%` }}
-                  />
-                </div>
-              </div>
-            )}
-            <div className="space-y-1">
-              <div className="flex items-center justify-between">
-                <SeverityBadge severity="high" />
-                <span className="text-sm font-bold text-red-600">
-                  {stats?.counts?.high ?? 0}
-                </span>
-              </div>
-              <div className="h-1.5 rounded-full bg-gray-100 dark:bg-gray-800">
-                <div
-                  className="h-full rounded-full bg-red-500 transition-all duration-500"
-                  style={{ width: `${Math.max(((stats?.counts?.high ?? 0) / Math.max((stats?.counts?.critical ?? 0) + (stats?.counts?.high ?? 0) + (stats?.counts?.medium ?? 0) + (stats?.counts?.low ?? 0), 1)) * 100, (stats?.counts?.high ?? 0) > 0 ? 5 : 0)}%` }}
-                />
-              </div>
-            </div>
-            <div className="space-y-1">
-              <div className="flex items-center justify-between">
-                <SeverityBadge severity="medium" />
-                <span className="text-sm font-bold text-amber-600">
-                  {stats?.counts?.medium ?? 0}
-                </span>
-              </div>
-              <div className="h-1.5 rounded-full bg-gray-100 dark:bg-gray-800">
-                <div
-                  className="h-full rounded-full bg-amber-500 transition-all duration-500"
-                  style={{ width: `${Math.max(((stats?.counts?.medium ?? 0) / Math.max((stats?.counts?.critical ?? 0) + (stats?.counts?.high ?? 0) + (stats?.counts?.medium ?? 0) + (stats?.counts?.low ?? 0), 1)) * 100, (stats?.counts?.medium ?? 0) > 0 ? 5 : 0)}%` }}
-                />
-              </div>
-            </div>
-            <div className="space-y-1">
-              <div className="flex items-center justify-between">
-                <SeverityBadge severity="low" />
-                <span className="text-sm font-bold text-gray-600 dark:text-gray-400">
-                  {stats?.counts?.low ?? 0}
-                </span>
-              </div>
-              <div className="h-1.5 rounded-full bg-gray-100 dark:bg-gray-800">
-                <div
-                  className="h-full rounded-full bg-gray-400 transition-all duration-500"
-                  style={{ width: `${Math.max(((stats?.counts?.low ?? 0) / Math.max((stats?.counts?.critical ?? 0) + (stats?.counts?.high ?? 0) + (stats?.counts?.medium ?? 0) + (stats?.counts?.low ?? 0), 1)) * 100, (stats?.counts?.low ?? 0) > 0 ? 5 : 0)}%` }}
-                />
-              </div>
-            </div>
-          </div>
         </div>
 
         {/* Top alerts (most important) */}
@@ -628,6 +577,60 @@ export default function DashboardPage() {
             )}
           </div>
         </div>
+
+        {/* Latest video */}
+        <div className="card">
+          <div className="mb-3 flex items-center justify-between">
+            <h3 className="text-sm font-bold text-gray-900 dark:text-gray-100">
+              آخرین ویدیو
+            </h3>
+            <Link
+              href="/analysis/videos"
+              className="inline-flex items-center gap-1 rounded-lg border border-gold-500/30 bg-gold-50/50 px-2 py-1 text-[11px] font-medium text-gold-700 transition-colors hover:bg-gold-100 dark:border-gold-500/20 dark:bg-gold-900/10 dark:text-gold-400 dark:hover:bg-gold-900/30"
+            >
+              همه ویدیوها &#8592;
+            </Link>
+          </div>
+          {latestVideo ? (
+            <Link
+              href={`/analysis/videos/${latestVideo.id}`}
+              className="group block overflow-hidden rounded-lg"
+            >
+              <div className="relative aspect-video overflow-hidden rounded-lg bg-gray-100 dark:bg-gray-800">
+                <img
+                  src={latestVideo.thumbnail_url}
+                  alt={latestVideo.title_fa || latestVideo.title_original || ""}
+                  className="h-full w-full object-cover transition-transform group-hover:scale-105"
+                  loading="lazy"
+                />
+                {/* Play button overlay */}
+                <div className="absolute inset-0 flex items-center justify-center bg-black/20 opacity-0 transition-opacity group-hover:opacity-100">
+                  <div className="rounded-full bg-white/90 p-2">
+                    <svg className="h-6 w-6 text-gray-900" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M8 5v14l11-7z" />
+                    </svg>
+                  </div>
+                </div>
+                {latestVideo.duration_formatted && (
+                  <span className="absolute bottom-1.5 left-1.5 rounded bg-black/80 px-1.5 py-0.5 text-[10px] font-medium text-white">
+                    {latestVideo.duration_formatted}
+                  </span>
+                )}
+              </div>
+              <h4 className="mt-2 line-clamp-2 text-xs font-bold text-gray-900 dark:text-gray-100">
+                {latestVideo.title_fa || latestVideo.title_original || latestVideo.youtube_id}
+              </h4>
+              <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px] text-gray-500 dark:text-gray-400">
+                {latestVideo.channel_name && <span>{latestVideo.channel_name}</span>}
+                {latestVideo.published_at && <span>{timeAgo(latestVideo.published_at)}</span>}
+              </div>
+            </Link>
+          ) : (
+            <p className="py-6 text-center text-sm text-gray-400">
+              ویدیویی موجود نیست
+            </p>
+          )}
+        </div>
       </div>
 
       {/* ─── Categorized Alert Sections ─── */}
@@ -637,7 +640,7 @@ export default function DashboardPage() {
             دسته‌بندی هشدارها
           </h2>
           {/* Section filter tabs */}
-          <div className="mb-4 flex flex-wrap gap-2">
+          <div className="mb-4 flex flex-wrap gap-2 overflow-hidden">
             <button
               onClick={() => { setActiveSection(null); setPage(0); }}
               className={`rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${
@@ -676,7 +679,7 @@ export default function DashboardPage() {
               return (
                 <div
                   key={sec.id}
-                  className="rounded-xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-900"
+                  className="rounded-xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-900 overflow-hidden"
                 >
                   {/* Section header */}
                   <div className="flex items-center justify-between border-b border-gray-100 px-4 py-3 dark:border-gray-800">
@@ -762,7 +765,7 @@ export default function DashboardPage() {
               setSearch(e.target.value);
               setPage(0);
             }}
-            className="input-field max-w-xs"
+            className="input-field w-full sm:max-w-xs"
           />
           <select
             value={severity}
@@ -847,7 +850,7 @@ function FreshnessBar({ freshness }: { freshness: DataFreshness }) {
   if (items.length === 0) return null;
 
   return (
-    <div className="flex flex-wrap items-center gap-4 rounded-lg bg-gray-50 px-4 py-2 text-xs dark:bg-gray-800/50">
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg bg-gray-50 px-4 py-2 text-xs dark:bg-gray-800/50 overflow-hidden">
       <span className="font-medium text-gray-500 dark:text-gray-400">
         آخرین بروزرسانی:
       </span>
