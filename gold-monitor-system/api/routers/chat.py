@@ -41,6 +41,7 @@ from api.services.chat.intent_classifier import (
 )
 from api.services.chat.tool_executor import execute_tool
 from api.services.chat.tools import TOOL_DEFINITIONS
+from api.services.chat.cookie_session import sign_session_id, verify_session_cookie
 
 logger = logging.getLogger(__name__)
 
@@ -54,9 +55,21 @@ class ChatMessage(BaseModel):
     content: str = Field(..., min_length=1, max_length=500)
 
 
+class ChatContext(BaseModel):
+    """Optional page context — what the user is currently viewing."""
+    type: str | None = None          # "video", "article", "page"
+    videoId: int | None = None
+    articleId: int | None = None
+    title: str | None = None
+    summary: str | None = None
+    channel: str | None = None
+    url: str | None = None
+
+
 class ChatRequest(BaseModel):
     messages: list[ChatMessage] = Field(..., min_length=1, max_length=1)
     session_id: str | None = None
+    context: ChatContext | None = None
 
 
 class ChatStatusResponse(BaseModel):
@@ -104,6 +117,7 @@ async def _generate_sse(
     user_content: str,
     session_id: uuid.UUID,
     ip_address: str,
+    context: ChatContext | None = None,
 ):
     """Generator that handles the full chat flow and yields SSE events."""
     client = ChatOpenRouterClient()
@@ -131,6 +145,53 @@ async def _generate_sse(
                 pass
 
             system_prompt = build_system_prompt(custom_prompt)
+
+            # 2b. Inject page context if available
+            if context and context.type == "video" and context.title:
+                ctx_block = (
+                    "\n\nCONTEXT: The user is currently viewing a video page.\n"
+                    f"Video title: {context.title}\n"
+                )
+                if context.channel:
+                    ctx_block += f"Channel: {context.channel}\n"
+                if context.summary:
+                    ctx_block += f"Summary: {context.summary[:500]}\n"
+
+                # Fetch transcript from DB for richer context
+                if context.videoId:
+                    try:
+                        from api.videos.models import CuratedVideo
+                        from sqlalchemy import select as sa_select
+                        vid_result = await db.execute(
+                            sa_select(CuratedVideo.transcript, CuratedVideo.key_points_fa)
+                            .where(CuratedVideo.id == context.videoId)
+                        )
+                        vid_row = vid_result.first()
+                        if vid_row and vid_row.transcript:
+                            ctx_block += f"Transcript (first 3000 chars): {vid_row.transcript[:3000]}\n"
+                        if vid_row and vid_row.key_points_fa:
+                            points = vid_row.key_points_fa
+                            if isinstance(points, list):
+                                ctx_block += "Key points: " + " | ".join(points[:5]) + "\n"
+                    except Exception as ctx_err:
+                        logger.warning("[chat-sse] Failed to load video transcript: %s", ctx_err)
+
+                ctx_block += (
+                    "If the user's question relates to this video, use this context to answer in detail. "
+                    "If not, answer normally using tools."
+                )
+                system_prompt += ctx_block
+
+            # 2c. Inject analysis card context if type == "page"
+            elif context and context.type == "page" and context.title:
+                ctx_block = (
+                    "\n\nCONTEXT: The user clicked 'Ask' on a Live Analysis card.\n"
+                    f"Card: {context.title}\n"
+                    "Use the appropriate tool (get_metric_latest, explain_calc_run, "
+                    "get_live_snapshot, get_changes) to fetch current data for this "
+                    "card and answer the user's question with real numbers.\n"
+                )
+                system_prompt += ctx_block
 
             # 3. Build messages array
             messages: list[dict[str, Any]] = [
@@ -231,6 +292,13 @@ async def _generate_sse(
                 remaining = cleaned_response[yielded_up_to:]
                 if remaining:
                     yield f"data: {json.dumps({'type': 'content', 'content': remaining}, ensure_ascii=False)}\n\n"
+
+                # Fallback if LLM returned empty content (e.g. only meta tags)
+                if not cleaned_response.strip():
+                    logger.warning("[chat-sse] Empty response after tools, sending fallback")
+                    cleaned_response = "متأسفانه نتوانستم پاسخ مناسبی تولید کنم. لطفاً سوالتان را به شکل دیگری بپرسید."
+                    yield f"data: {json.dumps({'type': 'content', 'content': cleaned_response}, ensure_ascii=False)}\n\n"
+
                 logger.info("[chat-sse] Streaming complete, response length=%d, meta=%s", len(cleaned_response), bool(chat_meta))
 
                 # Save cleaned assistant response
@@ -243,14 +311,13 @@ async def _generate_sse(
                 await db.commit()
 
             else:
-                # No tool calls — strip meta before streaming
+                # No tool calls — response already complete from first call
                 raw_content = client.extract_content(response_data)
                 if raw_content:
                     cleaned_response, chat_meta = extract_and_strip_meta(raw_content)
-                    chunk_size = 10
-                    for i in range(0, len(cleaned_response), chunk_size):
-                        chunk = cleaned_response[i:i + chunk_size]
-                        yield f"data: {json.dumps({'type': 'content', 'content': chunk}, ensure_ascii=False)}\n\n"
+                    # Yield in a single chunk (already fully generated)
+                    if cleaned_response:
+                        yield f"data: {json.dumps({'type': 'content', 'content': cleaned_response}, ensure_ascii=False)}\n\n"
 
                     saved_msg = await save_message(
                         db, session_id, "assistant", cleaned_response,
@@ -311,10 +378,18 @@ async def chat(
     if not allowed:
         return _error_json(error_msg or "محدودیت ارسال", "rate_limited", 429)
 
+    # Read session from cookie if present (preferred over body session_id)
+    cookie_session_id = None
+    cookie_val = request.cookies.get("tala_sid")
+    if cookie_val:
+        cookie_session_id = verify_session_cookie(cookie_val)
+
+    effective_session_id = cookie_session_id or chat_request.session_id
+
     # Get or create session — wrapped in try/except for DB errors
     try:
         session, is_new = await get_or_create_session(
-            db, chat_request.session_id, ip_address
+            db, effective_session_id, ip_address
         )
     except Exception as e:
         logger.exception("Failed to create chat session: %s", e)
@@ -344,9 +419,9 @@ async def chat(
         logger.exception("Failed to commit session: %s", e)
         return _error_json("خطای دیتابیس. لطفاً دوباره تلاش کنید.", "db_error", 500)
 
-    # Return SSE stream
-    return StreamingResponse(
-        _generate_sse(sanitized_content, session.id, ip_address),
+    # Return SSE stream with signed session cookie
+    sse_response = StreamingResponse(
+        _generate_sse(sanitized_content, session.id, ip_address, context=chat_request.context),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -355,11 +430,28 @@ async def chat(
             "X-Chat-Session-Id": str(session.id),
         },
     )
+    sse_response.set_cookie(
+        key="tala_sid",
+        value=sign_session_id(str(session.id)),
+        httponly=True,
+        samesite="lax",
+        secure=False,  # Set True in production (HTTPS)
+        max_age=86400,
+        path="/api/chat",
+    )
+    return sse_response
 
 
 @router.get("/history")
-async def chat_history(session_id: str | None = None):
-    """Return messages for an existing chat session (no auth — session_id is the secret)."""
+async def chat_history(request: Request, session_id: str | None = None):
+    """Return messages for an existing chat session."""
+    # Prefer cookie over query param
+    cookie_val = request.cookies.get("tala_sid")
+    if cookie_val:
+        cookie_sid = verify_session_cookie(cookie_val)
+        if cookie_sid:
+            session_id = cookie_sid
+
     if not session_id:
         return JSONResponse(content={"messages": []})
 
@@ -415,3 +507,36 @@ async def chat_status():
         pass
 
     return ChatStatusResponse(enabled=enabled, welcome_message=welcome)
+
+
+@router.delete("/session")
+async def delete_chat_session(request: Request):
+    """Clear the current chat session (user "clear chat")."""
+    cookie_val = request.cookies.get("tala_sid")
+    session_id = verify_session_cookie(cookie_val) if cookie_val else None
+
+    if not session_id:
+        return JSONResponse(content={"ok": False, "error": "no session"})
+
+    try:
+        sid = uuid.UUID(session_id)
+    except ValueError:
+        return JSONResponse(content={"ok": False, "error": "invalid session"})
+
+    async with AsyncSessionLocal() as db:
+        from api.models import ChatMessage as ChatMessageModel, ChatSession as ChatSessionModel
+        from sqlalchemy import delete
+
+        # Delete messages first (FK constraint)
+        await db.execute(
+            delete(ChatMessageModel).where(ChatMessageModel.session_id == sid)
+        )
+        # Delete the session
+        await db.execute(
+            delete(ChatSessionModel).where(ChatSessionModel.id == sid)
+        )
+        await db.commit()
+
+    response = JSONResponse(content={"ok": True})
+    response.delete_cookie("tala_sid", path="/api/chat")
+    return response
