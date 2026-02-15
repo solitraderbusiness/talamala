@@ -317,4 +317,73 @@ TOOL_DEFINITIONS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_analysis_snapshot",
+            "description": (
+                "Get a snapshot of all 6 canonical analysis indicators with scores. "
+                "Use when user asks 'خلاصه تحلیل', 'شاخص‌ها چطورن؟', "
+                "'analysis snapshot', 'how are indicators?', 'وضعیت شاخص‌ها'."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_indicator_detail",
+            "description": (
+                "Get detailed info about a specific canonical indicator. "
+                "Use when user asks about one indicator in detail, e.g. "
+                "'جزئیات ETF', 'COT چطوره؟', 'detail of VIX', 'شاخص دلار'. "
+                "Available indicator_ids: ETF_FLOW_GLD, COT_POSITION, REAL_RATES, "
+                "DOLLAR_STRENGTH, VIX_LEVEL, GOLD_PRICE_MOMENTUM."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "indicator_id": {
+                        "type": "string",
+                        "description": (
+                            "The canonical indicator ID. One of: "
+                            "ETF_FLOW_GLD, COT_POSITION, REAL_RATES, "
+                            "DOLLAR_STRENGTH, VIX_LEVEL, GOLD_PRICE_MOMENTUM"
+                        ),
+                    },
+                },
+                "required": ["indicator_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "explain_indicator",
+            "description": (
+                "Explain how a specific indicator score is calculated — full provenance. "
+                "Use when user asks 'این امتیاز چطوری حساب شده؟', "
+                "'explain calculation', 'چرا این عدده؟', 'محاسبه شاخص'. "
+                "Available indicator_ids: ETF_FLOW_GLD, COT_POSITION, REAL_RATES, "
+                "DOLLAR_STRENGTH, VIX_LEVEL, GOLD_PRICE_MOMENTUM."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "indicator_id": {
+                        "type": "string",
+                        "description": (
+                            "The canonical indicator ID. One of: "
+                            "ETF_FLOW_GLD, COT_POSITION, REAL_RATES, "
+                            "DOLLAR_STRENGTH, VIX_LEVEL, GOLD_PRICE_MOMENTUM"
+                        ),
+                    },
+                },
+                "required": ["indicator_id"],
+            },
+        },
+    },
 ]

@@ -144,6 +144,30 @@ async def build_live_snapshot(
         logger.debug("Money flow derived stats failed for snapshot", exc_info=True)
         computed["money_flow_derived"] = {"error": "computation failed"}
 
+    # Canonical indicators
+    try:
+        from api.analysis.indicator_registry import (
+            INDICATORS,
+            compute_all_indicators,
+            indicator_to_dict,
+        )
+        canonical_results = await compute_all_indicators(session)
+        computed["canonical_indicators"] = {
+            ind_id: {
+                "label_fa": INDICATORS[ind_id].label_fa if ind_id in INDICATORS else ind_id,
+                "score": r.score,
+                "percentile": r.percentile,
+                "zscore": r.zscore,
+                "stale": r.stale,
+                "crowded": r.crowded,
+                "source_name": r.source_name,
+            }
+            for ind_id, r in canonical_results.items()
+        }
+    except Exception:
+        logger.debug("Canonical indicators failed for snapshot", exc_info=True)
+        computed["canonical_indicators"] = {"error": "computation failed"}
+
     # Risk radar
     try:
         from api.services.analysis.risk_radar_engine import compute_risk_radar

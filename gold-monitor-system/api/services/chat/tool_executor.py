@@ -130,6 +130,12 @@ async def execute_tool(
             result = await _get_changes(arguments, db)
         elif tool_name == "get_freshness_report":
             result = await _get_freshness_report(arguments, db)
+        elif tool_name == "get_analysis_snapshot":
+            result = await _get_analysis_snapshot(arguments, db)
+        elif tool_name == "get_indicator_detail":
+            result = await _get_indicator_detail(arguments, db)
+        elif tool_name == "explain_indicator":
+            result = await _explain_indicator(arguments, db)
         else:
             result = {"error": f"Unknown tool: {tool_name}"}
     except Exception as e:
@@ -868,7 +874,41 @@ async def _explain_calc_run(args: dict[str, Any], db: AsyncSession) -> dict:
             logger.warning("Risk radar explain failed: %s", e)
             return {"metric_key": metric_key, "error": "computation failed"}
 
-    return {"error": f"explain not available for '{metric_key}'. Use 'sentiment_composite', 'risk_radar', or 'money_flow'."}
+    if metric_key == "momentum":
+        try:
+            from api.services.analysis.momentum_engine import compute_momentum
+            result = await compute_momentum(db)
+            return {
+                "metric_key": metric_key,
+                "run_type": "momentum",
+                "asset": "XAUUSD",
+                "ts": result.get("meta", {}).get("computed_at"),
+                "outputs": {
+                    "composite_score": result.get("composite_score"),
+                    "direction": result.get("composite_direction"),
+                    "direction_fa": result.get("composite_direction_fa"),
+                },
+                "inputs": [
+                    {
+                        "name": d["id"],
+                        "label_fa": d.get("label_fa"),
+                        "score": d["score"],
+                        "weight": d["weight"],
+                        "raw_value": d.get("raw_value"),
+                        "raw_unit": d.get("raw_unit"),
+                        "explanation": d.get("explanation_fa"),
+                    }
+                    for d in result.get("drivers", [])
+                ],
+                "scoring_method": "percentile_zscore",
+                "engine_version": result.get("meta", {}).get("engine_version"),
+                "warnings": result.get("warnings", []),
+            }
+        except Exception as e:
+            logger.warning("Momentum explain failed: %s", e)
+            return {"metric_key": metric_key, "error": "computation failed"}
+
+    return {"error": f"explain not available for '{metric_key}'. Use 'sentiment_composite', 'risk_radar', 'momentum', or 'money_flow'."}
 
 
 async def _get_changes(args: dict[str, Any], db: AsyncSession) -> dict:
@@ -896,3 +936,146 @@ async def _get_freshness_report(args: dict[str, Any], db: AsyncSession) -> dict:
         "stale_count": len(stale),
         "metrics": metrics,
     }
+
+
+# ── Canonical indicator tools ──────────────────────────────────────────
+
+async def _get_analysis_snapshot(args: dict[str, Any], db: AsyncSession) -> dict:
+    """Get a snapshot of all 6 canonical analysis indicators."""
+    try:
+        from api.analysis.indicator_registry import (
+            INDICATORS,
+            compute_all_indicators,
+            indicator_to_dict,
+        )
+
+        results = await compute_all_indicators(db)
+        indicators = {}
+        for ind_id, result in results.items():
+            defn = INDICATORS.get(ind_id)
+            d = indicator_to_dict(result, defn)
+            # Compact version for chat
+            indicators[ind_id] = {
+                "label_fa": d.get("label_fa", ind_id),
+                "score": d["score"],
+                "percentile": d["percentile"],
+                "direction": d["direction"],
+                "stale": d["stale"],
+                "crowded": d["crowded"],
+                "source_name": d["source_name"],
+                "zscore": d["zscore"],
+                "raw_value": d["raw_value"],
+                "raw_units": d.get("raw_units"),
+            }
+
+        return {
+            "count": len(indicators),
+            "indicators": indicators,
+        }
+    except Exception as e:
+        logger.warning("get_analysis_snapshot failed: %s", e)
+        return {"error": "failed to compute analysis snapshot"}
+
+
+async def _get_indicator_detail(args: dict[str, Any], db: AsyncSession) -> dict:
+    """Get detailed info about a specific canonical indicator."""
+    try:
+        from api.analysis.indicator_registry import (
+            INDICATORS,
+            compute_indicator,
+            indicator_to_dict,
+        )
+
+        indicator_id = (args.get("indicator_id") or "").strip().upper()
+
+        # Try to match partial names
+        _ALIASES = {
+            "ETF": "ETF_FLOW_GLD",
+            "GLD": "ETF_FLOW_GLD",
+            "COT": "COT_POSITION",
+            "RATES": "REAL_RATES",
+            "REAL_RATES": "REAL_RATES",
+            "DOLLAR": "DOLLAR_STRENGTH",
+            "DXY": "DOLLAR_STRENGTH",
+            "VIX": "VIX_LEVEL",
+            "MOMENTUM": "GOLD_PRICE_MOMENTUM",
+            "GOLD": "GOLD_PRICE_MOMENTUM",
+        }
+        indicator_id = _ALIASES.get(indicator_id, indicator_id)
+
+        if indicator_id not in INDICATORS:
+            return {
+                "error": f"Unknown indicator: {indicator_id}",
+                "available": list(INDICATORS.keys()),
+            }
+
+        result = await compute_indicator(db, indicator_id)
+        defn = INDICATORS[indicator_id]
+        return indicator_to_dict(result, defn)
+    except Exception as e:
+        logger.warning("get_indicator_detail failed: %s", e)
+        return {"error": "failed to compute indicator detail"}
+
+
+async def _explain_indicator(args: dict[str, Any], db: AsyncSession) -> dict:
+    """Explain how a specific indicator score is calculated — full provenance."""
+    try:
+        from api.analysis.indicator_registry import (
+            INDICATORS,
+            compute_indicator,
+            indicator_to_dict,
+        )
+
+        indicator_id = (args.get("indicator_id") or "").strip().upper()
+
+        # Alias matching
+        _ALIASES = {
+            "ETF": "ETF_FLOW_GLD",
+            "GLD": "ETF_FLOW_GLD",
+            "COT": "COT_POSITION",
+            "RATES": "REAL_RATES",
+            "REAL_RATES": "REAL_RATES",
+            "DOLLAR": "DOLLAR_STRENGTH",
+            "DXY": "DOLLAR_STRENGTH",
+            "VIX": "VIX_LEVEL",
+            "MOMENTUM": "GOLD_PRICE_MOMENTUM",
+            "GOLD": "GOLD_PRICE_MOMENTUM",
+        }
+        indicator_id = _ALIASES.get(indicator_id, indicator_id)
+
+        if indicator_id not in INDICATORS:
+            return {
+                "error": f"Unknown indicator: {indicator_id}",
+                "available": list(INDICATORS.keys()),
+            }
+
+        result = await compute_indicator(db, indicator_id)
+        defn = INDICATORS[indicator_id]
+        detail = indicator_to_dict(result, defn)
+
+        # Build Persian explanation
+        pipeline_steps = [
+            f"۱. داده خام از {defn.source_name} دریافت شد",
+            f"۲. تبدیل: {defn.raw_transform}",
+        ]
+        if detail.get("smoothing_applied"):
+            pipeline_steps.append("۳. صاف‌سازی EMA اعمال شد")
+        if detail.get("winsorize_bounds"):
+            bounds = detail["winsorize_bounds"]
+            pipeline_steps.append(f"۴. Winsorize: محدوده [{bounds[0]:.3f}, {bounds[1]:.3f}]")
+        pipeline_steps.append(f"{'۵' if detail.get('winsorize_bounds') else '۴'}. صدک‌بندی: {(detail['percentile'] * 100):.0f}%")
+        if defn.direction == "inverse":
+            pipeline_steps.append("← جهت معکوس: مقدار بالاتر = امتیاز پایین‌تر")
+        pipeline_steps.append(f"← فشرده‌سازی باند خنثی → امتیاز نهایی: {detail['score']}")
+
+        return {
+            "indicator_id": indicator_id,
+            "label_fa": defn.label_fa,
+            "score": detail["score"],
+            "explanation_fa": "\n".join(pipeline_steps),
+            "score_semantics": defn.score_semantics,
+            "detail": detail,
+        }
+    except Exception as e:
+        logger.warning("explain_indicator failed: %s", e)
+        return {"error": "failed to explain indicator"}

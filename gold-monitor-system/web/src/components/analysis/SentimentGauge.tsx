@@ -157,9 +157,24 @@ export default function SentimentGauge({ data, loading }: Props) {
                     />
                   </div>
                   {showExplain && comp.explanation && (
-                    <p className="mt-1 whitespace-pre-line rounded bg-gray-50 px-2 py-1.5 text-[10px] leading-relaxed text-gray-500 dark:bg-gray-800/50 dark:text-gray-400">
-                      {comp.explanation}
-                    </p>
+                    <div className="mt-1 space-y-1">
+                      <p className="whitespace-pre-line rounded bg-gray-50 px-2 py-1.5 text-[10px] leading-relaxed text-gray-500 dark:bg-gray-800/50 dark:text-gray-400">
+                        {comp.explanation}
+                      </p>
+                      {comp.debug?.score_semantics?.sentiment && (
+                        <div className="rounded bg-blue-50 dark:bg-blue-900/20 px-2 py-1 text-[10px] text-blue-600 dark:text-blue-400">
+                          <span className="font-bold ml-1">این امتیاز چگونه محاسبه شده؟</span>
+                          {comp.debug.score_semantics.sentiment}
+                          {comp.debug.zscore != null && (
+                            <span className="mr-2 font-mono">(z: {comp.debug.zscore.toFixed(2)})</span>
+                          )}
+                          {comp.debug.source_url && (
+                            <a href={comp.debug.source_url} target="_blank" rel="noopener noreferrer"
+                               className="mr-2 text-blue-500 hover:underline">منبع</a>
+                          )}
+                        </div>
+                      )}
+                    </div>
                   )}
                 </div>
               ))}

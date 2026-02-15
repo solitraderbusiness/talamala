@@ -24,6 +24,16 @@ export interface RiskRadarDetailedComponent extends RiskRadarComponent {
   window_size: number;
   fallback_used: boolean;
   data_age_days: number | null;
+  debug?: {
+    indicator_id: string;
+    score: number;
+    percentile: number;
+    zscore: number | null;
+    source_name: string;
+    source_url: string | null;
+    scoring_method: string;
+    score_semantics?: Record<string, string>;
+  };
 }
 
 export interface RiskRadarData {
@@ -161,10 +171,25 @@ function ComponentTooltip({ comp }: { comp: RiskRadarDetailedComponent }) {
         </p>
       )}
 
+      {/* Score semantics */}
+      {comp.debug?.score_semantics?.risk && (
+        <div className="mb-1.5 rounded bg-blue-50 dark:bg-blue-900/20 px-2 py-1 text-[10px] text-blue-600 dark:text-blue-400">
+          <span className="font-bold ml-1">این امتیاز چگونه محاسبه شده؟</span>
+          {comp.debug.score_semantics.risk}
+          {comp.debug.zscore !== null && comp.debug.zscore !== undefined && (
+            <span className="mr-2">(z-score: {comp.debug.zscore.toFixed(2)})</span>
+          )}
+        </div>
+      )}
+
       {/* Meta row */}
       <div className="flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-gray-400 dark:text-gray-500 mt-2 pt-2 border-t border-gray-200 dark:border-gray-700">
         {comp.source && comp.source !== "N/A" && (
           <span>منبع: {comp.source}</span>
+        )}
+        {comp.debug?.source_url && (
+          <a href={comp.debug.source_url} target="_blank" rel="noopener noreferrer"
+             className="text-blue-500 hover:underline">لینک منبع</a>
         )}
         {comp.last_updated_at && (
           <span>آخرین بروزرسانی: {formatAge(comp.data_age_days)}</span>

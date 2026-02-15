@@ -631,6 +631,39 @@ async def compute_sentiment(session: AsyncSession) -> dict:
     except Exception:
         logger.warning("Audit log save failed", exc_info=True)
 
+    # ── Canonical engine cross-reference (debug section) ──────────
+    canonical_debug: dict | None = None
+    try:
+        from api.analysis.indicator_registry import (
+            INDICATORS,
+            compute_all_indicators,
+            indicator_to_dict,
+        )
+        canonical_results = await compute_all_indicators(session, now)
+        canonical_debug = {}
+        # Map component names → canonical indicator IDs
+        _COMP_TO_CANONICAL = {
+            "etf_flows": "ETF_FLOW_GLD",
+            "cot_positioning": "COT_POSITION",
+            "real_rates": "REAL_RATES",
+            "dollar_strength": "DOLLAR_STRENGTH",
+            "risk_sentiment": "VIX_LEVEL",
+            "price_momentum": "GOLD_PRICE_MOMENTUM",
+        }
+        for comp_name, ind_id in _COMP_TO_CANONICAL.items():
+            if ind_id in canonical_results:
+                defn = INDICATORS.get(ind_id)
+                canonical_debug[comp_name] = indicator_to_dict(
+                    canonical_results[ind_id], defn
+                )
+        # Also attach canonical result per component in the components list
+        for comp in components:
+            cname = comp["name"]
+            if cname in canonical_debug:
+                comp["debug"] = canonical_debug[cname]
+    except Exception:
+        logger.debug("Canonical engine cross-reference failed", exc_info=True)
+
     return {
         # Existing API contract
         "composite_score": composite,
@@ -643,4 +676,5 @@ async def compute_sentiment(session: AsyncSession) -> dict:
         # New metadata
         "run_id": run_id,
         "scoring_method": "percentile",
+        "canonical_debug": canonical_debug,
     }

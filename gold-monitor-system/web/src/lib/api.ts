@@ -1047,6 +1047,32 @@ export interface CorrelationsResponse {
   computed_date: string | null;
 }
 
+export interface CanonicalIndicatorDebug {
+  indicator_id: string;
+  score: number;
+  percentile: number;
+  raw_value: number;
+  transformed_value: number;
+  smoothed_value: number;
+  direction: string;
+  window_size: number;
+  crowded: boolean;
+  stale: boolean;
+  fallback_used: boolean;
+  last_updated_at: string | null;
+  source_name: string;
+  source_url: string | null;
+  winsorize_bounds: number[] | null;
+  smoothing_applied: boolean;
+  scoring_method: string;
+  zscore: number | null;
+  label_fa?: string;
+  label_en?: string;
+  raw_units?: string;
+  raw_transform?: string;
+  score_semantics?: Record<string, string>;
+}
+
 export interface SentimentComponent {
   name: string;
   label_fa: string;
@@ -1063,6 +1089,7 @@ export interface SentimentComponent {
   data_fetched_at?: string | null;
   raw_units?: string;
   raw_transform?: string;
+  debug?: CanonicalIndicatorDebug;
 }
 
 export interface SentimentGaugeResponse {
@@ -1074,6 +1101,7 @@ export interface SentimentGaugeResponse {
   max_components: number;
   run_id?: string;
   scoring_method?: string;
+  canonical_debug?: Record<string, CanonicalIndicatorDebug>;
 }
 
 // ── Sentiment Calc Logs (Admin) ──────────────────────────────────

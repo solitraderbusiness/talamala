@@ -72,6 +72,16 @@ export interface MacroMomentumData {
     notes: string[];
   };
   warnings?: string[];
+  canonical_debug?: Record<string, {
+    indicator_id: string;
+    score: number;
+    percentile: number;
+    zscore: number | null;
+    source_name: string;
+    source_url: string | null;
+    scoring_method: string;
+    score_semantics?: Record<string, string>;
+  }>;
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -150,14 +160,26 @@ function formatAge(days: number | null | undefined): string {
 }
 
 /** Tooltip showing normalization details for a driver */
-function DriverTooltip({ meta, confidence, effWeight, baseWeight }: {
+function DriverTooltip({ meta, confidence, effWeight, baseWeight, canonicalDebug }: {
   meta: DriverMeta;
   confidence?: number;
   effWeight?: number;
   baseWeight: number;
+  canonicalDebug?: { score_semantics?: Record<string, string>; zscore?: number | null; source_url?: string | null; source_name?: string };
 }) {
   return (
     <div className="mt-2 rounded-lg border border-gray-200 bg-gray-50 p-3 text-xs dark:border-gray-700 dark:bg-gray-800/50">
+      {/* Score semantics */}
+      {canonicalDebug?.score_semantics?.sentiment && (
+        <div className="mb-2 rounded bg-blue-50 dark:bg-blue-900/20 px-2 py-1 text-[10px] text-blue-600 dark:text-blue-400">
+          <span className="font-bold ml-1">این امتیاز چگونه محاسبه شده؟</span>
+          {canonicalDebug.score_semantics.sentiment}
+          {canonicalDebug.source_url && (
+            <a href={canonicalDebug.source_url} target="_blank" rel="noopener noreferrer"
+               className="mr-2 text-blue-500 hover:underline">منبع</a>
+          )}
+        </div>
+      )}
       <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
         {/* Normalization method */}
         {meta.normalized_method && (
@@ -422,6 +444,7 @@ export default function MomentumDashboard({ data, loading }: Props) {
                       confidence={confidence}
                       effWeight={effWeight}
                       baseWeight={d.weight}
+                      canonicalDebug={data?.canonical_debug?.[d.id]}
                     />
                   )}
                 </div>

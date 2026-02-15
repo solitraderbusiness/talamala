@@ -1768,3 +1768,107 @@ async def live_snapshot(asset: str = Query("XAUUSD")):
 
     async with AsyncSessionLocal() as session:
         return await build_live_snapshot(session, asset)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 22. GET /debug — canonical indicator debug endpoint (admin)
+# ══════════════════════════════════════════════════════════════════════════
+
+@router.get("/debug")
+async def analysis_debug():
+    """Admin endpoint: compute all 6 canonical indicators with full metadata.
+
+    Returns each indicator's raw value, transform, percentile, score,
+    z-score, staleness, source URL — the full provenance trail.
+    Also persists an audit log row per indicator.
+    """
+    try:
+        from uuid import uuid4
+        from api.analysis.indicator_registry import (
+            INDICATORS,
+            compute_all_indicators,
+            indicator_to_dict,
+            persist_audit_logs,
+        )
+
+        run_id = str(uuid4())
+        async with AsyncSessionLocal() as session:
+            results = await compute_all_indicators(session)
+            indicators = {}
+            for ind_id, result in results.items():
+                defn = INDICATORS.get(ind_id)
+                indicators[ind_id] = indicator_to_dict(result, defn)
+
+            # Persist audit logs (fire-and-forget)
+            try:
+                await persist_audit_logs(session, run_id, results, context="debug_endpoint")
+            except Exception:
+                logger.debug("Audit log persist failed", exc_info=True)
+
+            return {
+                "run_id": run_id,
+                "indicators": indicators,
+                "count": len(indicators),
+                "computed_at": datetime.now(timezone.utc).isoformat(),
+            }
+    except Exception as exc:
+        logger.exception("analysis debug error: %s", exc)
+        return {"indicators": {}, "error": str(exc)}
+
+
+@router.get("/debug/logs")
+async def analysis_debug_logs(limit: int = Query(50, ge=1, le=500)):
+    """Admin endpoint: list recent audit log rows for provenance inspection."""
+    try:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                text("""
+                    SELECT id, run_id, computed_at, indicator_id, score, percentile,
+                           raw_value, transformed_value, smoothed_value, direction,
+                           window_size, crowded, stale, fallback_used,
+                           last_updated_at, source_name, source_url,
+                           winsorize_bounds, smoothing_applied, scoring_method,
+                           zscore, context
+                    FROM analysis_audit_logs
+                    ORDER BY computed_at DESC
+                    LIMIT :limit
+                """),
+                {"limit": limit},
+            )
+            rows = result.mappings().all()
+            return {
+                "logs": [dict(r) for r in rows],
+                "count": len(rows),
+            }
+    except Exception as exc:
+        logger.debug("analysis debug logs error: %s", exc)
+        return {"logs": [], "count": 0, "error": str(exc)}
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 23. GET /indicator/{indicator_id} — single canonical indicator detail
+# ══════════════════════════════════════════════════════════════════════════
+
+@router.get("/indicator/{indicator_id}")
+async def indicator_detail(indicator_id: str):
+    """Compute and return a single canonical indicator with full metadata."""
+    try:
+        from api.analysis.indicator_registry import (
+            INDICATORS,
+            compute_indicator,
+            indicator_to_dict,
+        )
+
+        if indicator_id not in INDICATORS:
+            return {
+                "error": f"Unknown indicator: {indicator_id}",
+                "available": list(INDICATORS.keys()),
+            }
+
+        async with AsyncSessionLocal() as session:
+            result = await compute_indicator(session, indicator_id)
+            defn = INDICATORS[indicator_id]
+            return indicator_to_dict(result, defn)
+    except Exception as exc:
+        logger.exception("indicator detail error: %s", exc)
+        return {"error": str(exc)}

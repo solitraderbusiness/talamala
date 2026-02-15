@@ -152,6 +152,7 @@ const adminSections: NavSection[] = [
       { href: "/admin/sentiment-qa", label: "کیفیت احساسات", icon: IconShield },
       { href: "/admin/sentiment-logs", label: "لاگ محاسبات", icon: IconChart },
       { href: "/admin/audit-logs", label: "لاگ حسابرسی", icon: IconChart },
+      { href: "/admin/provenance", label: "شجره‌نامه شاخص‌ها", icon: IconShield },
       { href: "/admin/database", label: "هوش پایگاه داده", icon: IconMonitor },
     ],
   },

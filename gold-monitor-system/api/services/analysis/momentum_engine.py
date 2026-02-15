@@ -959,6 +959,32 @@ async def compute_momentum(
         "warnings": warnings,
     }
 
+    # ── Canonical engine cross-reference ────────────────────────────
+    try:
+        from api.analysis.indicator_registry import (
+            INDICATORS,
+            compute_all_indicators,
+            indicator_to_dict,
+        )
+        canonical_results = await compute_all_indicators(session, as_of_dt)
+        # Map momentum driver IDs → canonical indicator IDs
+        _MOM_TO_CANONICAL = {
+            "etf_flow": "ETF_FLOW_GLD",
+            "cot_positioning": "COT_POSITION",
+            "real_rates": "REAL_RATES",
+            "dollar_strength": "DOLLAR_STRENGTH",
+        }
+        canonical_debug = {}
+        for drv_id, ind_id in _MOM_TO_CANONICAL.items():
+            if ind_id in canonical_results:
+                defn = INDICATORS.get(ind_id)
+                canonical_debug[drv_id] = indicator_to_dict(
+                    canonical_results[ind_id], defn
+                )
+        result["canonical_debug"] = canonical_debug
+    except Exception:
+        logger.debug("Canonical engine cross-reference failed", exc_info=True)
+
     # Persist run log
     try:
         await _persist_run_log(session, run_id, as_of_dt, result, drivers)
