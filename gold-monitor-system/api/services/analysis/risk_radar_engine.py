@@ -813,8 +813,10 @@ async def _persist_run_log(
         text("""
             INSERT INTO risk_radar_runs (id, computed_at, as_of, raw_inputs, component_scores,
                                          weights, confidences, final_score, label, warnings)
-            VALUES (:id, :computed_at, :as_of, :raw_inputs::jsonb, :component_scores::jsonb,
-                    :weights::jsonb, :confidences::jsonb, :final_score, :label, :warnings::jsonb)
+            VALUES (:id, :computed_at, :as_of, CAST(:raw_inputs AS jsonb),
+                    CAST(:component_scores AS jsonb), CAST(:weights AS jsonb),
+                    CAST(:confidences AS jsonb), :final_score, :label,
+                    CAST(:warnings AS jsonb))
         """),
         {
             "id": run_id,

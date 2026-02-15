@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { cn } from "@/lib/utils";
 import DataPending from "./DataPending";
 import SkeletonCard from "./SkeletonCard";
@@ -20,6 +21,17 @@ interface Driver {
   raw_unit: string;
   explanation_fa: string;
   trend: string;
+}
+
+interface DriverMeta {
+  normalized_method?: string;
+  window_used?: number;
+  last_updated_at?: string | null;
+  data_age_days?: number | null;
+  fallback_used?: boolean;
+  zscore?: number | null;
+  percentile?: number | null;
+  [key: string]: unknown;
 }
 
 interface Alignment {
@@ -45,6 +57,21 @@ export interface MacroMomentumData {
   alignment: Alignment;
   drivers: Driver[];
   technical_context: TechnicalContext;
+  // v2 fields (optional for backward compat)
+  drivers_meta?: Record<string, DriverMeta>;
+  weights?: {
+    base: Record<string, number>;
+    effective: Record<string, number>;
+  };
+  confidences?: Record<string, number>;
+  meta?: {
+    run_id: string;
+    as_of: string;
+    computed_at: string;
+    engine_version: string;
+    notes: string[];
+  };
+  warnings?: string[];
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -82,6 +109,14 @@ const RSI_ZONE_LABELS: Record<string, string> = {
   unknown: "—",
 };
 
+const NORM_METHOD_LABELS: Record<string, string> = {
+  zscore: "z-score",
+  percentile: "صدک‌بندی",
+  blend: "ترکیبی",
+  static_map: "نقشه ثابت",
+  fallback: "پیش‌فرض",
+};
+
 /* ══════════════════════════════════════════════════════════════════════════
    Helpers
    ══════════════════════════════════════════════════════════════════════════ */
@@ -107,6 +142,108 @@ function getCompositeGradient(direction: string): string {
   }
 }
 
+function formatAge(days: number | null | undefined): string {
+  if (days === null || days === undefined) return "";
+  if (days < 1) return "امروز";
+  if (days === 1) return "۱ روز پیش";
+  return `${days} روز پیش`;
+}
+
+/** Tooltip showing normalization details for a driver */
+function DriverTooltip({ meta, confidence, effWeight, baseWeight }: {
+  meta: DriverMeta;
+  confidence?: number;
+  effWeight?: number;
+  baseWeight: number;
+}) {
+  return (
+    <div className="mt-2 rounded-lg border border-gray-200 bg-gray-50 p-3 text-xs dark:border-gray-700 dark:bg-gray-800/50">
+      <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
+        {/* Normalization method */}
+        {meta.normalized_method && (
+          <>
+            <span className="text-gray-500 dark:text-gray-400">روش نرمال‌سازی:</span>
+            <span className="font-medium text-gray-800 dark:text-gray-200">
+              {NORM_METHOD_LABELS[meta.normalized_method] ?? meta.normalized_method}
+            </span>
+          </>
+        )}
+
+        {/* Z-score if present */}
+        {meta.zscore !== undefined && meta.zscore !== null && (
+          <>
+            <span className="text-gray-500 dark:text-gray-400">z-score:</span>
+            <span className="font-mono font-bold text-gray-800 dark:text-gray-200" dir="ltr">
+              {meta.zscore > 0 ? "+" : ""}{meta.zscore.toFixed(2)}σ
+            </span>
+          </>
+        )}
+
+        {/* Percentile if present */}
+        {meta.percentile !== undefined && meta.percentile !== null && (
+          <>
+            <span className="text-gray-500 dark:text-gray-400">صدک:</span>
+            <span className="font-mono font-bold text-gray-800 dark:text-gray-200" dir="ltr">
+              {(meta.percentile * 100).toFixed(0)}%
+            </span>
+          </>
+        )}
+
+        {/* Window used */}
+        {meta.window_used !== undefined && meta.window_used > 0 && (
+          <>
+            <span className="text-gray-500 dark:text-gray-400">پنجره:</span>
+            <span className="text-gray-800 dark:text-gray-200">{meta.window_used} نمونه</span>
+          </>
+        )}
+
+        {/* Data age */}
+        {meta.data_age_days !== undefined && meta.data_age_days !== null && (
+          <>
+            <span className="text-gray-500 dark:text-gray-400">تازگی داده:</span>
+            <span className={cn(
+              "text-gray-800 dark:text-gray-200",
+              meta.data_age_days > 3 && "text-amber-500",
+            )}>
+              {formatAge(meta.data_age_days)}
+            </span>
+          </>
+        )}
+
+        {/* Confidence + effective weight */}
+        {confidence !== undefined && confidence < 1.0 && (
+          <>
+            <span className="text-gray-500 dark:text-gray-400">اعتماد:</span>
+            <span className="text-amber-500 font-medium" dir="ltr">
+              {(confidence * 100).toFixed(0)}%
+            </span>
+          </>
+        )}
+
+        {effWeight !== undefined && effWeight !== baseWeight && (
+          <>
+            <span className="text-gray-500 dark:text-gray-400">وزن مؤثر:</span>
+            <span className="text-gray-800 dark:text-gray-200" dir="ltr">
+              <span className="line-through text-gray-400">{baseWeight}%</span>
+              {" → "}
+              <span className={cn(confidence !== undefined && confidence < 1 ? "text-amber-500" : "")}>
+                {effWeight.toFixed(1)}%
+              </span>
+            </span>
+          </>
+        )}
+      </div>
+
+      {/* Fallback warning */}
+      {meta.fallback_used && (
+        <p className="mt-2 text-amber-500 text-[10px]">
+          از مقدار پیش‌فرض استفاده شد — داده کافی نیست
+        </p>
+      )}
+    </div>
+  );
+}
+
 /* ══════════════════════════════════════════════════════════════════════════
    Component
    ══════════════════════════════════════════════════════════════════════════ */
@@ -119,6 +256,8 @@ interface Props {
 export default function MomentumDashboard({ data, loading }: Props) {
   const hasData = data && data.drivers && data.drivers.length > 0;
   const dc = DIRECTION_COLORS[data?.composite_direction ?? "pending"] ?? DIRECTION_COLORS.pending;
+  const [expandedDriver, setExpandedDriver] = useState<string | null>(null);
+  const hasV2 = !!data?.drivers_meta;
 
   return (
     <div className="flex flex-col">
@@ -127,6 +266,11 @@ export default function MomentumDashboard({ data, loading }: Props) {
           مومنتوم بنیادی
         </h2>
         <InfoTip term="momentum_dashboard" />
+        {data?.meta?.engine_version && (
+          <span className="text-[10px] text-gray-400 dark:text-gray-500">
+            v{data.meta.engine_version}
+          </span>
+        )}
       </div>
 
       {loading ? (
@@ -183,9 +327,18 @@ export default function MomentumDashboard({ data, loading }: Props) {
 
           {/* ── B. Driver Rows ── */}
           <div className="space-y-2">
+            {hasV2 && (
+              <p className="text-[10px] text-gray-400 dark:text-gray-500 mb-1">
+                (برای جزئیات نرمال‌سازی کلیک کنید)
+              </p>
+            )}
             {data!.drivers.map((d) => {
               const ddc = DIRECTION_COLORS[d.direction] ?? DIRECTION_COLORS.neutral;
               const trendCfg = TREND_CONFIG[d.trend] ?? TREND_CONFIG.steady;
+              const meta = data?.drivers_meta?.[d.id];
+              const effWeight = data?.weights?.effective?.[d.id];
+              const confidence = data?.confidences?.[d.id];
+              const isExpanded = expandedDriver === d.id;
 
               return (
                 <div
@@ -197,14 +350,26 @@ export default function MomentumDashboard({ data, loading }: Props) {
                   )}
                 >
                   {/* Row top: label + weight + arrow + score bar + trend */}
-                  <div className="flex items-center gap-3">
+                  <div
+                    className={cn(
+                      "flex items-center gap-3",
+                      hasV2 && "cursor-pointer",
+                    )}
+                    onClick={() => hasV2 && setExpandedDriver(isExpanded ? null : d.id)}
+                  >
                     {/* Driver label + weight badge */}
                     <div className="flex min-w-0 flex-shrink-0 items-center gap-1.5" style={{ width: "110px" }}>
                       <span className="truncate text-sm font-bold text-gray-900 dark:text-gray-100">
                         {d.label_fa}
                       </span>
                       <span className="flex-shrink-0 rounded bg-gray-200 dark:bg-gray-700 px-1 py-0.5 text-[10px] font-medium text-gray-500 dark:text-gray-400" dir="ltr">
-                        {d.weight}%
+                        {effWeight !== undefined && effWeight !== d.weight ? (
+                          <span className={cn(confidence !== undefined && confidence < 1 ? "text-amber-500" : "")}>
+                            {effWeight.toFixed(0)}%
+                          </span>
+                        ) : (
+                          `${d.weight}%`
+                        )}
                       </span>
                     </div>
 
@@ -236,12 +401,29 @@ export default function MomentumDashboard({ data, loading }: Props) {
                     >
                       {trendCfg.icon}
                     </span>
+
+                    {/* Expand indicator */}
+                    {hasV2 && (
+                      <span className="text-[10px] text-gray-300 dark:text-gray-600">
+                        {isExpanded ? "▲" : "▼"}
+                      </span>
+                    )}
                   </div>
 
                   {/* Row bottom: explanation */}
                   <p className="mt-1.5 text-[11px] leading-relaxed text-gray-600 dark:text-gray-400">
                     {d.explanation_fa}
                   </p>
+
+                  {/* Expandable tooltip */}
+                  {isExpanded && meta && (
+                    <DriverTooltip
+                      meta={meta}
+                      confidence={confidence}
+                      effWeight={effWeight}
+                      baseWeight={d.weight}
+                    />
+                  )}
                 </div>
               );
             })}
@@ -307,12 +489,24 @@ export default function MomentumDashboard({ data, loading }: Props) {
             </div>
           )}
 
+          {/* ── Warnings ── */}
+          {data?.warnings && data.warnings.length > 0 && (
+            <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-2.5">
+              {data.warnings.map((w, i) => (
+                <p key={i} className="text-xs text-amber-600 dark:text-amber-400">
+                  {w}
+                </p>
+              ))}
+            </div>
+          )}
+
           {/* ── D. Info Box ── */}
           <div className="rounded-lg border border-blue-500/20 bg-blue-500/5 p-3">
             <p className="text-xs text-blue-600 dark:text-blue-400">
               <span className="ml-1 font-bold">&#x26A1; مومنتوم بنیادی چیست؟</span>
               ۶ نیروی کلان (جریان ETF، موقعیت COT، نرخ بهره واقعی، قدرت دلار، رژیم کلان و احساسات) را ترکیب می‌کند
               تا نشان دهد کدام عوامل بنیادی طلا را حرکت می‌دهند. هم‌راستایی بالا = روند قوی. واگرایی = احتیاط.
+              {hasV2 && " وزن‌ها بر اساس تازگی داده‌ها تعدیل می‌شوند."}
             </p>
           </div>
         </div>

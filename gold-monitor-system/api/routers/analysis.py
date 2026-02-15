@@ -1147,448 +1147,19 @@ async def time_of_day_analysis():
 # 16. GET /momentum — macro momentum dashboard (6 fundamental drivers)
 # ══════════════════════════════════════════════════════════════════════════
 
-# Driver weights
-_DRIVER_WEIGHTS = {
-    "etf_flow": 20,
-    "cot_positioning": 20,
-    "real_rates": 20,
-    "dollar_strength": 15,
-    "risk_regime": 15,
-    "sentiment_trend": 10,
-}
-
-# Regime type → base score mapping
-_REGIME_SCORE_MAP = {
-    "expansion": 55,
-    "recovery": 60,
-    "tightening": 35,
-    "stress": 75,
-}
-
-
-def _direction_from_score(score: float) -> tuple[str, str]:
-    """Return (direction, direction_fa) from a 0-100 score."""
-    if score >= 70:
-        return "very_bullish", "بسیار صعودی"
-    if score >= 55:
-        return "bullish", "صعودی"
-    if score >= 45:
-        return "neutral", "خنثی"
-    if score >= 30:
-        return "bearish", "نزولی"
-    return "very_bearish", "بسیار نزولی"
-
-
-def _strength_from_score(score: float) -> str:
-    """Return strength label based on distance from neutral (50)."""
-    dist = abs(score - 50)
-    if dist >= 25:
-        return "strong"
-    if dist >= 10:
-        return "moderate"
-    return "weak"
-
 
 @router.get("/momentum")
 async def momentum():
-    """Macro momentum dashboard — 6 fundamental drivers + composite score."""
+    """Macro momentum dashboard — 6 fundamental drivers + composite score.
+
+    Uses the v2 momentum engine with rolling percentile/z-score normalization
+    and confidence-based dynamic weighting.
+    """
     try:
+        from api.services.analysis.momentum_engine import compute_momentum
+
         async with AsyncSessionLocal() as session:
-            drivers: list[dict] = []
-            total_score = 0.0
-            total_weight = 0
-
-            # ── 1. ETF Flow (weight 20%) ─────────────────────────────
-            etf_q = await session.execute(
-                select(EtfHolding)
-                .where(EtfHolding.fund == "GLD")
-                .order_by(desc(EtfHolding.holding_date))
-                .limit(10)
-            )
-            etf_rows = etf_q.scalars().all()
-            if etf_rows:
-                recent_5 = etf_rows[:5]
-                avg_change = sum(r.change_tonnes or 0 for r in recent_5) / len(recent_5)
-                # Streak: consecutive days with same sign
-                streak = 0
-                if recent_5:
-                    sign = 1 if (recent_5[0].change_tonnes or 0) >= 0 else -1
-                    for r in recent_5:
-                        if ((r.change_tonnes or 0) >= 0) == (sign >= 0):
-                            streak += 1
-                        else:
-                            break
-
-                score = max(0, min(100, 50 + avg_change * 10))
-                direction, _ = _direction_from_score(score)
-
-                # Trend: compare recent 3 vs previous 3
-                if len(etf_rows) >= 6:
-                    recent_avg = sum(r.change_tonnes or 0 for r in etf_rows[:3]) / 3
-                    prev_avg = sum(r.change_tonnes or 0 for r in etf_rows[3:6]) / 3
-                    if abs(recent_avg) > abs(prev_avg) * 1.2 and recent_avg * prev_avg > 0:
-                        trend = "accelerating"
-                    elif abs(recent_avg) < abs(prev_avg) * 0.8 and recent_avg * prev_avg > 0:
-                        trend = "decelerating"
-                    elif recent_avg * prev_avg < 0:
-                        trend = "reversing"
-                    else:
-                        trend = "steady"
-                else:
-                    trend = "steady"
-
-                if avg_change > 0.5:
-                    explain = f"{streak} روز ورود متوالی به GLD — میانگین {avg_change:+.1f} تن/روز"
-                elif avg_change < -0.5:
-                    explain = f"{streak} روز خروج متوالی از GLD — میانگین {avg_change:+.1f} تن/روز"
-                else:
-                    explain = f"جریان خنثی ETF — میانگین {avg_change:+.1f} تن/روز"
-
-                w = _DRIVER_WEIGHTS["etf_flow"]
-                drivers.append({
-                    "id": "etf_flow",
-                    "label_fa": "جریان ETF",
-                    "score": round(score),
-                    "direction": direction,
-                    "strength": _strength_from_score(score),
-                    "weight": w,
-                    "raw_value": round(avg_change, 2),
-                    "raw_unit": "تن/روز",
-                    "explanation_fa": explain,
-                    "trend": trend,
-                })
-                total_score += score * w
-                total_weight += w
-
-            # ── 2. COT Positioning (weight 20%) ──────────────────────
-            cot_q = await session.execute(
-                select(CotData).where(CotData.asset == "gold")
-                .order_by(desc(CotData.report_date)).limit(4)
-            )
-            cot_rows = cot_q.scalars().all()
-            if cot_rows and cot_rows[0].non_commercial_net is not None:
-                net = cot_rows[0].non_commercial_net
-                score = max(0, min(100, (net / 200000) * 50 + 50))
-                direction, _ = _direction_from_score(score)
-
-                # Weekly change for trend
-                if len(cot_rows) >= 2 and cot_rows[1].non_commercial_net is not None:
-                    weekly_change = net - cot_rows[1].non_commercial_net
-                    if len(cot_rows) >= 3 and cot_rows[2].non_commercial_net is not None:
-                        prev_change = cot_rows[1].non_commercial_net - cot_rows[2].non_commercial_net
-                        if abs(weekly_change) > abs(prev_change) * 1.2 and weekly_change * prev_change > 0:
-                            trend = "accelerating"
-                        elif abs(weekly_change) < abs(prev_change) * 0.8 and weekly_change * prev_change > 0:
-                            trend = "decelerating"
-                        elif weekly_change * prev_change < 0:
-                            trend = "reversing"
-                        else:
-                            trend = "steady"
-                    else:
-                        trend = "steady"
-                else:
-                    weekly_change = 0
-                    trend = "steady"
-
-                if net > 100000:
-                    explain = f"موقعیت خرید بالا: {net:,.0f} قرارداد (تغییر هفتگی: {weekly_change:+,.0f})"
-                elif net < 0:
-                    explain = f"موقعیت فروش: {net:,.0f} قرارداد (تغییر هفتگی: {weekly_change:+,.0f})"
-                else:
-                    explain = f"موقعیت متعادل: {net:,.0f} قرارداد (تغییر هفتگی: {weekly_change:+,.0f})"
-
-                w = _DRIVER_WEIGHTS["cot_positioning"]
-                drivers.append({
-                    "id": "cot_positioning",
-                    "label_fa": "موقعیت COT",
-                    "score": round(score),
-                    "direction": direction,
-                    "strength": _strength_from_score(score),
-                    "weight": w,
-                    "raw_value": net,
-                    "raw_unit": "قرارداد",
-                    "explanation_fa": explain,
-                    "trend": trend,
-                })
-                total_score += score * w
-                total_weight += w
-
-            # ── 3. Real Rates (weight 20%) ───────────────────────────
-            rr_q = await session.execute(
-                select(MacroIndicator).where(MacroIndicator.series_id == "DFII10")
-                .order_by(desc(MacroIndicator.observation_date)).limit(10)
-            )
-            rr_rows = rr_q.scalars().all()
-            if rr_rows:
-                rr_val = rr_rows[0].value
-                score = max(0, min(100, 60 + rr_val * (-20)))
-                direction, _ = _direction_from_score(score)
-
-                # Trend from last few values
-                if len(rr_rows) >= 4:
-                    recent_avg = sum(r.value for r in rr_rows[:2]) / 2
-                    prev_avg = sum(r.value for r in rr_rows[2:4]) / 2
-                    diff = recent_avg - prev_avg
-                    if diff < -0.1:
-                        trend = "accelerating"  # rates falling = bullish for gold
-                    elif diff > 0.1:
-                        trend = "decelerating"  # rates rising = bearish for gold
-                    else:
-                        trend = "steady"
-                else:
-                    trend = "steady"
-
-                if rr_val < 0:
-                    explain = f"نرخ بهره واقعی منفی ({rr_val:.2f}%) — بسیار حمایتی برای طلا"
-                elif rr_val > 2:
-                    explain = f"نرخ بهره واقعی بالا ({rr_val:.2f}%) — فشار نزولی بر طلا"
-                else:
-                    explain = f"نرخ بهره واقعی {rr_val:.2f}% — فشار متعادل"
-
-                w = _DRIVER_WEIGHTS["real_rates"]
-                drivers.append({
-                    "id": "real_rates",
-                    "label_fa": "نرخ بهره واقعی",
-                    "score": round(score),
-                    "direction": direction,
-                    "strength": _strength_from_score(score),
-                    "weight": w,
-                    "raw_value": round(rr_val, 2),
-                    "raw_unit": "%",
-                    "explanation_fa": explain,
-                    "trend": trend,
-                })
-                total_score += score * w
-                total_weight += w
-
-            # ── 4. Dollar Strength (weight 15%) ──────────────────────
-            dxy_q = await session.execute(
-                select(AssetPriceDaily).where(AssetPriceDaily.symbol == "DX-Y.NYB")
-                .order_by(desc(AssetPriceDaily.trade_date)).limit(10)
-            )
-            dxy_rows = dxy_q.scalars().all()
-            if len(dxy_rows) >= 2:
-                dxy_5d_change = dxy_rows[0].close - dxy_rows[min(4, len(dxy_rows) - 1)].close
-                score = max(0, min(100, 50 + dxy_5d_change * (-25)))
-                direction, _ = _direction_from_score(score)
-
-                # Trend
-                if len(dxy_rows) >= 6:
-                    recent_chg = dxy_rows[0].close - dxy_rows[2].close
-                    prev_chg = dxy_rows[3].close - dxy_rows[5].close
-                    if abs(recent_chg) > abs(prev_chg) * 1.2 and recent_chg * prev_chg > 0:
-                        trend = "accelerating"
-                    elif abs(recent_chg) < abs(prev_chg) * 0.8 and recent_chg * prev_chg > 0:
-                        trend = "decelerating"
-                    elif recent_chg * prev_chg < 0:
-                        trend = "reversing"
-                    else:
-                        trend = "steady"
-                else:
-                    trend = "steady"
-
-                if dxy_5d_change > 0.5:
-                    explain = f"تقویت دلار ({dxy_5d_change:+.2f} واحد در ۵ روز) — فشار نزولی بر طلا"
-                elif dxy_5d_change < -0.5:
-                    explain = f"تضعیف دلار ({dxy_5d_change:+.2f} واحد در ۵ روز) — حمایت از طلا"
-                else:
-                    explain = f"دلار تقریباً ثابت ({dxy_5d_change:+.2f} واحد در ۵ روز)"
-
-                w = _DRIVER_WEIGHTS["dollar_strength"]
-                drivers.append({
-                    "id": "dollar_strength",
-                    "label_fa": "قدرت دلار",
-                    "score": round(score),
-                    "direction": direction,
-                    "strength": _strength_from_score(score),
-                    "weight": w,
-                    "raw_value": round(dxy_5d_change, 2),
-                    "raw_unit": "واحد",
-                    "explanation_fa": explain,
-                    "trend": trend,
-                })
-                total_score += score * w
-                total_weight += w
-
-            # ── 5. Risk Regime (weight 15%) ──────────────────────────
-            regime_q = await session.execute(
-                select(RegimeScore)
-                .order_by(desc(RegimeScore.ts))
-                .limit(2)
-            )
-            regime_rows = regime_q.scalars().all()
-            if regime_rows and regime_rows[0].chosen_regime:
-                regime = regime_rows[0].chosen_regime
-                score = _REGIME_SCORE_MAP.get(regime, 50)
-                direction, _ = _direction_from_score(score)
-
-                # Detect regime change
-                if len(regime_rows) >= 2 and regime_rows[1].chosen_regime:
-                    prev_regime = regime_rows[1].chosen_regime
-                    if regime != prev_regime:
-                        trend = "reversing"
-                    else:
-                        trend = "steady"
-                else:
-                    trend = "steady"
-
-                regime_labels = {
-                    "expansion": "انبساطی",
-                    "recovery": "بازیابی",
-                    "tightening": "انقباضی",
-                    "stress": "بحرانی",
-                }
-                label = regime_labels.get(regime, regime)
-                if trend == "reversing" and len(regime_rows) >= 2:
-                    prev_label = regime_labels.get(regime_rows[1].chosen_regime, regime_rows[1].chosen_regime)
-                    explain = f"رژیم {label} (تغییر از {prev_label}) — تحول در محیط کلان"
-                else:
-                    explain = f"رژیم {label} — {'محیط حمایتی برای طلا' if score >= 55 else 'محیط فشار بر طلا' if score < 45 else 'محیط خنثی'}"
-
-                w = _DRIVER_WEIGHTS["risk_regime"]
-                drivers.append({
-                    "id": "risk_regime",
-                    "label_fa": "رژیم کلان",
-                    "score": round(score),
-                    "direction": direction,
-                    "strength": _strength_from_score(score),
-                    "weight": w,
-                    "raw_value": regime,
-                    "raw_unit": "رژیم",
-                    "explanation_fa": explain,
-                    "trend": trend,
-                })
-                total_score += score * w
-                total_weight += w
-
-            # ── 6. Sentiment Trend (weight 10%) ──────────────────────
-            sent_q = await session.execute(
-                select(SentimentTimeline)
-                .where(SentimentTimeline.composite_score.is_not(None))
-                .order_by(desc(SentimentTimeline.recorded_at))
-                .limit(48)
-            )
-            sent_rows = sent_q.scalars().all()
-            if len(sent_rows) >= 4:
-                half = len(sent_rows) // 2
-                recent_avg = sum(r.composite_score for r in sent_rows[:half]) / half
-                prev_avg = sum(r.composite_score for r in sent_rows[half:]) / (len(sent_rows) - half)
-                score = max(0, min(100, recent_avg))
-                direction, _ = _direction_from_score(score)
-
-                shift = recent_avg - prev_avg
-                if shift > 5:
-                    trend = "accelerating"
-                elif shift < -5:
-                    trend = "decelerating"
-                else:
-                    trend = "steady"
-
-                if shift > 5:
-                    explain = f"احساسات در حال بهبود ({recent_avg:.0f} ← {prev_avg:.0f})"
-                elif shift < -5:
-                    explain = f"احساسات در حال تضعیف ({recent_avg:.0f} ← {prev_avg:.0f})"
-                else:
-                    explain = f"احساسات ثابت (حدود {recent_avg:.0f})"
-
-                w = _DRIVER_WEIGHTS["sentiment_trend"]
-                drivers.append({
-                    "id": "sentiment_trend",
-                    "label_fa": "روند احساسات",
-                    "score": round(score),
-                    "direction": direction,
-                    "strength": _strength_from_score(score),
-                    "weight": w,
-                    "raw_value": round(recent_avg, 1),
-                    "raw_unit": "امتیاز",
-                    "explanation_fa": explain,
-                    "trend": trend,
-                })
-                total_score += score * w
-                total_weight += w
-
-            # ── Composite score & alignment ──────────────────────────
-            composite = round(total_score / total_weight) if total_weight > 0 else None
-
-            if composite is not None:
-                comp_dir, comp_dir_fa = _direction_from_score(composite)
-            else:
-                comp_dir, comp_dir_fa = "pending", "در انتظار داده"
-
-            # Alignment analysis
-            bullish_count = sum(1 for d in drivers if d["score"] > 55)
-            bearish_count = sum(1 for d in drivers if d["score"] < 45)
-            neutral_count = len(drivers) - bullish_count - bearish_count
-            majority = max(bullish_count, bearish_count, neutral_count)
-            aligned = majority >= max(len(drivers) - 1, 1) if drivers else False
-
-            # Divergence: heavy-weight driver opposes majority direction
-            divergence_warning = False
-            divergence_note_fa = ""
-            if drivers:
-                majority_dir = "bullish" if bullish_count >= bearish_count else "bearish"
-                for d in drivers:
-                    if d["weight"] >= 15:
-                        is_opposing = (
-                            (majority_dir == "bullish" and d["score"] < 45)
-                            or (majority_dir == "bearish" and d["score"] > 55)
-                        )
-                        if is_opposing:
-                            divergence_warning = True
-                            opposing_label = d["label_fa"]
-                            divergence_note_fa = f"{opposing_label} در جهت مخالف اکثریت — احتیاط کنید"
-                            break
-
-            alignment = {
-                "aligned": aligned,
-                "bullish_count": bullish_count,
-                "bearish_count": bearish_count,
-                "neutral_count": neutral_count,
-                "divergence_warning": divergence_warning,
-                "divergence_note_fa": divergence_note_fa,
-            }
-
-            # ── Technical context (demoted) ──────────────────────────
-            tech_ctx: dict = {
-                "gold_rsi_14": None,
-                "gold_rsi_zone": "unknown",
-                "gold_daily_change_pct": None,
-                "gold_5d_return_pct": None,
-            }
-            gold_q = await session.execute(
-                select(AssetPriceDaily).where(AssetPriceDaily.symbol == "GC=F")
-                .order_by(desc(AssetPriceDaily.trade_date)).limit(20)
-            )
-            gold_rows = gold_q.scalars().all()
-            if gold_rows:
-                closes = [r.close for r in reversed(gold_rows) if r.close is not None]
-                if len(closes) >= 2:
-                    tech_ctx["gold_daily_change_pct"] = round(
-                        (closes[-1] - closes[-2]) / closes[-2] * 100, 2
-                    )
-                if len(closes) >= 5:
-                    tech_ctx["gold_5d_return_pct"] = round(
-                        (closes[-1] - closes[-5]) / closes[-5] * 100, 2
-                    )
-                if len(closes) >= 14:
-                    rsi = compute_rsi(closes)
-                    if rsi is not None:
-                        tech_ctx["gold_rsi_14"] = round(rsi, 1)
-                        if rsi >= 70:
-                            tech_ctx["gold_rsi_zone"] = "overbought"
-                        elif rsi <= 30:
-                            tech_ctx["gold_rsi_zone"] = "oversold"
-                        else:
-                            tech_ctx["gold_rsi_zone"] = "neutral"
-
-            return {
-                "composite_score": composite,
-                "composite_direction": comp_dir,
-                "composite_direction_fa": comp_dir_fa,
-                "alignment": alignment,
-                "drivers": sorted(drivers, key=lambda d: d["weight"], reverse=True),
-                "technical_context": tech_ctx,
-            }
+            return await compute_momentum(session)
     except Exception as exc:
         logger.exception("momentum error: %s", exc)
         return {
@@ -1611,6 +1182,31 @@ async def momentum():
                 "gold_5d_return_pct": None,
             },
         }
+
+
+@router.get("/momentum/runs")
+async def momentum_runs(limit: int = Query(50, ge=1, le=200)):
+    """Admin: list recent momentum run logs for debugging."""
+    try:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                text("""
+                    SELECT id, computed_at, as_of, raw_inputs, driver_scores,
+                           weights, composite_score
+                    FROM momentum_runs
+                    ORDER BY computed_at DESC
+                    LIMIT :limit
+                """),
+                {"limit": limit},
+            )
+            rows = result.mappings().all()
+            return {
+                "runs": [dict(r) for r in rows],
+                "count": len(rows),
+            }
+    except Exception as exc:
+        logger.debug("momentum runs error: %s", exc)
+        return {"runs": [], "count": 0, "error": str(exc)}
 
 
 # ══════════════════════════════════════════════════════════════════════════
